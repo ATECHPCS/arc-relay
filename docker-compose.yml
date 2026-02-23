@@ -1,0 +1,16 @@
+services:
+  mcp-wrangler:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - wrangler-data:/data
+    environment:
+      - MCP_WRANGLER_ENCRYPTION_KEY=changeme
+      - MCP_WRANGLER_SESSION_SECRET=changeme
+      - MCP_WRANGLER_ADMIN_PASSWORD=changeme
+      - MCP_WRANGLER_DB_PATH=/data/mcp-wrangler.db
+
+volumes:
+  wrangler-data:
