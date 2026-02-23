@@ -1,6 +1,6 @@
-# Binary
-mcp-wrangler
+# Binary (root only, not cmd/mcp-wrangler/ directory)
 /mcp-wrangler
+!/cmd/mcp-wrangler/
 
 # Database
 *.db

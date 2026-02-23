@@ -1,0 +1,139 @@
+{{define "title"}}{{if .IsEdit}}Edit{{else}}Add{{end}} Server{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>{{if .IsEdit}}Edit{{else}}Add{{end}} MCP Server</h2>
+</div>
+
+<div class="card">
+  {{if .Error}}
+  <div class="alert alert-danger">{{.Error}}</div>
+  {{end}}
+  <form method="POST" action="{{if .IsEdit}}/servers/{{.Server.ID}}/edit{{else}}/servers/new{{end}}">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="name">Slug Name</label>
+        <input type="text" id="name" name="name" value="{{.Server.Name}}" required
+               pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" {{if .IsEdit}}readonly{{end}}>
+        <div class="help">URL-safe identifier used in proxy path: /mcp/{name}. Lowercase, hyphens only.</div>
+      </div>
+      <div class="form-group">
+        <label for="display_name">Display Name</label>
+        <input type="text" id="display_name" name="display_name" value="{{.Server.DisplayName}}" required>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="server_type">Server Type</label>
+      <select id="server_type" name="server_type" onchange="toggleTypeFields()" {{if .IsEdit}}disabled{{end}}>
+        <option value="stdio" {{if eq (printf "%s" .ServerType) "stdio"}}selected{{end}}>Stdio (Docker Container)</option>
+        <option value="http" {{if eq (printf "%s" .ServerType) "http"}}selected{{end}}>HTTP (Docker or External)</option>
+        <option value="remote" {{if eq (printf "%s" .ServerType) "remote"}}selected{{end}}>Remote</option>
+      </select>
+      {{if .IsEdit}}<input type="hidden" name="server_type" value="{{.ServerType}}">{{end}}
+    </div>
+
+    <!-- Stdio fields -->
+    <div id="fields-stdio" class="type-fields">
+      <div class="form-group">
+        <label for="stdio_image">Docker Image</label>
+        <input type="text" id="stdio_image" name="stdio_image" value="{{.StdioImage}}"
+               placeholder="ghcr.io/org/mcp-server:latest">
+      </div>
+      <div class="form-group">
+        <label for="stdio_command">Command Override (optional)</label>
+        <input type="text" id="stdio_command" name="stdio_command" value="{{.StdioCommand}}"
+               placeholder="python -m my_mcp_server">
+        <div class="help">Space-separated command. Leave blank to use the image default.</div>
+      </div>
+      <div class="form-group">
+        <label for="stdio_env">Environment Variables</label>
+        <textarea id="stdio_env" name="stdio_env" placeholder="KEY=value&#10;ANOTHER_KEY=another_value">{{.StdioEnv}}</textarea>
+        <div class="help">One KEY=value per line. Credentials will be encrypted at rest.</div>
+      </div>
+    </div>
+
+    <!-- HTTP fields -->
+    <div id="fields-http" class="type-fields" style="display:none">
+      <div class="form-group">
+        <label for="http_image">Docker Image (leave blank for external)</label>
+        <input type="text" id="http_image" name="http_image" value="{{.HTTPImage}}"
+               placeholder="ghcr.io/org/mcp-server:latest">
+      </div>
+      <div class="form-group">
+        <label for="http_port">Container Port</label>
+        <input type="number" id="http_port" name="http_port" value="{{.HTTPPort}}" placeholder="8000">
+        <div class="help">The port the MCP server listens on inside the container.</div>
+      </div>
+      <div class="form-group">
+        <label for="http_url">External URL (if no Docker image)</label>
+        <input type="text" id="http_url" name="http_url" value="{{.HTTPURL}}"
+               placeholder="http://localhost:8000">
+      </div>
+      <div class="form-group">
+        <label for="http_health">Health Check Path (optional)</label>
+        <input type="text" id="http_health" name="http_health" value="{{.HTTPHealth}}" placeholder="/health">
+      </div>
+      <div class="form-group">
+        <label for="http_env">Environment Variables</label>
+        <textarea id="http_env" name="http_env" placeholder="KEY=value&#10;ANOTHER_KEY=another_value">{{.HTTPEnv}}</textarea>
+      </div>
+    </div>
+
+    <!-- Remote fields -->
+    <div id="fields-remote" class="type-fields" style="display:none">
+      <div class="form-group">
+        <label for="remote_url">Server URL</label>
+        <input type="text" id="remote_url" name="remote_url" value="{{.RemoteURL}}"
+               placeholder="https://mcp.example.com/mcp">
+      </div>
+      <div class="form-group">
+        <label for="remote_auth_type">Authentication Type</label>
+        <select id="remote_auth_type" name="remote_auth_type" onchange="toggleAuthFields()">
+          <option value="none" {{if eq .RemoteAuthType "none"}}selected{{end}}>None</option>
+          <option value="private_url" {{if eq .RemoteAuthType "private_url"}}selected{{end}}>Private URL (auth in URL)</option>
+          <option value="bearer" {{if eq .RemoteAuthType "bearer"}}selected{{end}}>Bearer Token</option>
+          <option value="api_key" {{if eq .RemoteAuthType "api_key"}}selected{{end}}>API Key Header</option>
+          <option value="oauth" {{if eq .RemoteAuthType "oauth"}}selected{{end}}>OAuth (coming soon)</option>
+        </select>
+      </div>
+      <div id="auth-token" style="display:none">
+        <div class="form-group">
+          <label for="remote_token">Token / API Key</label>
+          <input type="password" id="remote_token" name="remote_token" value="{{.RemoteToken}}"
+                 placeholder="your-token-here">
+        </div>
+      </div>
+      <div id="auth-header" style="display:none">
+        <div class="form-group">
+          <label for="remote_header_name">Header Name</label>
+          <input type="text" id="remote_header_name" name="remote_header_name" value="{{.RemoteHeaderName}}"
+                 placeholder="X-API-Key">
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem;">
+      <button type="submit" class="btn btn-primary">{{if .IsEdit}}Save Changes{{else}}Add Server{{end}}</button>
+      <a href="{{if .IsEdit}}/servers/{{.Server.ID}}{{else}}/{{end}}" class="btn btn-outline">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+function toggleTypeFields() {
+  var type = document.getElementById('server_type').value;
+  document.querySelectorAll('.type-fields').forEach(function(el) { el.style.display = 'none'; });
+  var target = document.getElementById('fields-' + type);
+  if (target) target.style.display = 'block';
+  if (type === 'remote') toggleAuthFields();
+}
+
+function toggleAuthFields() {
+  var authType = document.getElementById('remote_auth_type').value;
+  document.getElementById('auth-token').style.display = (authType === 'bearer' || authType === 'api_key') ? 'block' : 'none';
+  document.getElementById('auth-header').style.display = (authType === 'api_key') ? 'block' : 'none';
+}
+
+toggleTypeFields();
+</script>
+{{end}}

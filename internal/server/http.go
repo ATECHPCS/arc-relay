@@ -12,15 +12,16 @@ import (
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/web"
 )
 
 // Server is the main HTTP server for MCP Wrangler.
 type Server struct {
-	cfg      *config.Config
-	servers  *store.ServerStore
-	users    *store.UserStore
-	proxy    *proxy.Manager
-	mux      *http.ServeMux
+	cfg     *config.Config
+	servers *store.ServerStore
+	users   *store.UserStore
+	proxy   *proxy.Manager
+	mux     *http.ServeMux
 }
 
 // New creates a new HTTP server.
@@ -50,12 +51,12 @@ func (s *Server) routes() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	// Web UI (placeholder for now)
-	s.mux.HandleFunc("/", s.handleDashboard)
+	// Web UI
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy)
+	webHandlers.RegisterRoutes(s.mux)
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Request logging
 	log.Printf("%s %s", r.Method, r.URL.Path)
 	s.mux.ServeHTTP(w, r)
 }
@@ -73,7 +74,6 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract server name from path: /mcp/{server-name}
 	path := strings.TrimPrefix(r.URL.Path, "/mcp/")
 	serverName := strings.Split(path, "/")[0]
 	if serverName == "" {
@@ -81,7 +81,6 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up server
 	srv, err := s.servers.GetByName(serverName)
 	if err != nil {
 		log.Printf("Error looking up server %s: %v", serverName, err)
@@ -93,14 +92,12 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the backend
 	backend, ok := s.proxy.GetBackend(srv.ID)
 	if !ok {
 		http.Error(w, fmt.Sprintf(`{"error":"server %q is not running"}`, serverName), http.StatusServiceUnavailable)
 		return
 	}
 
-	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, `{"error":"failed to read request body"}`, http.StatusBadRequest)
@@ -113,7 +110,6 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Forward to backend
 	resp, err := backend.Send(r.Context(), &mcpReq)
 	if err != nil {
 		log.Printf("Error proxying to server %s: %v", serverName, err)
@@ -173,7 +169,6 @@ func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
-	// Extract ID from /api/servers/{id} or /api/servers/{id}/start etc.
 	path := strings.TrimPrefix(r.URL.Path, "/api/servers/")
 	parts := strings.Split(path, "/")
 	id := parts[0]
@@ -183,7 +178,6 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle actions: /api/servers/{id}/start, /api/servers/{id}/stop
 	if len(parts) > 1 {
 		switch parts[1] {
 		case "start":
@@ -246,9 +240,7 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string)
 }
 
 func (s *Server) deleteServer(w http.ResponseWriter, r *http.Request, id string) {
-	// Stop the server first if running
 	s.proxy.StopServer(r.Context(), id)
-
 	if err := s.servers.Delete(id); err != nil {
 		http.Error(w, `{"error":"failed to delete server"}`, http.StatusInternalServerError)
 		return
@@ -290,45 +282,4 @@ func (s *Server) stopServer(w http.ResponseWriter, r *http.Request, id string) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
-}
-
-// Web UI handler (placeholder)
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-
-	servers, _ := s.servers.List()
-	w.Header().Set("Content-Type", "text/html")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>MCP Wrangler</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
-  h1 { color: #333; }
-  table { border-collapse: collapse; width: 100%%; }
-  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
-  th { background: #f5f5f5; }
-  .status-running { color: green; font-weight: bold; }
-  .status-stopped { color: #999; }
-  .status-error { color: red; }
-</style>
-</head>
-<body>
-<h1>MCP Wrangler</h1>
-<h2>Managed Servers</h2>
-<table>
-<tr><th>Name</th><th>Type</th><th>Status</th><th>Proxy URL</th></tr>`)
-
-	for _, srv := range servers {
-		statusClass := "status-" + string(srv.Status)
-		proxyURL := fmt.Sprintf("/mcp/%s", srv.Name)
-		fmt.Fprintf(w, `<tr><td>%s</td><td>%s</td><td class="%s">%s</td><td><code>%s</code></td></tr>`,
-			srv.DisplayName, srv.ServerType, statusClass, srv.Status, proxyURL)
-	}
-
-	fmt.Fprintf(w, `</table>
-<p><small>API: POST /api/servers, GET /api/servers, POST /api/servers/{id}/start</small></p>
-</body></html>`)
 }

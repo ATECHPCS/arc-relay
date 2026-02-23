@@ -1,0 +1,94 @@
+{{define "title"}}{{.Server.DisplayName}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>{{.Server.DisplayName}}</h2>
+  <div class="actions">
+    {{if eq (printf "%s" .Server.Status) "stopped"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
+      <button type="submit" class="btn btn-success">Start</button>
+    </form>
+    {{else if eq (printf "%s" .Server.Status) "running"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/stop" style="display:inline">
+      <button type="submit" class="btn btn-outline">Stop</button>
+    </form>
+    {{else if eq (printf "%s" .Server.Status) "error"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
+      <button type="submit" class="btn btn-success">Restart</button>
+    </form>
+    {{end}}
+    <a href="/servers/{{.Server.ID}}/edit" class="btn btn-outline">Edit</a>
+    <form method="POST" action="/servers/{{.Server.ID}}/delete" style="display:inline"
+          onsubmit="return confirm('Delete this server? This cannot be undone.')">
+      <button type="submit" class="btn btn-danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Server Info</h2>
+  <div class="detail-grid">
+    <dt>Name (slug)</dt><dd><code>{{.Server.Name}}</code></dd>
+    <dt>Type</dt><dd><span class="badge badge-{{.Server.ServerType}}">{{.Server.ServerType}}</span></dd>
+    <dt>Status</dt><dd><span class="badge badge-{{.Server.Status}}">{{.Server.Status}}</span></dd>
+    {{if .Server.ErrorMsg}}
+    <dt>Error</dt><dd style="color:var(--danger)">{{.Server.ErrorMsg}}</dd>
+    {{end}}
+    <dt>Proxy URL</dt><dd><code>/mcp/{{.Server.Name}}</code></dd>
+    <dt>Created</dt><dd>{{.Server.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
+    <dt>Updated</dt><dd>{{.Server.UpdatedAt.Format "2006-01-02 15:04:05"}}</dd>
+  </div>
+</div>
+
+{{if .ConfigDisplay}}
+<div class="card">
+  <h2>Configuration</h2>
+  {{if .ConfigDisplay.Image}}
+  <div class="detail-grid">
+    <dt>Docker Image</dt><dd><code>{{.ConfigDisplay.Image}}</code></dd>
+    {{if .ConfigDisplay.Command}}<dt>Command</dt><dd><code>{{.ConfigDisplay.Command}}</code></dd>{{end}}
+    {{if .ConfigDisplay.Port}}<dt>Port</dt><dd>{{.ConfigDisplay.Port}}</dd>{{end}}
+    {{if .ConfigDisplay.URL}}<dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>{{end}}
+    {{if .ConfigDisplay.HealthCheck}}<dt>Health Check</dt><dd><code>{{.ConfigDisplay.HealthCheck}}</code></dd>{{end}}
+    {{if .ConfigDisplay.AuthType}}<dt>Auth Type</dt><dd>{{.ConfigDisplay.AuthType}}</dd>{{end}}
+  </div>
+  {{else if .ConfigDisplay.URL}}
+  <div class="detail-grid">
+    <dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>
+    {{if .ConfigDisplay.AuthType}}<dt>Auth Type</dt><dd>{{.ConfigDisplay.AuthType}}</dd>{{end}}
+  </div>
+  {{end}}
+
+  {{if .ConfigDisplay.EnvKeys}}
+  <h3 style="margin: 1rem 0 0.5rem; font-size: 0.95rem;">Environment Variables</h3>
+  <table class="env-table">
+    {{range .ConfigDisplay.EnvKeys}}
+    <tr><td>{{.}}</td><td style="color:var(--text-muted)">(configured)</td></tr>
+    {{end}}
+  </table>
+  {{end}}
+</div>
+{{end}}
+
+<div class="card">
+  <h2>Connection Examples</h2>
+  <p style="margin-bottom: 0.75rem; font-size: 0.9rem; color: var(--text-muted)">
+    Use these snippets to connect AI tools to this MCP server through MCP Wrangler.
+  </p>
+
+  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Code</h3>
+  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1rem;"><code>claude mcp add --transport http {{.Server.Name}} http://{{.Host}}/mcp/{{.Server.Name}} \
+  --header "Authorization: Bearer YOUR_API_KEY"</code></pre>
+
+  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Desktop (claude_desktop_config.json)</h3>
+  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto;"><code>{
+  "mcpServers": {
+    "{{.Server.Name}}": {
+      "url": "http://{{.Host}}/mcp/{{.Server.Name}}",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}</code></pre>
+</div>
+{{end}}
