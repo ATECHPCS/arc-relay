@@ -16,6 +16,11 @@
       <button type="submit" class="btn btn-success">Restart</button>
     </form>
     {{end}}
+    {{if eq (printf "%s" .Server.Status) "running"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/enumerate" style="display:inline">
+      <button type="submit" class="btn btn-outline">Re-enumerate</button>
+    </form>
+    {{end}}
     <a href="/servers/{{.Server.ID}}/edit" class="btn btn-outline">Edit</a>
     <form method="POST" action="/servers/{{.Server.ID}}/delete" style="display:inline"
           onsubmit="return confirm('Delete this server? This cannot be undone.')">
@@ -67,6 +72,76 @@
   </table>
   {{end}}
 </div>
+{{end}}
+
+{{if .Endpoints}}
+<div class="card">
+  <h2>MCP Server Info</h2>
+  <div class="detail-grid">
+    <dt>Server Name</dt><dd>{{.Endpoints.ServerInfo.Name}}</dd>
+    <dt>Version</dt><dd>{{.Endpoints.ServerInfo.Version}}</dd>
+    <dt>Initialized</dt><dd>{{if .Endpoints.Initialized}}Yes{{else}}No{{end}}</dd>
+    {{if .Endpoints.Error}}<dt>Error</dt><dd style="color:var(--danger)">{{.Endpoints.Error}}</dd>{{end}}
+  </div>
+</div>
+
+{{if .Endpoints.Tools}}
+<div class="card">
+  <h2>Tools <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Tools}}</span></h2>
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      {{range .Endpoints.Tools}}
+      <tr>
+        <td><code>{{.Name}}</code></td>
+        <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{if .Endpoints.Resources}}
+<div class="card">
+  <h2>Resources <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Resources}}</span></h2>
+  <table class="table">
+    <thead>
+      <tr><th>URI</th><th>Name</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      {{range .Endpoints.Resources}}
+      <tr>
+        <td><code>{{.URI}}</code></td>
+        <td>{{.Name}}</td>
+        <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{if .Endpoints.Prompts}}
+<div class="card">
+  <h2>Prompts <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Prompts}}</span></h2>
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      {{range .Endpoints.Prompts}}
+      <tr>
+        <td><code>{{.Name}}</code></td>
+        <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
 {{end}}
 
 <div class="card">

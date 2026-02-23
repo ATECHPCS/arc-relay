@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
@@ -14,6 +13,7 @@ import (
 // HTTPProxy forwards MCP requests to an HTTP-based MCP server.
 type HTTPProxy struct {
 	targetURL  string
+	sessionID  string
 	httpClient *http.Client
 }
 
@@ -38,6 +38,9 @@ func (p *HTTPProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	if p.sessionID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	}
 
 	httpResp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -45,19 +48,14 @@ func (p *HTTPProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, 
 	}
 	defer httpResp.Body.Close()
 
-	respBody, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("backend returned status %d: %s", httpResp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("backend returned status %d", httpResp.StatusCode)
 	}
 
-	var resp mcp.Response
-	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
+	// Capture session ID if provided
+	if sid := httpResp.Header.Get("Mcp-Session-Id"); sid != "" {
+		p.sessionID = sid
 	}
 
-	return &resp, nil
+	return parseHTTPResponse(httpResp)
 }

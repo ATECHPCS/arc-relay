@@ -150,18 +150,23 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	servers, _ := h.servers.List()
 	users, _ := h.users.List()
 	runningCount := 0
+	endpointCounts := make(map[string]int) // server ID -> tool count
 	for _, s := range servers {
 		if s.Status == store.StatusRunning {
 			runningCount++
 		}
+		if ep := h.proxy.Endpoints.Get(s.ID); ep != nil {
+			endpointCounts[s.ID] = len(ep.Tools) + len(ep.Resources) + len(ep.Prompts)
+		}
 	}
 
 	h.render(w, "dashboard.html", map[string]any{
-		"Nav":          "dashboard",
-		"User":         getUser(r),
-		"Servers":      servers,
-		"RunningCount": runningCount,
-		"UserCount":    len(users),
+		"Nav":            "dashboard",
+		"User":           getUser(r),
+		"Servers":        servers,
+		"RunningCount":   runningCount,
+		"UserCount":      len(users),
+		"EndpointCounts": endpointCounts,
 	})
 }
 
@@ -223,6 +228,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleServerStop(w, r, id)
 	case "delete":
 		h.handleServerDelete(w, r, id)
+	case "enumerate":
+		h.handleServerEnumerate(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -241,6 +248,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		"Server":        srv,
 		"ConfigDisplay": buildConfigDisplay(srv),
 		"Host":          r.Host,
+		"Endpoints":     h.proxy.Endpoints.Get(srv.ID),
 	})
 }
 
@@ -315,6 +323,18 @@ func (h *Handlers) handleServerDelete(w http.ResponseWriter, r *http.Request, id
 	h.proxy.StopServer(r.Context(), id)
 	h.servers.Delete(id)
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	_, err := h.proxy.EnumerateServer(r.Context(), id)
+	if err != nil {
+		log.Printf("Error enumerating server %s: %v", id, err)
+	}
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }
 
 // --- Users ---

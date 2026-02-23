@@ -184,6 +184,10 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 			s.startServer(w, r, id)
 		case "stop":
 			s.stopServer(w, r, id)
+		case "enumerate":
+			s.enumerateServer(w, r, id)
+		case "endpoints":
+			s.getEndpoints(w, r, id)
 		default:
 			http.Error(w, `{"error":"unknown action"}`, http.StatusNotFound)
 		}
@@ -282,4 +286,36 @@ func (s *Server) stopServer(w http.ResponseWriter, r *http.Request, id string) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+}
+
+func (s *Server) enumerateServer(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	endpoints, err := s.proxy.EnumerateServer(r.Context(), id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"enumeration failed: %s"}`, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(endpoints)
+}
+
+func (s *Server) getEndpoints(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	endpoints := s.proxy.Endpoints.Get(id)
+	if endpoints == nil {
+		http.Error(w, `{"error":"no endpoints cached for this server"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(endpoints)
 }

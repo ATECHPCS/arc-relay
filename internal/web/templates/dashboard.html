@@ -14,6 +14,7 @@
         <th>Name</th>
         <th>Type</th>
         <th>Status</th>
+        <th>Endpoints</th>
         <th>Proxy URL</th>
         <th>Actions</th>
       </tr>
@@ -24,6 +25,7 @@
         <td><a href="/servers/{{.ID}}">{{.DisplayName}}</a></td>
         <td><span class="badge badge-{{.ServerType}}">{{.ServerType}}</span></td>
         <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+        <td>{{with index $.EndpointCounts .ID}}{{.}}{{else}}-{{end}}</td>
         <td><code>/mcp/{{.Name}}</code></td>
         <td>
           <div class="actions">

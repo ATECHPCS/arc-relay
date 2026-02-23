@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	dockermgr "github.com/JeremiahChurch/mcp-wrangler/internal/docker"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
@@ -26,6 +27,9 @@ type Manager struct {
 
 	// Track container IDs for managed servers
 	containers map[string]string // server ID -> container ID
+
+	// Endpoint cache
+	Endpoints *mcp.EndpointCache
 }
 
 // NewManager creates a new proxy manager.
@@ -35,6 +39,7 @@ func NewManager(servers *store.ServerStore, docker *dockermgr.Manager) *Manager 
 		servers:    servers,
 		docker:     docker,
 		containers: make(map[string]string),
+		Endpoints:  mcp.NewEndpointCache(),
 	}
 }
 
@@ -101,6 +106,7 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Started stdio server %s (container %s)", srv.Name, containerID[:12])
+	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
 }
 
@@ -115,6 +121,7 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 		m.backends[srv.ID] = NewHTTPProxy(cfg.URL)
 		m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 		log.Printf("Connected to external HTTP server %s at %s", srv.Name, cfg.URL)
+		m.enumerateAsync(srv.ID, srv.Name)
 		return nil
 	}
 
@@ -152,6 +159,7 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Started HTTP server %s (container %s, port %s)", srv.Name, containerID[:12], hostPort)
+	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
 }
 
@@ -165,7 +173,44 @@ func (m *Manager) startRemote(ctx context.Context, srv *store.Server) error {
 	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Connected to remote server %s at %s", srv.Name, cfg.URL)
+	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
+}
+
+// EnumerateServer discovers tools, resources, and prompts from a running server.
+func (m *Manager) EnumerateServer(ctx context.Context, serverID string) (*mcp.ServerEndpoints, error) {
+	backend, ok := m.GetBackend(serverID)
+	if !ok {
+		return nil, fmt.Errorf("server not running")
+	}
+
+	endpoints, err := mcp.Enumerate(ctx, backend)
+	if err != nil {
+		log.Printf("Enumeration failed for server %s: %v", serverID, err)
+	}
+	m.Endpoints.Set(serverID, endpoints)
+	return endpoints, err
+}
+
+// enumerateAsync runs enumeration in a background goroutine after server start.
+func (m *Manager) enumerateAsync(serverID, serverName string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		endpoints, err := m.EnumerateServer(ctx, serverID)
+		if err != nil {
+			log.Printf("Background enumeration failed for %s: %v", serverName, err)
+			return
+		}
+
+		toolCount := len(endpoints.Tools)
+		resourceCount := len(endpoints.Resources)
+		promptCount := len(endpoints.Prompts)
+		log.Printf("Enumerated %s: %d tools, %d resources, %d prompts (server: %s v%s)",
+			serverName, toolCount, resourceCount, promptCount,
+			endpoints.ServerInfo.Name, endpoints.ServerInfo.Version)
+	}()
 }
 
 // StopServer stops a managed server and removes its backend.
@@ -180,6 +225,7 @@ func (m *Manager) StopServer(ctx context.Context, serverID string) error {
 		}
 	}
 	delete(m.backends, serverID)
+	m.Endpoints.Remove(serverID)
 
 	// Stop container if managed
 	if containerID, ok := m.containers[serverID]; ok {
