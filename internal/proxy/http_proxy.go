@@ -25,6 +25,25 @@ func NewHTTPProxy(targetURL string) *HTTPProxy {
 	}
 }
 
+// SendNotification sends a fire-and-forget notification to the HTTP backend.
+func (p *HTTPProxy) SendNotification(n *mcp.Notification) error {
+	body, _ := json.Marshal(n)
+	httpReq, err := http.NewRequest("POST", p.targetURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if p.sessionID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	}
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // Send forwards an MCP request to the HTTP backend.
 func (p *HTTPProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, error) {
 	body, err := json.Marshal(req)

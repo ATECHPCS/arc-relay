@@ -26,6 +26,42 @@ func NewRemoteProxy(config store.RemoteConfig) *RemoteProxy {
 	}
 }
 
+// SendNotification sends a fire-and-forget notification to the remote server.
+func (p *RemoteProxy) SendNotification(n *mcp.Notification) error {
+	body, _ := json.Marshal(n)
+	httpReq, err := http.NewRequest("POST", p.config.URL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if p.sessionID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	}
+	// Apply auth (same as Send)
+	switch p.config.Auth.Type {
+	case "bearer":
+		httpReq.Header.Set("Authorization", "Bearer "+p.config.Auth.Token)
+	case "api_key":
+		name := p.config.Auth.HeaderName
+		if name == "" {
+			name = "X-API-Key"
+		}
+		httpReq.Header.Set(name, p.config.Auth.Token)
+	case "private_url", "none", "":
+		// No header needed
+	case "oauth":
+		if p.config.Auth.Token != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+p.config.Auth.Token)
+		}
+	}
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // Send forwards an MCP request to the remote server.
 func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, error) {
 	body, err := json.Marshal(req)

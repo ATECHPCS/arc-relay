@@ -68,6 +68,7 @@ func (s *Server) ListenAndServe() error {
 }
 
 // handleMCPProxy is the core proxy handler. Routes /mcp/{server-name} to the right backend.
+// Implements Streamable HTTP transport: handles both requests (with id) and notifications (without id).
 func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed, use POST"}`, http.StatusMethodNotAllowed)
@@ -104,11 +105,42 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse as generic JSON to detect if it's a notification (no "id" field) or a request
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+
+	method := ""
+	if m, ok := raw["method"]; ok {
+		json.Unmarshal(m, &method)
+	}
+
+	// Check if this is a notification (no "id" field)
+	_, hasID := raw["id"]
+	if !hasID {
+		log.Printf("Proxy %s: notification %s", serverName, method)
+		// Forward notification to backend if it supports it, then return 202
+		if notifier, ok := backend.(interface {
+			SendNotification(n *mcp.Notification) error
+		}); ok {
+			var notif mcp.Notification
+			json.Unmarshal(body, &notif)
+			notifier.SendNotification(&notif)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	// It's a request — forward and wait for response
 	var mcpReq mcp.Request
 	if err := json.Unmarshal(body, &mcpReq); err != nil {
 		http.Error(w, `{"error":"invalid JSON-RPC request"}`, http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("Proxy %s: request %s (id=%s)", serverName, mcpReq.Method, string(mcpReq.ID))
 
 	resp, err := backend.Send(r.Context(), &mcpReq)
 	if err != nil {
