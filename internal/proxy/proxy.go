@@ -74,18 +74,19 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 
 	// Pull image
 	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
-	if err := m.docker.PullImage(ctx, cfg.Image); err != nil {
+	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("pulling image: %w", err)
 	}
 
 	// Start container
 	containerID, err := m.docker.StartContainer(ctx, dockermgr.ContainerConfig{
-		Name:    srv.Name,
-		Image:   cfg.Image,
-		Command: cfg.Command,
-		Env:     cfg.Env,
-		Port:    0, // stdio, no port
+		Name:       srv.Name,
+		Image:      cfg.Image,
+		Entrypoint: cfg.Entrypoint,
+		Command:    cfg.Command,
+		Env:        cfg.Env,
+		Port:       0, // stdio, no port
 	})
 	if err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
@@ -129,7 +130,7 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
 
 	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
-	if err := m.docker.PullImage(ctx, cfg.Image); err != nil {
+	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("pulling image: %w", err)
 	}

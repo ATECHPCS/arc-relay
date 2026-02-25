@@ -12,6 +12,7 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	dclient "github.com/moby/moby/client"
 )
 
@@ -71,13 +72,23 @@ func (m *Manager) PullImage(ctx context.Context, ref string) error {
 	return nil
 }
 
+// EnsureImage checks if an image exists locally, and pulls it if not.
+func (m *Manager) EnsureImage(ctx context.Context, ref string) error {
+	_, err := m.cli.ImageInspect(ctx, ref)
+	if err == nil {
+		return nil // image exists locally
+	}
+	return m.PullImage(ctx, ref)
+}
+
 // ContainerConfig holds the parameters for creating a container.
 type ContainerConfig struct {
-	Name    string
-	Image   string
-	Command []string
-	Env     map[string]string
-	Port    int // 0 for stdio servers
+	Name       string
+	Image      string
+	Entrypoint []string // overrides image ENTRYPOINT
+	Command    []string
+	Env        map[string]string
+	Port       int // 0 for stdio servers
 }
 
 // StartContainer creates and starts a container. Returns the container ID.
@@ -92,6 +103,9 @@ func (m *Manager) StartContainer(ctx context.Context, cfg ContainerConfig) (stri
 		Env:       env,
 		OpenStdin: cfg.Port == 0,
 		Tty:       false,
+	}
+	if len(cfg.Entrypoint) > 0 {
+		containerCfg.Entrypoint = cfg.Entrypoint
 	}
 	if len(cfg.Command) > 0 {
 		containerCfg.Cmd = cfg.Command
@@ -153,17 +167,30 @@ type bufioReadCloser struct {
 func (b *bufioReadCloser) Close() error { return nil }
 
 // AttachStdio attaches to a running container's stdin/stdout.
+// The Docker stream is multiplexed (8-byte header per frame) when TTY=false,
+// so we demux stdout into a clean pipe for JSON-RPC communication.
 func (m *Manager) AttachStdio(ctx context.Context, containerID string) (io.WriteCloser, io.ReadCloser, error) {
 	resp, err := m.cli.ContainerAttach(ctx, containerID, dclient.ContainerAttachOptions{
 		Stdin:  true,
 		Stdout: true,
-		Stderr: false,
+		Stderr: true,
 		Stream: true,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("attaching to container %s: %w", containerID, err)
 	}
-	return resp.Conn, &bufioReadCloser{resp.Reader}, nil
+
+	// Demux the Docker multiplexed stream into clean stdout/stderr pipes
+	stdoutR, stdoutW := io.Pipe()
+	go func() {
+		_, err := stdcopy.StdCopy(stdoutW, io.Discard, resp.Reader)
+		if err != nil {
+			log.Printf("docker demux error for %s: %v", containerID[:12], err)
+		}
+		stdoutW.Close()
+	}()
+
+	return resp.Conn, stdoutR, nil
 }
 
 // GetHostPort returns the host port mapped to the given container port.

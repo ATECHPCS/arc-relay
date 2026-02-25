@@ -40,9 +40,10 @@ type Server struct {
 
 // StdioConfig holds config for Docker-managed stdio servers.
 type StdioConfig struct {
-	Image   string            `json:"image"`
-	Command []string          `json:"command,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	Image      string            `json:"image"`
+	Entrypoint []string          `json:"entrypoint,omitempty"`
+	Command    []string          `json:"command,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
 }
 
 // HTTPConfig holds config for Docker-managed or external HTTP servers.
