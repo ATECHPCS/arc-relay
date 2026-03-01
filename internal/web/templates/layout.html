@@ -105,6 +105,40 @@
 
     .env-table { font-family: var(--mono); font-size: 0.85rem; }
     .env-table td:first-child { font-weight: 600; white-space: nowrap; }
+
+    .catalog-search { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .catalog-search input { flex: 1; }
+    .catalog-results { margin-bottom: 1rem; }
+    .catalog-result {
+      border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem;
+      margin-bottom: 0.5rem; transition: border-color 0.15s;
+    }
+    .catalog-result:hover { border-color: var(--primary); }
+    .catalog-result-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.25rem; }
+    .catalog-result-title { font-weight: 600; font-size: 0.95rem; }
+    .catalog-result-version { font-size: 0.8rem; color: var(--text-muted); font-family: var(--mono); }
+    .catalog-result-desc { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+    .catalog-result-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .catalog-env-hint {
+      background: #fff3cd; border: 1px solid #ffecb5; border-radius: 6px;
+      padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.85rem;
+    }
+    .catalog-env-hint strong { display: block; margin-bottom: 0.3rem; }
+    .catalog-env-hint code { font-size: 0.8rem; }
+    .catalog-info {
+      background: #d1e7dd; color: #0f5132; border: 1px solid #badbcc;
+      border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem;
+    }
+    .catalog-loading { text-align: center; padding: 1rem; color: var(--text-muted); font-size: 0.9rem; }
+    .catalog-empty { text-align: center; padding: 1rem; color: var(--text-muted); font-size: 0.9rem; }
+
+    .tier-select {
+      padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600;
+      border: 1px solid var(--border); cursor: pointer; text-transform: uppercase;
+    }
+    .tier-read, select.tier-read { background: #d1e7dd; color: var(--success); border-color: #badbcc; }
+    .tier-write, select.tier-write { background: #cfe2ff; color: #084298; border-color: #b6d4fe; }
+    .tier-admin, select.tier-admin { background: #f8d7da; color: var(--danger); border-color: #f5c2c7; }
   </style>
 </head>
 <body>

@@ -11,6 +11,7 @@ import (
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/docker"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/server"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
@@ -37,6 +38,7 @@ func main() {
 	// Initialize stores
 	serverStore := store.NewServerStore(db)
 	userStore := store.NewUserStore(db)
+	accessStore := store.NewAccessStore(db)
 
 	// Ensure default admin user exists
 	adminPw := cfg.Auth.AdminPassword
@@ -55,15 +57,18 @@ func main() {
 		dockerMgr = nil
 	}
 
+	// Initialize OAuth manager
+	oauthMgr := oauth.NewManager(serverStore, cfg.PublicBaseURL())
+
 	// Initialize proxy manager
-	proxyMgr := proxy.NewManager(serverStore, dockerMgr)
+	proxyMgr := proxy.NewManager(serverStore, dockerMgr, oauthMgr, accessStore)
 
 	// Start health monitor
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

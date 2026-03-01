@@ -12,7 +12,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/JeremiahChurch/mcp-wrangler/internal/catalog"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
 )
@@ -28,35 +30,44 @@ type Flash struct {
 
 // ConfigDisplay is a view-friendly representation of server config.
 type ConfigDisplay struct {
-	Image       string
-	Command     string
-	Port        int
-	URL         string
-	HealthCheck string
-	AuthType    string
-	EnvKeys     []string
+	Image            string
+	Command          string
+	Port             int
+	URL              string
+	HealthCheck      string
+	AuthType         string
+	EnvKeys          []string
+	OAuthAuthorized  bool
+	OAuthScopes      string
+	OAuthTokenExpiry string
 }
 
 // Handlers holds dependencies for web UI handlers.
 type Handlers struct {
-	cfg     *config.Config
-	servers *store.ServerStore
-	users   *store.UserStore
-	proxy   *proxy.Manager
-	tmpls   map[string]*template.Template
+	cfg            *config.Config
+	servers        *store.ServerStore
+	users          *store.UserStore
+	proxy          *proxy.Manager
+	oauth          *oauth.Manager
+	accessStore    *store.AccessStore
+	catalogClient  *catalog.Client
+	tmpls          map[string]*template.Template
 
 	// Simple in-memory session store (POC quality)
 	sessions map[string]*store.User
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore) *Handlers {
 	h := &Handlers{
-		cfg:      cfg,
-		servers:  servers,
-		users:    users,
-		proxy:    proxyMgr,
-		tmpls:    make(map[string]*template.Template),
-		sessions: make(map[string]*store.User),
+		cfg:           cfg,
+		servers:       servers,
+		users:         users,
+		proxy:         proxyMgr,
+		oauth:         oauthMgr,
+		accessStore:   accessStore,
+		catalogClient: catalog.NewClient(),
+		tmpls:         make(map[string]*template.Template),
+		sessions:      make(map[string]*store.User),
 	}
 
 	// Parse each page template together with the layout
@@ -83,6 +94,10 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/", h.requireAuth(h.handleUserRoutes))
 	mux.HandleFunc("/api-keys", h.requireAuth(h.handleAPIKeys))
 	mux.HandleFunc("/api-keys/", h.requireAuth(h.handleAPIKeyRoutes))
+	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
+	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
+	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
+	mux.HandleFunc("/oauth/callback", h.handleOAuthCallback) // No session auth — browser redirect from provider
 }
 
 // --- Auth ---
@@ -230,6 +245,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleServerDelete(w, r, id)
 	case "enumerate":
 		h.handleServerEnumerate(w, r, id)
+	case "access-tier":
+		h.handleAccessTier(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -242,6 +259,14 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
+	// Build access tier lookup map: "type:name" -> tier
+	tierMap := make(map[string]string)
+	if tiers, err := h.accessStore.GetAllTiers(srv.ID); err == nil {
+		for _, t := range tiers {
+			tierMap[t.EndpointType+":"+t.EndpointName] = t.AccessTier
+		}
+	}
+
 	h.render(w, "server_detail.html", map[string]any{
 		"Nav":           "servers",
 		"User":          getUser(r),
@@ -249,6 +274,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		"ConfigDisplay": buildConfigDisplay(srv),
 		"Host":          r.Host,
 		"Endpoints":     h.proxy.Endpoints.Get(srv.ID),
+		"TierMap":       tierMap,
 	})
 }
 
@@ -337,6 +363,42 @@ func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request,
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }
 
+// --- Access Tiers ---
+
+func (h *Handlers) handleAccessTier(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	var body struct {
+		EndpointType string `json:"endpoint_type"`
+		EndpointName string `json:"endpoint_name"`
+		AccessTier   string `json:"access_tier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if body.AccessTier != "read" && body.AccessTier != "write" && body.AccessTier != "admin" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid access tier"})
+		return
+	}
+
+	if err := h.accessStore.SetTier(id, body.EndpointType, body.EndpointName, body.AccessTier); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to set tier"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // --- Users ---
 
 func (h *Handlers) handleUsers(w http.ResponseWriter, r *http.Request) {
@@ -382,6 +444,10 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if role != "admin" {
 		role = "user"
 	}
+	accessLevel := r.FormValue("access_level")
+	if accessLevel != "read" && accessLevel != "write" && accessLevel != "admin" {
+		accessLevel = "write"
+	}
 
 	if username == "" || password == "" {
 		users, _ := h.users.List()
@@ -392,7 +458,7 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.users.Create(username, password, role); err != nil {
+	if _, err := h.users.CreateWithAccessLevel(username, password, role, accessLevel); err != nil {
 		users, _ := h.users.List()
 		h.render(w, "users.html", map[string]any{
 			"Nav": "users", "User": getUser(r), "Users": users,
@@ -442,6 +508,134 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.NotFound(w, r)
+}
+
+// --- OAuth ---
+
+func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
+	serverID := strings.TrimPrefix(r.URL.Path, "/oauth/start/")
+	if serverID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	srv, err := h.servers.Get(serverID)
+	if err != nil || srv == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	if srv.ServerType != store.ServerTypeRemote {
+		http.Error(w, "OAuth is only supported for remote servers", http.StatusBadRequest)
+		return
+	}
+
+	var cfg store.RemoteConfig
+	if err := json.Unmarshal(srv.Config, &cfg); err != nil {
+		http.Error(w, "Invalid server config", http.StatusInternalServerError)
+		return
+	}
+
+	if cfg.Auth.Type != "oauth" {
+		http.Error(w, "Server is not configured for OAuth", http.StatusBadRequest)
+		return
+	}
+
+	authURL, err := h.oauth.StartAuthFlow(serverID, cfg.Auth)
+	if err != nil {
+		log.Printf("Error starting OAuth flow for %s: %v", srv.Name, err)
+		http.Error(w, "Failed to start OAuth flow", http.StatusInternalServerError)
+		return
+	}
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+func (h *Handlers) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	state := r.URL.Query().Get("state")
+
+	if code == "" || state == "" {
+		errMsg := r.URL.Query().Get("error")
+		errDesc := r.URL.Query().Get("error_description")
+		if errMsg != "" {
+			http.Error(w, fmt.Sprintf("OAuth error: %s — %s", errMsg, errDesc), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "Missing code or state parameter", http.StatusBadRequest)
+		return
+	}
+
+	serverID, err := h.oauth.HandleCallback(r.Context(), state, code)
+	if err != nil {
+		log.Printf("OAuth callback error: %v", err)
+		http.Error(w, fmt.Sprintf("OAuth callback failed: %s", err), http.StatusBadRequest)
+		return
+	}
+
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", serverID), http.StatusFound)
+}
+
+// --- Catalog API ---
+
+func (h *Handlers) handleCatalogSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		writeJSON(w, http.StatusOK, []catalog.ResolvedServer{})
+		return
+	}
+
+	results, err := h.catalogClient.Search(r.Context(), q, 20)
+	if err != nil {
+		log.Printf("Catalog search error: %v", err)
+		writeJSON(w, http.StatusOK, []catalog.ResolvedServer{}) // graceful degradation
+		return
+	}
+	if results == nil {
+		results = []catalog.ResolvedServer{}
+	}
+
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		RemoteURL string `json:"remote_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RemoteURL == "" {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+
+	discovery, err := oauth.DiscoverOAuth(r.Context(), body.RemoteURL)
+	if err != nil || discovery == nil {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+
+	// If a registration endpoint is available, try dynamic client registration
+	if discovery.RegistrationEndpoint != "" {
+		reg, err := oauth.RegisterClient(r.Context(), discovery.RegistrationEndpoint, h.oauth.CallbackURL())
+		if err != nil {
+			log.Printf("Dynamic client registration failed: %v", err)
+		} else if reg != nil {
+			discovery.ClientID = reg.ClientID
+			discovery.ClientSecret = reg.ClientSecret
+		}
+	}
+
+	writeJSON(w, http.StatusOK, discovery)
+}
+
+func writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
 }
 
 // --- Helpers ---
@@ -512,10 +706,15 @@ func (h *Handlers) serverFormData(r *http.Request, srv *store.Server, errMsg str
 		"HTTPURL":        r.FormValue("http_url"),
 		"HTTPHealth":     r.FormValue("http_health"),
 		"HTTPEnv":        r.FormValue("http_env"),
-		"RemoteURL":      r.FormValue("remote_url"),
-		"RemoteToken":    r.FormValue("remote_token"),
-		"RemoteHeaderName": r.FormValue("remote_header_name"),
-		"Error":          errMsg,
+		"RemoteURL":          r.FormValue("remote_url"),
+		"RemoteToken":        r.FormValue("remote_token"),
+		"RemoteHeaderName":   r.FormValue("remote_header_name"),
+		"OAuthClientID":      r.FormValue("oauth_client_id"),
+		"OAuthClientSecret":  r.FormValue("oauth_client_secret"),
+		"OAuthAuthURL":       r.FormValue("oauth_auth_url"),
+		"OAuthTokenURL":      r.FormValue("oauth_token_url"),
+		"OAuthScopes":        r.FormValue("oauth_scopes"),
+		"Error":              errMsg,
 	}
 }
 
@@ -564,13 +763,24 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 		if url == "" {
 			return nil, fmt.Errorf("URL is required for remote servers")
 		}
+		auth := store.RemoteAuth{
+			Type:       r.FormValue("remote_auth_type"),
+			Token:      r.FormValue("remote_token"),
+			HeaderName: r.FormValue("remote_header_name"),
+		}
+		if auth.Type == "oauth" {
+			auth.ClientID = strings.TrimSpace(r.FormValue("oauth_client_id"))
+			auth.ClientSecret = strings.TrimSpace(r.FormValue("oauth_client_secret"))
+			auth.AuthURL = strings.TrimSpace(r.FormValue("oauth_auth_url"))
+			auth.TokenURL = strings.TrimSpace(r.FormValue("oauth_token_url"))
+			auth.Scopes = strings.TrimSpace(r.FormValue("oauth_scopes"))
+			if auth.ClientID == "" || auth.AuthURL == "" || auth.TokenURL == "" {
+				return nil, fmt.Errorf("Client ID, Authorization URL, and Token URL are required for OAuth")
+			}
+		}
 		cfg := store.RemoteConfig{
-			URL: url,
-			Auth: store.RemoteAuth{
-				Type:       r.FormValue("remote_auth_type"),
-				Token:      r.FormValue("remote_token"),
-				HeaderName: r.FormValue("remote_header_name"),
-			},
+			URL:  url,
+			Auth: auth,
 		}
 		configJSON, err = json.Marshal(cfg)
 
@@ -612,6 +822,11 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		json.Unmarshal(srv.Config, &cfg)
 		cd.URL = cfg.URL
 		cd.AuthType = cfg.Auth.Type
+		if cfg.Auth.Type == "oauth" {
+			cd.OAuthAuthorized = cfg.Auth.AccessToken != ""
+			cd.OAuthScopes = cfg.Auth.Scopes
+			cd.OAuthTokenExpiry = cfg.Auth.TokenExpiry
+		}
 	}
 	return cd
 }
@@ -643,6 +858,11 @@ func serverToFormData(srv *store.Server) map[string]any {
 		data["RemoteAuthType"] = cfg.Auth.Type
 		data["RemoteToken"] = cfg.Auth.Token
 		data["RemoteHeaderName"] = cfg.Auth.HeaderName
+		data["OAuthClientID"] = cfg.Auth.ClientID
+		data["OAuthClientSecret"] = cfg.Auth.ClientSecret
+		data["OAuthAuthURL"] = cfg.Auth.AuthURL
+		data["OAuthTokenURL"] = cfg.Auth.TokenURL
+		data["OAuthScopes"] = cfg.Auth.Scopes
 	}
 	return data
 }

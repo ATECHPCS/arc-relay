@@ -60,7 +60,28 @@
   <div class="detail-grid">
     <dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>
     {{if .ConfigDisplay.AuthType}}<dt>Auth Type</dt><dd>{{.ConfigDisplay.AuthType}}</dd>{{end}}
+    {{if eq .ConfigDisplay.AuthType "oauth"}}
+    <dt>OAuth Status</dt>
+    <dd>
+      {{if .ConfigDisplay.OAuthAuthorized}}
+        <span class="badge badge-running">Authorized</span>
+        {{if .ConfigDisplay.OAuthTokenExpiry}}
+          <span style="font-size:0.85rem;color:var(--text-muted);margin-left:0.5rem">expires {{.ConfigDisplay.OAuthTokenExpiry}}</span>
+        {{end}}
+      {{else}}
+        <span class="badge badge-error">Not Authorized</span>
+      {{end}}
+    </dd>
+    {{if .ConfigDisplay.OAuthScopes}}<dt>Scopes</dt><dd><code>{{.ConfigDisplay.OAuthScopes}}</code></dd>{{end}}
+    {{end}}
   </div>
+  {{if eq .ConfigDisplay.AuthType "oauth"}}
+  <div style="margin-top: 1rem;">
+    <a href="/oauth/start/{{.Server.ID}}" class="btn {{if .ConfigDisplay.OAuthAuthorized}}btn-outline{{else}}btn-primary{{end}}">
+      {{if .ConfigDisplay.OAuthAuthorized}}Reauthorize{{else}}Authorize{{end}}
+    </a>
+  </div>
+  {{end}}
   {{end}}
 
   {{if .ConfigDisplay.EnvKeys}}
@@ -90,13 +111,23 @@
   <h2>Tools <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Tools}}</span></h2>
   <table class="table">
     <thead>
-      <tr><th>Name</th><th>Description</th></tr>
+      <tr><th>Name</th><th>Description</th><th style="width:120px">Access Tier</th></tr>
     </thead>
     <tbody>
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}
       {{range .Endpoints.Tools}}
+      {{$tier := index $tierMap (printf "tool:%s" .Name)}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>
+          <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="tool" data-name="{{.Name}}"
+                  onchange="updateTier(this)">
+            <option value="read" {{if eq $tier "read"}}selected{{end}}>read</option>
+            <option value="write" {{if eq $tier "write"}}selected{{end}}>write</option>
+            <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
+          </select>
+        </td>
       </tr>
       {{end}}
     </tbody>
@@ -109,14 +140,24 @@
   <h2>Resources <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Resources}}</span></h2>
   <table class="table">
     <thead>
-      <tr><th>URI</th><th>Name</th><th>Description</th></tr>
+      <tr><th>URI</th><th>Name</th><th>Description</th><th style="width:120px">Access Tier</th></tr>
     </thead>
     <tbody>
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}
       {{range .Endpoints.Resources}}
+      {{$tier := index $tierMap (printf "resource:%s" .URI)}}
       <tr>
         <td><code>{{.URI}}</code></td>
         <td>{{.Name}}</td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>
+          <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="resource" data-name="{{.URI}}"
+                  onchange="updateTier(this)">
+            <option value="read" {{if eq $tier "read"}}selected{{end}}>read</option>
+            <option value="write" {{if eq $tier "write"}}selected{{end}}>write</option>
+            <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
+          </select>
+        </td>
       </tr>
       {{end}}
     </tbody>
@@ -129,19 +170,51 @@
   <h2>Prompts <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Prompts}}</span></h2>
   <table class="table">
     <thead>
-      <tr><th>Name</th><th>Description</th></tr>
+      <tr><th>Name</th><th>Description</th><th style="width:120px">Access Tier</th></tr>
     </thead>
     <tbody>
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}
       {{range .Endpoints.Prompts}}
+      {{$tier := index $tierMap (printf "prompt:%s" .Name)}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>
+          <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="prompt" data-name="{{.Name}}"
+                  onchange="updateTier(this)">
+            <option value="read" {{if eq $tier "read"}}selected{{end}}>read</option>
+            <option value="write" {{if eq $tier "write"}}selected{{end}}>write</option>
+            <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
+          </select>
+        </td>
       </tr>
       {{end}}
     </tbody>
   </table>
 </div>
 {{end}}
+
+<script>
+function updateTier(el) {
+  const serverID = el.dataset.server;
+  const body = JSON.stringify({
+    endpoint_type: el.dataset.type,
+    endpoint_name: el.dataset.name,
+    access_tier: el.value
+  });
+  fetch('/servers/' + serverID + '/access-tier', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: body
+  }).then(r => {
+    if (r.ok) {
+      el.className = 'tier-select tier-' + el.value;
+    } else {
+      alert('Failed to update access tier');
+    }
+  });
+}
+</script>
 {{end}}
 
 <div class="card">

@@ -8,13 +8,14 @@
   {{if .Users}}
   <table>
     <thead>
-      <tr><th>Username</th><th>Role</th><th>Created</th><th>Actions</th></tr>
+      <tr><th>Username</th><th>Role</th><th>Access Level</th><th>Created</th><th>Actions</th></tr>
     </thead>
     <tbody>
       {{range .Users}}
       <tr>
         <td>{{.Username}}</td>
         <td><span class="badge {{if eq .Role "admin"}}badge-running{{else}}badge-stopped{{end}}">{{.Role}}</span></td>
+        <td><span class="tier-select tier-{{.AccessLevel}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;">{{.AccessLevel}}</span></td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>
           <div class="actions">
@@ -51,12 +52,23 @@
         <input type="password" id="password" name="password" required>
       </div>
     </div>
-    <div class="form-group">
-      <label for="role">Role</label>
-      <select id="role" name="role">
-        <option value="user">User</option>
-        <option value="admin">Admin</option>
-      </select>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="role">Role</label>
+        <select id="role" name="role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="access_level">Access Level</label>
+        <select id="access_level" name="access_level">
+          <option value="read">Read</option>
+          <option value="write" selected>Write</option>
+          <option value="admin">Admin</option>
+        </select>
+        <div class="help">Admin role forces admin access level</div>
+      </div>
     </div>
     <button type="submit" class="btn btn-primary">Create User</button>
   </form>

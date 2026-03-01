@@ -16,8 +16,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host string `toml:"host"`
-	Port int    `toml:"port"`
+	Host    string `toml:"host"`
+	Port    int    `toml:"port"`
+	BaseURL string `toml:"base_url"`
 }
 
 type DatabaseConfig struct {
@@ -40,6 +41,15 @@ type AuthConfig struct {
 
 func (c *Config) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+}
+
+// PublicBaseURL returns the externally-reachable base URL for this server.
+// Used to construct OAuth callback URLs.
+func (c *Config) PublicBaseURL() string {
+	if c.Server.BaseURL != "" {
+		return c.Server.BaseURL
+	}
+	return fmt.Sprintf("http://localhost:%d", c.Server.Port)
 }
 
 func Load(path string) (*Config, error) {
@@ -75,6 +85,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MCP_WRANGLER_DB_PATH"); v != "" {
 		cfg.Database.Path = v
+	}
+	if v := os.Getenv("MCP_WRANGLER_BASE_URL"); v != "" {
+		cfg.Server.BaseURL = v
 	}
 	if v := os.Getenv("MCP_WRANGLER_PORT"); v != "" {
 		var port int

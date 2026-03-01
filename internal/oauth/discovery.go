@@ -1,0 +1,198 @@
+package oauth
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"time"
+)
+
+// OAuthDiscovery holds the results of .well-known OAuth discovery.
+type OAuthDiscovery struct {
+	AuthURL              string   `json:"auth_url"`
+	TokenURL             string   `json:"token_url"`
+	RegistrationEndpoint string   `json:"registration_endpoint,omitempty"`
+	ScopesSupported      []string `json:"scopes_supported,omitempty"`
+	ClientID             string   `json:"client_id,omitempty"`
+	ClientSecret         string   `json:"client_secret,omitempty"`
+}
+
+// ClientRegistration holds the result of dynamic client registration.
+type ClientRegistration struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+var discoveryClient = &http.Client{Timeout: 10 * time.Second}
+
+// DiscoverOAuth probes .well-known endpoints to auto-discover OAuth configuration.
+// Returns nil, nil if no OAuth is found (not an error).
+func DiscoverOAuth(ctx context.Context, serverURL string) (*OAuthDiscovery, error) {
+	parsed, err := url.Parse(serverURL)
+	if err != nil {
+		return nil, nil
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+
+	// Step 1: Probe /.well-known/oauth-protected-resource
+	authServer, err := probeProtectedResource(ctx, origin)
+	if err != nil || authServer == "" {
+		return nil, nil
+	}
+
+	// Step 2: Probe /.well-known/oauth-authorization-server on the auth server
+	discovery, err := probeAuthorizationServer(ctx, authServer)
+	if err != nil || discovery == nil {
+		return nil, nil
+	}
+
+	return discovery, nil
+}
+
+// RegisterClient performs dynamic client registration at the given endpoint.
+func RegisterClient(ctx context.Context, registrationEndpoint, callbackURL string) (*ClientRegistration, error) {
+	body := map[string]any{
+		"client_name":                "MCP Wrangler",
+		"redirect_uris":             []string{callbackURL},
+		"grant_types":               []string{"authorization_code", "refresh_token"},
+		"response_types":            []string{"code"},
+		"token_endpoint_auth_method": "client_secret_post",
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling registration request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", registrationEndpoint, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating registration request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := discoveryClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("registration request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading registration response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("registration endpoint returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var reg struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}
+	if err := json.Unmarshal(respBody, &reg); err != nil {
+		return nil, fmt.Errorf("parsing registration response: %w", err)
+	}
+
+	if reg.ClientID == "" {
+		return nil, fmt.Errorf("no client_id in registration response")
+	}
+
+	return &ClientRegistration{
+		ClientID:     reg.ClientID,
+		ClientSecret: reg.ClientSecret,
+	}, nil
+}
+
+// probeProtectedResource fetches /.well-known/oauth-protected-resource and returns the first authorization server.
+func probeProtectedResource(ctx context.Context, origin string) (string, error) {
+	u := origin + "/.well-known/oauth-protected-resource"
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := discoveryClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil // no OAuth, not an error
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	var resource struct {
+		AuthorizationServers []string `json:"authorization_servers"`
+	}
+	if err := json.Unmarshal(body, &resource); err != nil {
+		return "", nil
+	}
+
+	if len(resource.AuthorizationServers) == 0 {
+		return "", nil
+	}
+	return resource.AuthorizationServers[0], nil
+}
+
+// probeAuthorizationServer fetches /.well-known/oauth-authorization-server and returns OAuth endpoints.
+func probeAuthorizationServer(ctx context.Context, authServer string) (*OAuthDiscovery, error) {
+	parsed, err := url.Parse(authServer)
+	if err != nil {
+		return nil, nil
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+
+	u := origin + "/.well-known/oauth-authorization-server"
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := discoveryClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var as struct {
+		AuthorizationEndpoint string   `json:"authorization_endpoint"`
+		TokenEndpoint         string   `json:"token_endpoint"`
+		RegistrationEndpoint  string   `json:"registration_endpoint"`
+		ScopesSupported       []string `json:"scopes_supported"`
+	}
+	if err := json.Unmarshal(body, &as); err != nil {
+		return nil, nil
+	}
+
+	if as.AuthorizationEndpoint == "" || as.TokenEndpoint == "" {
+		return nil, nil
+	}
+
+	return &OAuthDiscovery{
+		AuthURL:              as.AuthorizationEndpoint,
+		TokenURL:             as.TokenEndpoint,
+		RegistrationEndpoint: as.RegistrationEndpoint,
+		ScopesSupported:      as.ScopesSupported,
+	}, nil
+}

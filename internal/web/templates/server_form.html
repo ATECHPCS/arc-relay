@@ -4,6 +4,21 @@
   <h2>{{if .IsEdit}}Edit{{else}}Add{{end}} MCP Server</h2>
 </div>
 
+{{if not .IsEdit}}
+<div class="card" style="margin-bottom: 1.25rem;">
+  <h2>Browse Server Catalog</h2>
+  <div class="catalog-search">
+    <input type="text" id="catalog-query" placeholder="Search MCP servers (e.g. sentry, linear, github)..."
+           onkeydown="if(event.key==='Enter'){event.preventDefault();catalogSearch();}">
+    <button type="button" class="btn btn-primary" onclick="catalogSearch()">Search</button>
+  </div>
+  <div id="catalog-results" class="catalog-results"></div>
+  <div id="catalog-env-hint"></div>
+  <div id="catalog-oauth-info"></div>
+  <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Or configure manually below</p>
+</div>
+{{end}}
+
 <div class="card">
   {{if .Error}}
   <div class="alert alert-danger">{{.Error}}</div>
@@ -93,7 +108,7 @@
           <option value="private_url" {{if eq .RemoteAuthType "private_url"}}selected{{end}}>Private URL (auth in URL)</option>
           <option value="bearer" {{if eq .RemoteAuthType "bearer"}}selected{{end}}>Bearer Token</option>
           <option value="api_key" {{if eq .RemoteAuthType "api_key"}}selected{{end}}>API Key Header</option>
-          <option value="oauth" {{if eq .RemoteAuthType "oauth"}}selected{{end}}>OAuth (coming soon)</option>
+          <option value="oauth" {{if eq .RemoteAuthType "oauth"}}selected{{end}}>OAuth</option>
         </select>
       </div>
       <div id="auth-token" style="display:none">
@@ -108,6 +123,35 @@
           <label for="remote_header_name">Header Name</label>
           <input type="text" id="remote_header_name" name="remote_header_name" value="{{.RemoteHeaderName}}"
                  placeholder="X-API-Key">
+        </div>
+      </div>
+      <div id="auth-oauth" style="display:none">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="oauth_client_id">Client ID</label>
+            <input type="text" id="oauth_client_id" name="oauth_client_id" value="{{.OAuthClientID}}">
+          </div>
+          <div class="form-group">
+            <label for="oauth_client_secret">Client Secret</label>
+            <input type="password" id="oauth_client_secret" name="oauth_client_secret" value="{{.OAuthClientSecret}}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="oauth_auth_url">Authorization URL</label>
+            <input type="text" id="oauth_auth_url" name="oauth_auth_url" value="{{.OAuthAuthURL}}"
+                   placeholder="https://provider.com/oauth/authorize">
+          </div>
+          <div class="form-group">
+            <label for="oauth_token_url">Token URL</label>
+            <input type="text" id="oauth_token_url" name="oauth_token_url" value="{{.OAuthTokenURL}}"
+                   placeholder="https://provider.com/oauth/token">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="oauth_scopes">Scopes (space-separated)</label>
+          <input type="text" id="oauth_scopes" name="oauth_scopes" value="{{.OAuthScopes}}"
+                 placeholder="read write">
         </div>
       </div>
     </div>
@@ -132,8 +176,177 @@ function toggleAuthFields() {
   var authType = document.getElementById('remote_auth_type').value;
   document.getElementById('auth-token').style.display = (authType === 'bearer' || authType === 'api_key') ? 'block' : 'none';
   document.getElementById('auth-header').style.display = (authType === 'api_key') ? 'block' : 'none';
+  document.getElementById('auth-oauth').style.display = (authType === 'oauth') ? 'block' : 'none';
 }
 
 toggleTypeFields();
+
+// --- Catalog ---
+
+function catalogSearch() {
+  var q = document.getElementById('catalog-query').value.trim();
+  if (!q) return;
+
+  var resultsDiv = document.getElementById('catalog-results');
+  var envHint = document.getElementById('catalog-env-hint');
+  var oauthInfo = document.getElementById('catalog-oauth-info');
+  envHint.innerHTML = '';
+  oauthInfo.innerHTML = '';
+  resultsDiv.innerHTML = '<div class="catalog-loading">Searching...</div>';
+
+  fetch('/api/catalog/search?q=' + encodeURIComponent(q))
+    .then(function(r) { return r.json(); })
+    .then(function(servers) {
+      if (!servers || servers.length === 0) {
+        resultsDiv.innerHTML = '<div class="catalog-empty">No servers found. Try a different search term.</div>';
+        return;
+      }
+
+      // Deduplicate: group by registry_name, prefer streamable-http over sse for remotes
+      var groups = {};
+      servers.forEach(function(s) {
+        var key = s.registry_name + '|' + s.server_type;
+        if (!groups[key]) {
+          groups[key] = s;
+        } else if (s.remote_type === 'streamable-http' && groups[key].remote_type === 'sse') {
+          groups[key] = s;
+        }
+      });
+
+      var html = '';
+      var seen = {};
+      Object.keys(groups).forEach(function(key) {
+        var s = groups[key];
+        var rname = s.registry_name;
+        if (!seen[rname]) seen[rname] = { remotes: [], stdios: [] };
+        if (s.server_type === 'remote') seen[rname].remotes.push(s);
+        else seen[rname].stdios.push(s);
+      });
+
+      Object.keys(seen).forEach(function(rname) {
+        var group = seen[rname];
+        var first = group.remotes[0] || group.stdios[0];
+        html += '<div class="catalog-result">';
+        html += '<div class="catalog-result-header">';
+        html += '<span class="catalog-result-title">' + escapeHtml(first.title) + '</span>';
+        html += '<span class="catalog-result-version">v' + escapeHtml(first.version) + '</span>';
+        html += '</div>';
+        html += '<div class="catalog-result-desc">' + escapeHtml(first.description) + '</div>';
+        html += '<div class="catalog-result-actions">';
+
+        group.remotes.forEach(function(r) {
+          var label = 'Use Remote (' + r.remote_type + ')';
+          html += '<button type="button" class="btn btn-sm btn-primary" onclick=\'catalogSelectRemote(' + JSON.stringify(r) + ')\'>' + label + '</button>';
+        });
+        group.stdios.forEach(function(s) {
+          var label = s.docker_image ? 'Use Docker' : 'Use Stdio (needs image)';
+          html += '<button type="button" class="btn btn-sm btn-outline" onclick=\'catalogSelectStdio(' + JSON.stringify(s) + ')\'>' + label + '</button>';
+        });
+
+        if (first.repo_url) {
+          html += '<a href="' + escapeHtml(first.repo_url) + '" target="_blank" class="btn btn-sm btn-outline">Repo</a>';
+        }
+
+        html += '</div></div>';
+      });
+
+      resultsDiv.innerHTML = html;
+    })
+    .catch(function(err) {
+      resultsDiv.innerHTML = '<div class="catalog-empty">Search failed. You can still configure manually below.</div>';
+    });
+}
+
+function catalogSelectRemote(server) {
+  document.getElementById('name').value = server.suggested_slug;
+  document.getElementById('display_name').value = server.suggested_display;
+  document.getElementById('server_type').value = 'remote';
+  toggleTypeFields();
+  document.getElementById('remote_url').value = server.remote_url;
+
+  // Clear previous hints
+  document.getElementById('catalog-env-hint').innerHTML = '';
+  var oauthInfo = document.getElementById('catalog-oauth-info');
+  oauthInfo.innerHTML = '<div class="catalog-loading">Discovering OAuth configuration...</div>';
+
+  // Try OAuth auto-discovery
+  fetch('/api/catalog/discover-oauth', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({remote_url: server.remote_url})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(disc) {
+    if (disc && disc.auth_url && disc.token_url) {
+      document.getElementById('remote_auth_type').value = 'oauth';
+      toggleAuthFields();
+      document.getElementById('oauth_auth_url').value = disc.auth_url;
+      document.getElementById('oauth_token_url').value = disc.token_url;
+      if (disc.scopes_supported && disc.scopes_supported.length > 0) {
+        document.getElementById('oauth_scopes').value = disc.scopes_supported.join(' ');
+      }
+      if (disc.client_id) {
+        document.getElementById('oauth_client_id').value = disc.client_id;
+      }
+      if (disc.client_secret) {
+        document.getElementById('oauth_client_secret').value = disc.client_secret;
+      }
+      oauthInfo.innerHTML = '<div class="catalog-info">OAuth auto-configured' +
+        (disc.client_id ? ' with dynamic client registration' : '') +
+        '. Review the settings below, then click Add Server.</div>';
+    } else {
+      oauthInfo.innerHTML = '';
+    }
+  })
+  .catch(function() {
+    oauthInfo.innerHTML = '';
+  });
+
+  // Scroll to form
+  document.getElementById('name').scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
+function catalogSelectStdio(server) {
+  document.getElementById('name').value = server.suggested_slug;
+  document.getElementById('display_name').value = server.suggested_display;
+  document.getElementById('server_type').value = 'stdio';
+  toggleTypeFields();
+  document.getElementById('stdio_image').value = server.docker_image || '';
+
+  document.getElementById('catalog-oauth-info').innerHTML = '';
+
+  // Show env var hints
+  var envHint = document.getElementById('catalog-env-hint');
+  if (server.env_vars && server.env_vars.length > 0) {
+    var html = '<div class="catalog-env-hint"><strong>Required environment variables:</strong>';
+    var envLines = [];
+    server.env_vars.forEach(function(v) {
+      html += '<div><code>' + escapeHtml(v.name) + '</code>';
+      if (v.description) html += ' &mdash; ' + escapeHtml(v.description);
+      if (v.isRequired) html += ' <strong>(required)</strong>';
+      html += '</div>';
+      envLines.push(v.name + '=');
+    });
+    html += '</div>';
+    envHint.innerHTML = html;
+
+    // Pre-fill env textarea
+    var textarea = document.getElementById('stdio_env');
+    if (!textarea.value.trim()) {
+      textarea.value = envLines.join('\n');
+    }
+  } else {
+    envHint.innerHTML = '';
+  }
+
+  document.getElementById('name').scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
+}
 </script>
 {{end}}

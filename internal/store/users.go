@@ -17,6 +17,7 @@ type User struct {
 	Username     string    `json:"username"`
 	PasswordHash string    `json:"-"`
 	Role         string    `json:"role"`
+	AccessLevel  string    `json:"access_level"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -39,9 +40,21 @@ func NewUserStore(db *DB) *UserStore {
 }
 
 func (s *UserStore) Create(username, password, role string) (*User, error) {
+	return s.CreateWithAccessLevel(username, password, role, "")
+}
+
+func (s *UserStore) CreateWithAccessLevel(username, password, role, accessLevel string) (*User, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("hashing password: %w", err)
+	}
+
+	// Force admin access level for admin role
+	if role == "admin" {
+		accessLevel = "admin"
+	}
+	if accessLevel == "" {
+		accessLevel = "write"
 	}
 
 	user := &User{
@@ -49,13 +62,14 @@ func (s *UserStore) Create(username, password, role string) (*User, error) {
 		Username:     username,
 		PasswordHash: string(hash),
 		Role:         role,
+		AccessLevel:  accessLevel,
 		CreatedAt:    time.Now(),
 	}
 
 	_, err = s.db.Exec(`
-		INSERT INTO users (id, username, password_hash, role, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		user.ID, user.Username, user.PasswordHash, user.Role, user.CreatedAt,
+		INSERT INTO users (id, username, password_hash, role, access_level, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		user.ID, user.Username, user.PasswordHash, user.Role, user.AccessLevel, user.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating user: %w", err)
@@ -66,9 +80,9 @@ func (s *UserStore) Create(username, password, role string) (*User, error) {
 func (s *UserStore) Authenticate(username, password string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, created_at
+		SELECT id, username, password_hash, role, access_level, created_at
 		FROM users WHERE username = ?`, username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,9 +100,9 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 func (s *UserStore) Get(id string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, created_at
+		SELECT id, username, password_hash, role, access_level, created_at
 		FROM users WHERE id = ?`, id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -101,9 +115,9 @@ func (s *UserStore) Get(id string) (*User, error) {
 func (s *UserStore) GetByUsername(username string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, created_at
+		SELECT id, username, password_hash, role, access_level, created_at
 		FROM users WHERE username = ?`, username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -114,7 +128,7 @@ func (s *UserStore) GetByUsername(username string) (*User, error) {
 }
 
 func (s *UserStore) List() ([]*User, error) {
-	rows, err := s.db.Query(`SELECT id, username, password_hash, role, created_at FROM users ORDER BY created_at`)
+	rows, err := s.db.Query(`SELECT id, username, password_hash, role, access_level, created_at FROM users ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("listing users: %w", err)
 	}
@@ -123,7 +137,7 @@ func (s *UserStore) List() ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.AccessLevel, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
 		users = append(users, u)
@@ -137,12 +151,15 @@ func (s *UserStore) Delete(id string) error {
 }
 
 // EnsureAdmin creates the default admin user if no users exist.
+// Also ensures existing admin users have access_level = 'admin'.
 func (s *UserStore) EnsureAdmin(password string) error {
 	var count int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
 		return fmt.Errorf("counting users: %w", err)
 	}
 	if count > 0 {
+		// Ensure all admin-role users have admin access level
+		s.db.Exec(`UPDATE users SET access_level = 'admin' WHERE role = 'admin' AND access_level != 'admin'`)
 		return nil
 	}
 	_, err := s.Create("admin", password, "admin")

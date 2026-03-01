@@ -10,6 +10,7 @@ import (
 
 	dockermgr "github.com/JeremiahChurch/mcp-wrangler/internal/docker"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
 )
 
@@ -30,16 +31,24 @@ type Manager struct {
 
 	// Endpoint cache
 	Endpoints *mcp.EndpointCache
+
+	// Access tier store for endpoint-level access control
+	AccessStore *store.AccessStore
+
+	// OAuth manager for remote servers with OAuth auth
+	OAuthManager *oauth.Manager
 }
 
 // NewManager creates a new proxy manager.
-func NewManager(servers *store.ServerStore, docker *dockermgr.Manager) *Manager {
+func NewManager(servers *store.ServerStore, docker *dockermgr.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore) *Manager {
 	return &Manager{
-		backends:   make(map[string]Backend),
-		servers:    servers,
-		docker:     docker,
-		containers: make(map[string]string),
-		Endpoints:  mcp.NewEndpointCache(),
+		backends:     make(map[string]Backend),
+		servers:      servers,
+		docker:       docker,
+		containers:   make(map[string]string),
+		Endpoints:    mcp.NewEndpointCache(),
+		AccessStore:  accessStore,
+		OAuthManager: oauthMgr,
 	}
 }
 
@@ -170,7 +179,15 @@ func (m *Manager) startRemote(ctx context.Context, srv *store.Server) error {
 		return fmt.Errorf("parsing remote config: %w", err)
 	}
 
-	m.backends[srv.ID] = NewRemoteProxy(cfg)
+	// For OAuth servers, check that tokens exist before starting
+	if cfg.Auth.Type == "oauth" && cfg.Auth.AccessToken == "" {
+		if m.OAuthManager == nil || !m.OAuthManager.HasTokens(srv.ID) {
+			m.servers.UpdateStatus(srv.ID, store.StatusError, "OAuth not yet authorized — click Authorize on the server detail page")
+			return fmt.Errorf("OAuth not yet authorized for server %s", srv.Name)
+		}
+	}
+
+	m.backends[srv.ID] = NewRemoteProxy(srv.ID, cfg, m.OAuthManager)
 	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Connected to remote server %s at %s", srv.Name, cfg.URL)
@@ -190,7 +207,28 @@ func (m *Manager) EnumerateServer(ctx context.Context, serverID string) (*mcp.Se
 		log.Printf("Enumeration failed for server %s: %v", serverID, err)
 	}
 	m.Endpoints.Set(serverID, endpoints)
+
+	// Sync access tiers after enumeration
+	if m.AccessStore != nil && endpoints != nil {
+		m.syncAccessTiers(serverID, endpoints)
+	}
+
 	return endpoints, err
+}
+
+// syncAccessTiers updates the access tier database after endpoint enumeration.
+func (m *Manager) syncAccessTiers(serverID string, endpoints *mcp.ServerEndpoints) {
+	var infos []store.EndpointInfo
+	for _, t := range endpoints.Tools {
+		infos = append(infos, store.EndpointInfo{Type: "tool", Name: t.Name, Description: t.Description})
+	}
+	for _, r := range endpoints.Resources {
+		infos = append(infos, store.EndpointInfo{Type: "resource", Name: r.URI, Description: r.Description})
+	}
+	for _, p := range endpoints.Prompts {
+		infos = append(infos, store.EndpointInfo{Type: "prompt", Name: p.Name, Description: p.Description})
+	}
+	m.AccessStore.SyncAfterEnumerate(serverID, infos, mcp.ClassifyEndpoint)
 }
 
 // enumerateAsync runs enumeration in a background goroutine after server start.

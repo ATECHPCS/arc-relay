@@ -70,6 +70,9 @@ type RemoteAuth struct {
 	AuthURL      string `json:"auth_url,omitempty"`
 	TokenURL     string `json:"token_url,omitempty"`
 	Scopes       string `json:"scopes,omitempty"`
+	AccessToken  string `json:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	TokenExpiry  string `json:"token_expiry,omitempty"` // RFC3339
 }
 
 type ServerStore struct {
@@ -169,6 +172,17 @@ func (s *ServerStore) UpdateStatus(id string, status ServerStatus, errMsg string
 	)
 	if err != nil {
 		return fmt.Errorf("updating server status: %w", err)
+	}
+	return nil
+}
+
+// UpdateConfig updates only the JSON config column for a server.
+func (s *ServerStore) UpdateConfig(id string, config json.RawMessage) error {
+	_, err := s.db.Exec(`UPDATE servers SET config = ?, updated_at = ? WHERE id = ?`,
+		config, time.Now(), id,
+	)
+	if err != nil {
+		return fmt.Errorf("updating server config: %w", err)
 	}
 	return nil
 }

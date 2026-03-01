@@ -10,6 +10,7 @@ import (
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/web"
@@ -17,21 +18,25 @@ import (
 
 // Server is the main HTTP server for MCP Wrangler.
 type Server struct {
-	cfg     *config.Config
-	servers *store.ServerStore
-	users   *store.UserStore
-	proxy   *proxy.Manager
-	mux     *http.ServeMux
+	cfg         *config.Config
+	servers     *store.ServerStore
+	users       *store.UserStore
+	proxy       *proxy.Manager
+	oauthMgr    *oauth.Manager
+	accessStore *store.AccessStore
+	mux         *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore) *Server {
 	s := &Server{
-		cfg:     cfg,
-		servers: servers,
-		users:   users,
-		proxy:   proxyMgr,
-		mux:     http.NewServeMux(),
+		cfg:         cfg,
+		servers:     servers,
+		users:       users,
+		proxy:       proxyMgr,
+		oauthMgr:    oauthMgr,
+		accessStore: accessStore,
+		mux:         http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -52,7 +57,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore)
 	webHandlers.RegisterRoutes(s.mux)
 }
 
@@ -142,6 +147,15 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Proxy %s: request %s (id=%s)", serverName, mcpReq.Method, string(mcpReq.ID))
 
+	// Access control enforcement
+	if s.accessStore != nil {
+		if denied := s.checkEndpointAccess(r, srv.ID, &mcpReq); denied != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(denied)
+			return
+		}
+	}
+
 	resp, err := backend.Send(r.Context(), &mcpReq)
 	if err != nil {
 		log.Printf("Error proxying to server %s: %v", serverName, err)
@@ -153,6 +167,61 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// checkEndpointAccess verifies the user has sufficient access level for the requested endpoint.
+// Returns an error response if denied, nil if allowed.
+func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.Request) *mcp.Response {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		return nil // no user context = no enforcement (shouldn't happen behind auth middleware)
+	}
+
+	var endpointType, endpointName string
+
+	switch req.Method {
+	case "tools/call":
+		endpointType = "tool"
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err == nil && params.Name != "" {
+			endpointName = params.Name
+		}
+	case "resources/read":
+		endpointType = "resource"
+		var params struct {
+			URI string `json:"uri"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err == nil && params.URI != "" {
+			endpointName = params.URI
+		}
+	case "prompts/get":
+		endpointType = "prompt"
+		var params struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err == nil && params.Name != "" {
+			endpointName = params.Name
+		}
+	default:
+		// Pass through list/initialize/ping/etc
+		return nil
+	}
+
+	if endpointName == "" {
+		return nil
+	}
+
+	tier := s.accessStore.GetTier(serverID, endpointType, endpointName)
+	if !s.accessStore.CheckAccess(user.AccessLevel, tier) {
+		log.Printf("Access denied: user %s (level=%s) tried %s %s (tier=%s)",
+			user.Username, user.AccessLevel, endpointType, endpointName, tier)
+		return mcp.NewErrorResponse(req.ID, mcp.ErrCodeInternal,
+			fmt.Sprintf("access denied: requires %s level", tier))
+	}
+
+	return nil
 }
 
 // REST API handlers
