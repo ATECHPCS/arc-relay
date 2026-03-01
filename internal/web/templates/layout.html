@@ -56,10 +56,13 @@
     .badge-remote { background: #d1e7dd; color: #0f5132; }
 
     .btn {
-      display: inline-block; padding: 0.4rem 0.9rem; border-radius: 6px;
-      font-size: 0.85rem; font-weight: 500; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      height: 2rem; padding: 0 0.9rem; border-radius: 6px;
+      font-family: var(--font); font-size: 0.85rem; font-weight: 500;
+      line-height: 1; cursor: pointer;
       border: 1px solid transparent; text-decoration: none;
-      transition: background 0.15s;
+      transition: background 0.15s; white-space: nowrap;
+      box-sizing: border-box; vertical-align: middle;
     }
     .btn-primary { background: var(--primary); color: #fff; }
     .btn-primary:hover { background: var(--primary-hover); text-decoration: none; }
@@ -67,9 +70,9 @@
     .btn-danger { background: var(--danger); color: #fff; }
     .btn-outline { background: transparent; border-color: var(--border); color: var(--text); }
     .btn-outline:hover { background: var(--bg); text-decoration: none; }
-    .btn-sm { padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+    .btn-sm { height: 1.6rem; padding: 0 0.6rem; font-size: 0.8rem; }
 
-    .actions { display: flex; gap: 0.4rem; }
+    .actions { display: flex; gap: 0.4rem; align-items: center; }
 
     .form-group { margin-bottom: 1rem; }
     .form-group label { display: block; font-weight: 500; margin-bottom: 0.3rem; font-size: 0.9rem; }

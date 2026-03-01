@@ -37,6 +37,7 @@ type ConfigDisplay struct {
 	HealthCheck      string
 	AuthType         string
 	EnvKeys          []string
+	EnvVars          map[string]string
 	OAuthAuthorized  bool
 	OAuthScopes      string
 	OAuthTokenExpiry string
@@ -329,7 +330,7 @@ func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id 
 	if err := h.proxy.StartServer(r.Context(), srv); err != nil {
 		log.Printf("Error starting server %s: %v", srv.Name, err)
 	}
-	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
 
 func (h *Handlers) handleServerStop(w http.ResponseWriter, r *http.Request, id string) {
@@ -338,7 +339,7 @@ func (h *Handlers) handleServerStop(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	h.proxy.StopServer(r.Context(), id)
-	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
 
 func (h *Handlers) handleServerDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -809,6 +810,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		cd.Image = cfg.Image
 		cd.Command = strings.Join(cfg.Command, " ")
 		cd.EnvKeys = envKeys(cfg.Env)
+		cd.EnvVars = cfg.Env
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
 		json.Unmarshal(srv.Config, &cfg)
@@ -817,6 +819,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		cd.URL = cfg.URL
 		cd.HealthCheck = cfg.HealthCheck
 		cd.EnvKeys = envKeys(cfg.Env)
+		cd.EnvVars = cfg.Env
 	case store.ServerTypeRemote:
 		var cfg store.RemoteConfig
 		json.Unmarshal(srv.Config, &cfg)
@@ -912,6 +915,15 @@ func envToText(env map[string]string) string {
 		lines = append(lines, k+"="+env[k])
 	}
 	return strings.Join(lines, "\n")
+}
+
+// redirectBack sends the user back to the Referer if present, otherwise to fallback.
+func redirectBack(w http.ResponseWriter, r *http.Request, fallback string) {
+	if ref := r.Header.Get("Referer"); ref != "" {
+		http.Redirect(w, r, ref, http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, fallback, http.StatusFound)
 }
 
 func generateID() string {

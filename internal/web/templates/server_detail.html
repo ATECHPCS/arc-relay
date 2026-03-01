@@ -85,12 +85,31 @@
   {{end}}
 
   {{if .ConfigDisplay.EnvKeys}}
-  <h3 style="margin: 1rem 0 0.5rem; font-size: 0.95rem;">Environment Variables</h3>
+  <div style="display:flex;align-items:center;gap:0.75rem;margin:1rem 0 0.5rem;">
+    <h3 style="font-size:0.95rem;margin:0;">Environment Variables</h3>
+    <button type="button" class="btn btn-outline btn-sm" id="env-toggle" onclick="toggleEnv()">Show Values</button>
+  </div>
   <table class="env-table">
+    {{$vars := .ConfigDisplay.EnvVars}}
     {{range .ConfigDisplay.EnvKeys}}
-    <tr><td>{{.}}</td><td style="color:var(--text-muted)">(configured)</td></tr>
+    <tr>
+      <td>{{.}}</td>
+      <td class="env-hidden" style="color:var(--text-muted)">(configured)</td>
+      <td class="env-value" style="display:none"><code>{{index $vars .}}</code></td>
+    </tr>
     {{end}}
   </table>
+  <script>
+  function toggleEnv() {
+    var hidden = document.querySelectorAll('.env-hidden');
+    var values = document.querySelectorAll('.env-value');
+    var btn = document.getElementById('env-toggle');
+    var showing = values[0] && values[0].style.display !== 'none';
+    hidden.forEach(function(el) { el.style.display = showing ? '' : 'none'; });
+    values.forEach(function(el) { el.style.display = showing ? 'none' : ''; });
+    btn.textContent = showing ? 'Show Values' : 'Hide Values';
+  }
+  </script>
   {{end}}
 </div>
 {{end}}

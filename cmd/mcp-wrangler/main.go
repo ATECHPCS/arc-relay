@@ -63,6 +63,23 @@ func main() {
 	// Initialize proxy manager
 	proxyMgr := proxy.NewManager(serverStore, dockerMgr, oauthMgr, accessStore)
 
+	// Auto-start all configured servers
+	go func() {
+		servers, err := serverStore.List()
+		if err != nil {
+			log.Printf("Warning: failed to list servers for auto-start: %v", err)
+			return
+		}
+		ctx := context.Background()
+		for _, s := range servers {
+			if err := proxyMgr.StartServer(ctx, s); err != nil {
+				log.Printf("Auto-start failed for %s: %v", s.Name, err)
+			} else {
+				log.Printf("Auto-started server: %s", s.Name)
+			}
+		}
+	}()
+
 	// Start health monitor
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
