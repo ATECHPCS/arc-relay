@@ -1,0 +1,38 @@
+project_name: mcp-wrangler
+
+builds:
+  - main: ./cmd/mcp-wrangler
+    binary: mcp-wrangler
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "Co-Authored-By"
+
+release:
+  github:
+    owner: JeremiahChurch
+    name: mcp-wrangler
+  draft: false
+  prerelease: auto
