@@ -55,10 +55,16 @@
                placeholder="ghcr.io/org/mcp-server:latest">
       </div>
       <div class="form-group">
-        <label for="stdio_command">Command Override (optional)</label>
+        <label for="stdio_entrypoint">Entrypoint Override (optional)</label>
+        <input type="text" id="stdio_entrypoint" name="stdio_entrypoint" value="{{.StdioEntrypoint}}"
+               placeholder="python">
+        <div class="help">Override the container entrypoint. Leave blank to use the image default.</div>
+      </div>
+      <div class="form-group">
+        <label for="stdio_command">Command / Args (optional)</label>
         <input type="text" id="stdio_command" name="stdio_command" value="{{.StdioCommand}}"
-               placeholder="python -m my_mcp_server">
-        <div class="help">Space-separated command. Leave blank to use the image default.</div>
+               placeholder="-c &quot;from mymod import app; app.run()&quot;">
+        <div class="help">Arguments passed to entrypoint. Use quotes around args with spaces.</div>
       </div>
       <div class="form-group">
         <label for="stdio_env">Environment Variables</label>

@@ -699,9 +699,10 @@ func (h *Handlers) serverFormData(r *http.Request, srv *store.Server, errMsg str
 		"Server":         srv,
 		"ServerType":     r.FormValue("server_type"),
 		"RemoteAuthType": r.FormValue("remote_auth_type"),
-		"StdioImage":     r.FormValue("stdio_image"),
-		"StdioCommand":   r.FormValue("stdio_command"),
-		"StdioEnv":       r.FormValue("stdio_env"),
+		"StdioImage":      r.FormValue("stdio_image"),
+		"StdioEntrypoint": r.FormValue("stdio_entrypoint"),
+		"StdioCommand":    r.FormValue("stdio_command"),
+		"StdioEnv":        r.FormValue("stdio_env"),
 		"HTTPImage":      r.FormValue("http_image"),
 		"HTTPPort":       r.FormValue("http_port"),
 		"HTTPURL":        r.FormValue("http_url"),
@@ -738,9 +739,10 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 			return nil, fmt.Errorf("docker image is required for stdio servers")
 		}
 		cfg := store.StdioConfig{
-			Image:   img,
-			Command: parseCommand(r.FormValue("stdio_command")),
-			Env:     parseEnvVars(r.FormValue("stdio_env")),
+			Image:      img,
+			Entrypoint: parseCommand(r.FormValue("stdio_entrypoint")),
+			Command:    parseCommand(r.FormValue("stdio_command")),
+			Env:        parseEnvVars(r.FormValue("stdio_env")),
 		}
 		configJSON, err = json.Marshal(cfg)
 
@@ -844,7 +846,8 @@ func serverToFormData(srv *store.Server) map[string]any {
 		var cfg store.StdioConfig
 		json.Unmarshal(srv.Config, &cfg)
 		data["StdioImage"] = cfg.Image
-		data["StdioCommand"] = strings.Join(cfg.Command, " ")
+		data["StdioEntrypoint"] = strings.Join(cfg.Entrypoint, " ")
+		data["StdioCommand"] = joinQuoted(cfg.Command)
 		data["StdioEnv"] = envToText(cfg.Env)
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
@@ -885,12 +888,42 @@ func parseEnvVars(text string) map[string]string {
 	return env
 }
 
+// parseCommand splits a command string into arguments, respecting quoted strings.
+// e.g. `-c "from foo import bar; bar.run()"` → ["-c", "from foo import bar; bar.run()"]
 func parseCommand(text string) []string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
-	return strings.Fields(text)
+
+	var args []string
+	var current strings.Builder
+	inQuote := byte(0)
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case inQuote != 0:
+			if c == inQuote {
+				inQuote = 0
+			} else {
+				current.WriteByte(c)
+			}
+		case c == '"' || c == '\'':
+			inQuote = c
+		case c == ' ' || c == '\t':
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteByte(c)
+		}
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args
 }
 
 func parseInt(s string) int {
@@ -906,6 +939,19 @@ func envKeys(env map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// joinQuoted joins command args, quoting any that contain spaces.
+func joinQuoted(args []string) string {
+	parts := make([]string, len(args))
+	for i, a := range args {
+		if strings.ContainsAny(a, " \t") {
+			parts[i] = `"` + a + `"`
+		} else {
+			parts[i] = a
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func envToText(env map[string]string) string {
