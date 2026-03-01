@@ -39,6 +39,7 @@ func main() {
 	serverStore := store.NewServerStore(db)
 	userStore := store.NewUserStore(db)
 	accessStore := store.NewAccessStore(db)
+	requestLogStore := store.NewRequestLogStore(db)
 
 	// Ensure default admin user exists
 	adminPw := cfg.Auth.AdminPassword
@@ -85,7 +86,7 @@ func main() {
 	healthMon.Start()
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, requestLogStore)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

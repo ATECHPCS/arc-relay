@@ -54,6 +54,8 @@
     .badge-stdio { background: #e0cffc; color: #59359a; }
     .badge-http { background: #cfe2ff; color: #084298; }
     .badge-remote { background: #d1e7dd; color: #0f5132; }
+    .badge-success { background: #d1e7dd; color: var(--success); }
+    .badge-denied { background: #fff3cd; color: #664d03; }
 
     .btn {
       display: inline-flex; align-items: center; justify-content: center;
@@ -150,6 +152,7 @@
     <nav>
       <a href="/" {{if eq .Nav "dashboard"}}class="active"{{end}}>Dashboard</a>
       <a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>Servers</a>
+      <a href="/logs" {{if eq .Nav "logs"}}class="active"{{end}}>Logs</a>
       <a href="/users" {{if eq .Nav "users"}}class="active"{{end}}>Users</a>
       <a href="/api-keys" {{if eq .Nav "apikeys"}}class="active"{{end}}>API Keys</a>
     </nav>

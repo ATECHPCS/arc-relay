@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
@@ -18,17 +19,18 @@ import (
 
 // Server is the main HTTP server for MCP Wrangler.
 type Server struct {
-	cfg         *config.Config
-	servers     *store.ServerStore
-	users       *store.UserStore
-	proxy       *proxy.Manager
-	oauthMgr    *oauth.Manager
-	accessStore *store.AccessStore
-	mux         *http.ServeMux
+	cfg          *config.Config
+	servers      *store.ServerStore
+	users        *store.UserStore
+	proxy        *proxy.Manager
+	oauthMgr     *oauth.Manager
+	accessStore  *store.AccessStore
+	requestLogs  *store.RequestLogStore
+	mux          *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore) *Server {
 	s := &Server{
 		cfg:         cfg,
 		servers:     servers,
@@ -36,6 +38,7 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		proxy:       proxyMgr,
 		oauthMgr:    oauthMgr,
 		accessStore: accessStore,
+		requestLogs: requestLogs,
 		mux:         http.NewServeMux(),
 	}
 	s.routes()
@@ -57,7 +60,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs)
 	webHandlers.RegisterRoutes(s.mux)
 }
 
@@ -70,6 +73,47 @@ func (s *Server) ListenAndServe() error {
 	addr := s.cfg.Addr()
 	log.Printf("MCP Wrangler listening on %s", addr)
 	return http.ListenAndServe(addr, s)
+}
+
+// methodShouldLog returns true for methods that represent meaningful user actions.
+func methodShouldLog(method string) bool {
+	switch method {
+	case "initialize", "ping", "tools/list", "resources/list", "prompts/list",
+		"notifications/initialized":
+		return false
+	}
+	return true
+}
+
+// extractEndpointName extracts the endpoint type and name from a JSON-RPC method+params.
+func extractEndpointName(method string, params json.RawMessage) (endpointType, endpointName string) {
+	switch method {
+	case "tools/call":
+		endpointType = "tool"
+		var p struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(params, &p) == nil {
+			endpointName = p.Name
+		}
+	case "resources/read":
+		endpointType = "resource"
+		var p struct {
+			URI string `json:"uri"`
+		}
+		if json.Unmarshal(params, &p) == nil {
+			endpointName = p.URI
+		}
+	case "prompts/get":
+		endpointType = "prompt"
+		var p struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(params, &p) == nil {
+			endpointName = p.Name
+		}
+	}
+	return
 }
 
 // handleMCPProxy is the core proxy handler. Routes /mcp/{server-name} to the right backend.
@@ -147,9 +191,17 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Proxy %s: request %s (id=%s)", serverName, mcpReq.Method, string(mcpReq.ID))
 
+	startTime := time.Now()
+	_, endpointName := extractEndpointName(mcpReq.Method, mcpReq.Params)
+	user := UserFromContext(r.Context())
+
 	// Access control enforcement
 	if s.accessStore != nil {
 		if denied := s.checkEndpointAccess(r, srv.ID, &mcpReq); denied != nil {
+			durationMs := time.Since(startTime).Milliseconds()
+			if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
+				go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "denied", "access denied")
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(denied)
 			return
@@ -157,16 +209,43 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := backend.Send(r.Context(), &mcpReq)
+	durationMs := time.Since(startTime).Milliseconds()
+
 	if err != nil {
 		log.Printf("Error proxying to server %s: %v", serverName, err)
+		if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
+			go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "error", err.Error())
+		}
 		errResp := mcp.NewErrorResponse(mcpReq.ID, mcp.ErrCodeInternal, "proxy error: "+err.Error())
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(errResp)
 		return
 	}
 
+	if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
+		go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "success", "")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// logRequest writes a request log entry in the background.
+func (s *Server) logRequest(user *store.User, serverID, method, endpointName string, durationMs int64, status, errMsg string) {
+	rl := &store.RequestLog{
+		ServerID:     serverID,
+		Method:       method,
+		EndpointName: endpointName,
+		DurationMs:   durationMs,
+		Status:       status,
+		ErrorMsg:     errMsg,
+	}
+	if user != nil {
+		rl.UserID = user.ID
+	}
+	if err := s.requestLogs.Create(rl); err != nil {
+		log.Printf("Failed to log request: %v", err)
+	}
 }
 
 // checkEndpointAccess verifies the user has sufficient access level for the requested endpoint.
@@ -177,39 +256,8 @@ func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.
 		return nil // no user context = no enforcement (shouldn't happen behind auth middleware)
 	}
 
-	var endpointType, endpointName string
-
-	switch req.Method {
-	case "tools/call":
-		endpointType = "tool"
-		var params struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(req.Params, &params); err == nil && params.Name != "" {
-			endpointName = params.Name
-		}
-	case "resources/read":
-		endpointType = "resource"
-		var params struct {
-			URI string `json:"uri"`
-		}
-		if err := json.Unmarshal(req.Params, &params); err == nil && params.URI != "" {
-			endpointName = params.URI
-		}
-	case "prompts/get":
-		endpointType = "prompt"
-		var params struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal(req.Params, &params); err == nil && params.Name != "" {
-			endpointName = params.Name
-		}
-	default:
-		// Pass through list/initialize/ping/etc
-		return nil
-	}
-
-	if endpointName == "" {
+	endpointType, endpointName := extractEndpointName(req.Method, req.Params)
+	if endpointType == "" || endpointName == "" {
 		return nil
 	}
 

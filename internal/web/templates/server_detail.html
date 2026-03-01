@@ -130,15 +130,18 @@
   <h2>Tools <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Tools}}</span></h2>
   <table class="table">
     <thead>
-      <tr><th>Name</th><th>Description</th><th style="width:120px">Access Tier</th></tr>
+      <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
     </thead>
     <tbody>
-      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
       {{range .Endpoints.Tools}}
       {{$tier := index $tierMap (printf "tool:%s" .Name)}}
+      {{$eu := index $usage .Name}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
+        <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
         <td>
           <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="tool" data-name="{{.Name}}"
                   onchange="updateTier(this)">
@@ -159,16 +162,19 @@
   <h2>Resources <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Resources}}</span></h2>
   <table class="table">
     <thead>
-      <tr><th>URI</th><th>Name</th><th>Description</th><th style="width:120px">Access Tier</th></tr>
+      <tr><th>URI</th><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
     </thead>
     <tbody>
-      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
       {{range .Endpoints.Resources}}
       {{$tier := index $tierMap (printf "resource:%s" .URI)}}
+      {{$eu := index $usage .URI}}
       <tr>
         <td><code>{{.URI}}</code></td>
         <td>{{.Name}}</td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
+        <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
         <td>
           <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="resource" data-name="{{.URI}}"
                   onchange="updateTier(this)">
@@ -189,15 +195,18 @@
   <h2>Prompts <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Prompts}}</span></h2>
   <table class="table">
     <thead>
-      <tr><th>Name</th><th>Description</th><th style="width:120px">Access Tier</th></tr>
+      <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
     </thead>
     <tbody>
-      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
       {{range .Endpoints.Prompts}}
       {{$tier := index $tierMap (printf "prompt:%s" .Name)}}
+      {{$eu := index $usage .Name}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
+        <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
         <td>
           <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="prompt" data-name="{{.Name}}"
                   onchange="updateTier(this)">
@@ -234,6 +243,36 @@ function updateTier(el) {
   });
 }
 </script>
+{{end}}
+
+{{if .RecentLogs}}
+<div class="card">
+  <h2>Recent Activity</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Method</th>
+        <th>Endpoint</th>
+        <th>Duration</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .RecentLogs}}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.85rem">{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+        <td>{{if .Username}}{{.Username}}{{else}}-{{end}}</td>
+        <td><code>{{.Method}}</code></td>
+        <td>{{if .EndpointName}}<code>{{.EndpointName}}</code>{{else}}-{{end}}</td>
+        <td>{{.DurationMs}} ms</td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
 {{end}}
 
 <div class="card">

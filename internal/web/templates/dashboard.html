@@ -15,6 +15,7 @@
         <th>Type</th>
         <th>Status</th>
         <th>Endpoints</th>
+        <th>Total Calls</th>
         <th>Proxy URL</th>
         <th>Actions</th>
       </tr>
@@ -26,6 +27,7 @@
         <td><span class="badge badge-{{.ServerType}}">{{.ServerType}}</span></td>
         <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
         <td>{{with index $.EndpointCounts .ID}}{{.}}{{else}}-{{end}}</td>
+        <td>{{with index $.ServerCallCounts .ID}}{{.}}{{else}}0{{end}}</td>
         <td><code>/mcp/{{.Name}}</code></td>
         <td>
           <div class="actions">
@@ -63,6 +65,44 @@
     <dt>Total Servers</dt><dd>{{len .Servers}}</dd>
     <dt>Running</dt><dd>{{.RunningCount}}</dd>
     <dt>Users</dt><dd>{{.UserCount}}</dd>
+    {{if .Stats}}
+    <dt>Requests (24h)</dt><dd>{{.Stats.TotalRequests24h}}</dd>
+    <dt>Errors (24h)</dt><dd>{{.Stats.Errors24h}}</dd>
+    <dt>Avg Response</dt><dd>{{.Stats.AvgDurationMs}} ms</dd>
+    {{end}}
   </div>
 </div>
+
+{{if .RecentLogs}}
+<div class="card">
+  <h2>Recent Activity</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Server</th>
+        <th>Method</th>
+        <th>Endpoint</th>
+        <th>Duration</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .RecentLogs}}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.85rem">{{.Timestamp.Format "15:04:05"}}</td>
+        <td>{{if .Username}}{{.Username}}{{else}}-{{end}}</td>
+        <td>{{if .ServerName}}{{.ServerName}}{{else}}-{{end}}</td>
+        <td><code>{{.Method}}</code></td>
+        <td>{{if .EndpointName}}<code>{{.EndpointName}}</code>{{else}}-{{end}}</td>
+        <td>{{.DurationMs}} ms</td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  <div style="margin-top:0.75rem"><a href="/logs" class="btn btn-outline btn-sm">View All Logs</a></div>
+</div>
+{{end}}
 {{end}}

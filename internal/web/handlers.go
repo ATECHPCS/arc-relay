@@ -51,6 +51,7 @@ type Handlers struct {
 	proxy          *proxy.Manager
 	oauth          *oauth.Manager
 	accessStore    *store.AccessStore
+	requestLogs    *store.RequestLogStore
 	catalogClient  *catalog.Client
 	tmpls          map[string]*template.Template
 
@@ -58,7 +59,7 @@ type Handlers struct {
 	sessions map[string]*store.User
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore) *Handlers {
 	h := &Handlers{
 		cfg:           cfg,
 		servers:       servers,
@@ -66,13 +67,14 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		proxy:         proxyMgr,
 		oauth:         oauthMgr,
 		accessStore:   accessStore,
+		requestLogs:   requestLogs,
 		catalogClient: catalog.NewClient(),
 		tmpls:         make(map[string]*template.Template),
 		sessions:      make(map[string]*store.User),
 	}
 
 	// Parse each page template together with the layout
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html"}
 	for _, page := range pages {
 		t := template.Must(template.ParseFS(templateFS, "templates/layout.html", "templates/"+page))
 		h.tmpls[page] = t
@@ -91,6 +93,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/servers", h.requireAuth(h.handleServersList))
 	mux.HandleFunc("/servers/new", h.requireAuth(h.handleServerNew))
 	mux.HandleFunc("/servers/", h.requireAuth(h.handleServerRoutes))
+	mux.HandleFunc("/logs", h.requireAuth(h.handleLogs))
 	mux.HandleFunc("/users", h.requireAuth(h.handleUsers))
 	mux.HandleFunc("/users/", h.requireAuth(h.handleUserRoutes))
 	mux.HandleFunc("/api-keys", h.requireAuth(h.handleAPIKeys))
@@ -176,13 +179,49 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var stats *store.LogStats
+	var recentLogs []*store.RequestLog
+	var serverCallCounts map[string]int
+	if h.requestLogs != nil {
+		stats, _ = h.requestLogs.Stats()
+		recentLogs, _ = h.requestLogs.Recent(10)
+		serverCallCounts, _ = h.requestLogs.ServerTotalCounts()
+	}
+
 	h.render(w, "dashboard.html", map[string]any{
-		"Nav":            "dashboard",
-		"User":           getUser(r),
-		"Servers":        servers,
-		"RunningCount":   runningCount,
-		"UserCount":      len(users),
-		"EndpointCounts": endpointCounts,
+		"Nav":              "dashboard",
+		"User":             getUser(r),
+		"Servers":          servers,
+		"RunningCount":     runningCount,
+		"UserCount":        len(users),
+		"EndpointCounts":   endpointCounts,
+		"Stats":            stats,
+		"RecentLogs":       recentLogs,
+		"ServerCallCounts": serverCallCounts,
+	})
+}
+
+// --- Logs ---
+
+func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
+	servers, _ := h.servers.List()
+
+	serverFilter := r.URL.Query().Get("server")
+	var logs []*store.RequestLog
+	if h.requestLogs != nil {
+		if serverFilter != "" {
+			logs, _ = h.requestLogs.ByServer(serverFilter, 100)
+		} else {
+			logs, _ = h.requestLogs.Recent(100)
+		}
+	}
+
+	h.render(w, "logs.html", map[string]any{
+		"Nav":          "logs",
+		"User":         getUser(r),
+		"Logs":         logs,
+		"Servers":      servers,
+		"ServerFilter": serverFilter,
 	})
 }
 
@@ -268,14 +307,28 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		}
 	}
 
+	// Endpoint usage counts and recent logs
+	endpointUsage := make(map[string]store.EndpointCallCount)
+	var serverLogs []*store.RequestLog
+	if h.requestLogs != nil {
+		if counts, err := h.requestLogs.EndpointCounts(srv.ID); err == nil {
+			for _, ec := range counts {
+				endpointUsage[ec.EndpointName] = ec
+			}
+		}
+		serverLogs, _ = h.requestLogs.ByServer(srv.ID, 20)
+	}
+
 	h.render(w, "server_detail.html", map[string]any{
-		"Nav":           "servers",
-		"User":          getUser(r),
-		"Server":        srv,
-		"ConfigDisplay": buildConfigDisplay(srv),
-		"Host":          r.Host,
-		"Endpoints":     h.proxy.Endpoints.Get(srv.ID),
-		"TierMap":       tierMap,
+		"Nav":            "servers",
+		"User":           getUser(r),
+		"Server":         srv,
+		"ConfigDisplay":  buildConfigDisplay(srv),
+		"Host":           r.Host,
+		"Endpoints":      h.proxy.Endpoints.Get(srv.ID),
+		"TierMap":        tierMap,
+		"EndpointUsage":  endpointUsage,
+		"RecentLogs":     serverLogs,
 	})
 }
 
