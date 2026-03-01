@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -24,14 +23,12 @@ type Manager struct {
 
 // NewManager creates a Docker manager connected to the given socket.
 func NewManager(socket, networkName string) (*Manager, error) {
-	opts := []dclient.Opt{
-		dclient.WithAPIVersionNegotiation(),
-	}
+	var opts []dclient.Opt
 	if socket != "" {
 		opts = append(opts, dclient.WithHost(socket))
 	}
 
-	cli, err := dclient.NewClientWithOpts(opts...)
+	cli, err := dclient.New(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating docker client: %w", err)
 	}
@@ -158,13 +155,6 @@ func (m *Manager) StopContainer(ctx context.Context, containerID string) error {
 	_, err := m.cli.ContainerRemove(ctx, containerID, dclient.ContainerRemoveOptions{Force: true})
 	return err
 }
-
-// bufioReadCloser wraps a bufio.Reader with a no-op Close (the underlying conn is closed separately).
-type bufioReadCloser struct {
-	*bufio.Reader
-}
-
-func (b *bufioReadCloser) Close() error { return nil }
 
 // AttachStdio attaches to a running container's stdin/stdout.
 // The Docker stream is multiplexed (8-byte header per frame) when TTY=false,

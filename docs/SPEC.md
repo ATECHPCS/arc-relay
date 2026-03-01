@@ -312,7 +312,7 @@ Client ──HTTP──► MCP Wrangler ──stdin/stdout──► Docker Conta
   "display_name": "pfSense - Production Firewall",
   "server_type": "stdio",
   "config": {
-    "image": "ghcr.io/jeremiahchurch/pfsense-mcp-server:latest",
+    "image": "ghcr.io/your-org/pfsense-mcp-server:latest",
     "command": ["python", "-m", "pfsense_mcp"],
     "env": {
       "PFSENSE_URL": "https://pfsense-prod.local",
@@ -332,7 +332,7 @@ Client ──HTTP──► MCP Wrangler ──stdin/stdout──► Docker Conta
   "display_name": "pfSense - Dev Firewall",
   "server_type": "stdio",
   "config": {
-    "image": "ghcr.io/jeremiahchurch/pfsense-mcp-server:latest",
+    "image": "ghcr.io/your-org/pfsense-mcp-server:latest",
     "command": ["python", "-m", "pfsense_mcp"],
     "env": {
       "PFSENSE_URL": "https://pfsense-dev.local",
@@ -371,7 +371,7 @@ Client ──HTTP──► MCP Wrangler ──stdin/stdout──► Docker Conta
   "display_name": "Home Assistant",
   "server_type": "remote",
   "config": {
-    "url": "http://192.168.1.100:9583/private_zctpwlX7ZkIAr7oqdfLPxw",
+    "url": "http://homeassistant.local:8123/api/mcp/xxxxxxxxxxxxxxxx",
     "auth": {
       "type": "private_url"
     }

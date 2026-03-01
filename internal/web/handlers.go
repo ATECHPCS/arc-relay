@@ -817,7 +817,7 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 	case store.ServerTypeRemote:
 		url := strings.TrimSpace(r.FormValue("remote_url"))
 		if url == "" {
-			return nil, fmt.Errorf("URL is required for remote servers")
+			return nil, fmt.Errorf("url is required for remote servers")
 		}
 		auth := store.RemoteAuth{
 			Type:       r.FormValue("remote_auth_type"),
@@ -831,7 +831,7 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 			auth.TokenURL = strings.TrimSpace(r.FormValue("oauth_token_url"))
 			auth.Scopes = strings.TrimSpace(r.FormValue("oauth_scopes"))
 			if auth.ClientID == "" || auth.AuthURL == "" || auth.TokenURL == "" {
-				return nil, fmt.Errorf("Client ID, Authorization URL, and Token URL are required for OAuth")
+				return nil, fmt.Errorf("client ID, authorization URL, and token URL are required for OAuth")
 			}
 		}
 		cfg := store.RemoteConfig{

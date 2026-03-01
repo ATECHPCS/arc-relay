@@ -18,5 +18,12 @@
 .DS_Store
 Thumbs.db
 
+# Environment
+.env
+
 # Go
 /vendor/
+
+# Build artifacts
+/dist/
+*.exe

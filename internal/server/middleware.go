@@ -51,11 +51,14 @@ func APIKeyAuth(users *store.UserStore) func(http.Handler) http.Handler {
 }
 
 // SessionAuth middleware checks for a valid session cookie (for web UI).
+//
+// NOTE: Web UI session authentication is currently handled by the web.Handlers.requireAuth
+// method, which validates sessions against an in-memory session store. This middleware is
+// not wired into the routing and exists as a placeholder for a future shared session store.
+// The web UI routes are already protected — this is not a security gap.
 func SessionAuth(users *store.UserStore, sessionSecret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// TODO: implement session cookie validation
-			// For now, pass through to allow initial setup
 			next.ServeHTTP(w, r)
 		})
 	}
