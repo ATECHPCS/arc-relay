@@ -1,0 +1,108 @@
+{{define "title"}}Dashboard{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Dashboard</h2>
+  <a href="/servers/new" class="btn btn-primary">Add Server</a>
+</div>
+
+<div class="card">
+  <h2>MCP Servers</h2>
+  {{if .Servers}}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Status</th>
+        <th>Endpoints</th>
+        <th>Total Calls</th>
+        <th>Proxy URL</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Servers}}
+      <tr>
+        <td><a href="/servers/{{.ID}}">{{.DisplayName}}</a></td>
+        <td><span class="badge badge-{{.ServerType}}">{{.ServerType}}</span></td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+        <td>{{with index $.EndpointCounts .ID}}{{.}}{{else}}-{{end}}</td>
+        <td>{{with index $.ServerCallCounts .ID}}{{.}}{{else}}0{{end}}</td>
+        <td><code>/mcp/{{.Name}}</code></td>
+        <td>
+          <div class="actions">
+            {{if eq (printf "%s" .Status) "stopped"}}
+            <form method="POST" action="/servers/{{.ID}}/start" style="display:inline">
+              <button type="submit" class="btn btn-success btn-sm">Start</button>
+            </form>
+            {{else if eq (printf "%s" .Status) "running"}}
+            <form method="POST" action="/servers/{{.ID}}/stop" style="display:inline">
+              <button type="submit" class="btn btn-outline btn-sm">Stop</button>
+            </form>
+            {{else if eq (printf "%s" .Status) "error"}}
+            <form method="POST" action="/servers/{{.ID}}/start" style="display:inline">
+              <button type="submit" class="btn btn-success btn-sm">Restart</button>
+            </form>
+            {{end}}
+            <a href="/servers/{{.ID}}" class="btn btn-outline btn-sm">Details</a>
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty-state">
+    <p>No MCP servers configured yet.</p>
+    <a href="/servers/new" class="btn btn-primary">Add Your First Server</a>
+  </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>Quick Stats</h2>
+  <div class="detail-grid">
+    <dt>Total Servers</dt><dd>{{len .Servers}}</dd>
+    <dt>Running</dt><dd>{{.RunningCount}}</dd>
+    <dt>Users</dt><dd>{{.UserCount}}</dd>
+    {{if .Stats}}
+    <dt>Requests (24h)</dt><dd>{{.Stats.TotalRequests24h}}</dd>
+    <dt>Errors (24h)</dt><dd>{{.Stats.Errors24h}}</dd>
+    <dt>Avg Response</dt><dd>{{.Stats.AvgDurationMs}} ms</dd>
+    {{end}}
+  </div>
+</div>
+
+{{if .RecentLogs}}
+<div class="card">
+  <h2>Recent Activity</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Server</th>
+        <th>Method</th>
+        <th>Endpoint</th>
+        <th>Duration</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .RecentLogs}}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.85rem">{{.Timestamp.Format "15:04:05"}}</td>
+        <td>{{if .Username}}{{.Username}}{{else}}-{{end}}</td>
+        <td>{{if .ServerName}}{{.ServerName}}{{else}}-{{end}}</td>
+        <td><code>{{.Method}}</code></td>
+        <td>{{if .EndpointName}}<code>{{.EndpointName}}</code>{{else}}-{{end}}</td>
+        <td>{{.DurationMs}} ms</td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  <div style="margin-top:0.75rem"><a href="/logs" class="btn btn-outline btn-sm">View All Logs</a></div>
+</div>
+{{end}}
+{{end}}

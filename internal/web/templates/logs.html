@@ -1,0 +1,56 @@
+{{define "title"}}Logs{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Request Logs</h2>
+</div>
+
+<div class="card">
+  <div style="margin-bottom:1rem">
+    <form method="GET" action="/logs" style="display:flex;gap:0.5rem;align-items:center">
+      <label for="server" style="font-size:0.9rem;font-weight:500;white-space:nowrap">Filter by server:</label>
+      <select name="server" id="server" style="padding:0.35rem 0.6rem;border:1px solid var(--border);border-radius:6px;font-size:0.9rem">
+        <option value="">All Servers</option>
+        {{range .Servers}}
+        <option value="{{.ID}}" {{if eq .ID $.ServerFilter}}selected{{end}}>{{.DisplayName}}</option>
+        {{end}}
+      </select>
+      <button type="submit" class="btn btn-outline btn-sm">Filter</button>
+    </form>
+  </div>
+
+  {{if .Logs}}
+  <table>
+    <thead>
+      <tr>
+        <th>Timestamp</th>
+        <th>User</th>
+        <th>Server</th>
+        <th>Method</th>
+        <th>Endpoint</th>
+        <th>Duration</th>
+        <th>Status</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Logs}}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.85rem">{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+        <td>{{if .Username}}{{.Username}}{{else}}-{{end}}</td>
+        <td>{{if .ServerName}}{{.ServerName}}{{else}}-{{end}}</td>
+        <td><code>{{.Method}}</code></td>
+        <td>{{if .EndpointName}}<code>{{.EndpointName}}</code>{{else}}-{{end}}</td>
+        <td>{{.DurationMs}} ms</td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+        <td style="font-size:0.85rem;color:var(--danger)">{{if .ErrorMsg}}{{.ErrorMsg}}{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty-state">
+    <p>No request logs yet. Logs will appear here as MCP requests are proxied.</p>
+  </div>
+  {{end}}
+</div>
+{{end}}

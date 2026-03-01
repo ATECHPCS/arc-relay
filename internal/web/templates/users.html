@@ -1,0 +1,76 @@
+{{define "title"}}Users{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Users</h2>
+</div>
+
+<div class="card">
+  {{if .Users}}
+  <table>
+    <thead>
+      <tr><th>Username</th><th>Role</th><th>Access Level</th><th>Created</th><th>Actions</th></tr>
+    </thead>
+    <tbody>
+      {{range .Users}}
+      <tr>
+        <td>{{.Username}}</td>
+        <td><span class="badge {{if eq .Role "admin"}}badge-running{{else}}badge-stopped{{end}}">{{.Role}}</span></td>
+        <td><span class="tier-select tier-{{.AccessLevel}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;">{{.AccessLevel}}</span></td>
+        <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+        <td>
+          <div class="actions">
+            {{if ne .Username "admin"}}
+            <form method="POST" action="/users/{{.ID}}/delete"
+                  onsubmit="return confirm('Delete user {{.Username}}?')">
+              <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+            </form>
+            {{end}}
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty-state"><p>No users found.</p></div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2>Add User</h2>
+  {{if .Error}}
+  <div class="alert alert-danger">{{.Error}}</div>
+  {{end}}
+  <form method="POST" action="/users/new">
+    <div class="form-row">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required>
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="role">Role</label>
+        <select id="role" name="role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="access_level">Access Level</label>
+        <select id="access_level" name="access_level">
+          <option value="read">Read</option>
+          <option value="write" selected>Write</option>
+          <option value="admin">Admin</option>
+        </select>
+        <div class="help">Admin role forces admin access level</div>
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary">Create User</button>
+  </form>
+</div>
+{{end}}

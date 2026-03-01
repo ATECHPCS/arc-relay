@@ -1,0 +1,300 @@
+{{define "title"}}{{.Server.DisplayName}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>{{.Server.DisplayName}}</h2>
+  <div class="actions">
+    {{if eq (printf "%s" .Server.Status) "stopped"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
+      <button type="submit" class="btn btn-success">Start</button>
+    </form>
+    {{else if eq (printf "%s" .Server.Status) "running"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/stop" style="display:inline">
+      <button type="submit" class="btn btn-outline">Stop</button>
+    </form>
+    {{else if eq (printf "%s" .Server.Status) "error"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
+      <button type="submit" class="btn btn-success">Restart</button>
+    </form>
+    {{end}}
+    {{if eq (printf "%s" .Server.Status) "running"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/enumerate" style="display:inline">
+      <button type="submit" class="btn btn-outline">Re-enumerate</button>
+    </form>
+    {{end}}
+    <a href="/servers/{{.Server.ID}}/edit" class="btn btn-outline">Edit</a>
+    <form method="POST" action="/servers/{{.Server.ID}}/delete" style="display:inline"
+          onsubmit="return confirm('Delete this server? This cannot be undone.')">
+      <button type="submit" class="btn btn-danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Server Info</h2>
+  <div class="detail-grid">
+    <dt>Name (slug)</dt><dd><code>{{.Server.Name}}</code></dd>
+    <dt>Type</dt><dd><span class="badge badge-{{.Server.ServerType}}">{{.Server.ServerType}}</span></dd>
+    <dt>Status</dt><dd><span class="badge badge-{{.Server.Status}}">{{.Server.Status}}</span></dd>
+    {{if .Server.ErrorMsg}}
+    <dt>Error</dt><dd style="color:var(--danger)">{{.Server.ErrorMsg}}</dd>
+    {{end}}
+    <dt>Proxy URL</dt><dd><code>/mcp/{{.Server.Name}}</code></dd>
+    <dt>Created</dt><dd>{{.Server.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
+    <dt>Updated</dt><dd>{{.Server.UpdatedAt.Format "2006-01-02 15:04:05"}}</dd>
+  </div>
+</div>
+
+{{if .ConfigDisplay}}
+<div class="card">
+  <h2>Configuration</h2>
+  {{if .ConfigDisplay.Image}}
+  <div class="detail-grid">
+    <dt>Docker Image</dt><dd><code>{{.ConfigDisplay.Image}}</code></dd>
+    {{if .ConfigDisplay.Command}}<dt>Command</dt><dd><code>{{.ConfigDisplay.Command}}</code></dd>{{end}}
+    {{if .ConfigDisplay.Port}}<dt>Port</dt><dd>{{.ConfigDisplay.Port}}</dd>{{end}}
+    {{if .ConfigDisplay.URL}}<dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>{{end}}
+    {{if .ConfigDisplay.HealthCheck}}<dt>Health Check</dt><dd><code>{{.ConfigDisplay.HealthCheck}}</code></dd>{{end}}
+    {{if .ConfigDisplay.AuthType}}<dt>Auth Type</dt><dd>{{.ConfigDisplay.AuthType}}</dd>{{end}}
+  </div>
+  {{else if .ConfigDisplay.URL}}
+  <div class="detail-grid">
+    <dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>
+    {{if .ConfigDisplay.AuthType}}<dt>Auth Type</dt><dd>{{.ConfigDisplay.AuthType}}</dd>{{end}}
+    {{if eq .ConfigDisplay.AuthType "oauth"}}
+    <dt>OAuth Status</dt>
+    <dd>
+      {{if .ConfigDisplay.OAuthAuthorized}}
+        <span class="badge badge-running">Authorized</span>
+        {{if .ConfigDisplay.OAuthTokenExpiry}}
+          <span style="font-size:0.85rem;color:var(--text-muted);margin-left:0.5rem">expires {{.ConfigDisplay.OAuthTokenExpiry}}</span>
+        {{end}}
+      {{else}}
+        <span class="badge badge-error">Not Authorized</span>
+      {{end}}
+    </dd>
+    {{if .ConfigDisplay.OAuthScopes}}<dt>Scopes</dt><dd><code>{{.ConfigDisplay.OAuthScopes}}</code></dd>{{end}}
+    {{end}}
+  </div>
+  {{if eq .ConfigDisplay.AuthType "oauth"}}
+  <div style="margin-top: 1rem;">
+    <a href="/oauth/start/{{.Server.ID}}" class="btn {{if .ConfigDisplay.OAuthAuthorized}}btn-outline{{else}}btn-primary{{end}}">
+      {{if .ConfigDisplay.OAuthAuthorized}}Reauthorize{{else}}Authorize{{end}}
+    </a>
+  </div>
+  {{end}}
+  {{end}}
+
+  {{if .ConfigDisplay.EnvKeys}}
+  <div style="display:flex;align-items:center;gap:0.75rem;margin:1rem 0 0.5rem;">
+    <h3 style="font-size:0.95rem;margin:0;">Environment Variables</h3>
+    <button type="button" class="btn btn-outline btn-sm" id="env-toggle" onclick="toggleEnv()">Show Values</button>
+  </div>
+  <table class="env-table">
+    {{$vars := .ConfigDisplay.EnvVars}}
+    {{range .ConfigDisplay.EnvKeys}}
+    <tr>
+      <td>{{.}}</td>
+      <td class="env-hidden" style="color:var(--text-muted)">(configured)</td>
+      <td class="env-value" style="display:none"><code>{{index $vars .}}</code></td>
+    </tr>
+    {{end}}
+  </table>
+  <script>
+  function toggleEnv() {
+    var hidden = document.querySelectorAll('.env-hidden');
+    var values = document.querySelectorAll('.env-value');
+    var btn = document.getElementById('env-toggle');
+    var showing = values[0] && values[0].style.display !== 'none';
+    hidden.forEach(function(el) { el.style.display = showing ? '' : 'none'; });
+    values.forEach(function(el) { el.style.display = showing ? 'none' : ''; });
+    btn.textContent = showing ? 'Show Values' : 'Hide Values';
+  }
+  </script>
+  {{end}}
+</div>
+{{end}}
+
+{{if .Endpoints}}
+<div class="card">
+  <h2>MCP Server Info</h2>
+  <div class="detail-grid">
+    <dt>Server Name</dt><dd>{{.Endpoints.ServerInfo.Name}}</dd>
+    <dt>Version</dt><dd>{{.Endpoints.ServerInfo.Version}}</dd>
+    <dt>Initialized</dt><dd>{{if .Endpoints.Initialized}}Yes{{else}}No{{end}}</dd>
+    {{if .Endpoints.Error}}<dt>Error</dt><dd style="color:var(--danger)">{{.Endpoints.Error}}</dd>{{end}}
+  </div>
+</div>
+
+{{if .Endpoints.Tools}}
+<div class="card">
+  <h2>Tools <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Tools}}</span></h2>
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
+    </thead>
+    <tbody>
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
+      {{range .Endpoints.Tools}}
+      {{$tier := index $tierMap (printf "tool:%s" .Name)}}
+      {{$eu := index $usage .Name}}
+      <tr>
+        <td><code>{{.Name}}</code></td>
+        <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
+        <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
+        <td>
+          <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="tool" data-name="{{.Name}}"
+                  onchange="updateTier(this)">
+            <option value="read" {{if eq $tier "read"}}selected{{end}}>read</option>
+            <option value="write" {{if eq $tier "write"}}selected{{end}}>write</option>
+            <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
+          </select>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{if .Endpoints.Resources}}
+<div class="card">
+  <h2>Resources <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Resources}}</span></h2>
+  <table class="table">
+    <thead>
+      <tr><th>URI</th><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
+    </thead>
+    <tbody>
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
+      {{range .Endpoints.Resources}}
+      {{$tier := index $tierMap (printf "resource:%s" .URI)}}
+      {{$eu := index $usage .URI}}
+      <tr>
+        <td><code>{{.URI}}</code></td>
+        <td>{{.Name}}</td>
+        <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
+        <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
+        <td>
+          <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="resource" data-name="{{.URI}}"
+                  onchange="updateTier(this)">
+            <option value="read" {{if eq $tier "read"}}selected{{end}}>read</option>
+            <option value="write" {{if eq $tier "write"}}selected{{end}}>write</option>
+            <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
+          </select>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+{{if .Endpoints.Prompts}}
+<div class="card">
+  <h2>Prompts <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Prompts}}</span></h2>
+  <table class="table">
+    <thead>
+      <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
+    </thead>
+    <tbody>
+      {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
+      {{range .Endpoints.Prompts}}
+      {{$tier := index $tierMap (printf "prompt:%s" .Name)}}
+      {{$eu := index $usage .Name}}
+      <tr>
+        <td><code>{{.Name}}</code></td>
+        <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
+        <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
+        <td>
+          <select class="tier-select tier-{{$tier}}" data-server="{{$serverID}}" data-type="prompt" data-name="{{.Name}}"
+                  onchange="updateTier(this)">
+            <option value="read" {{if eq $tier "read"}}selected{{end}}>read</option>
+            <option value="write" {{if eq $tier "write"}}selected{{end}}>write</option>
+            <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
+          </select>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+<script>
+function updateTier(el) {
+  const serverID = el.dataset.server;
+  const body = JSON.stringify({
+    endpoint_type: el.dataset.type,
+    endpoint_name: el.dataset.name,
+    access_tier: el.value
+  });
+  fetch('/servers/' + serverID + '/access-tier', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: body
+  }).then(r => {
+    if (r.ok) {
+      el.className = 'tier-select tier-' + el.value;
+    } else {
+      alert('Failed to update access tier');
+    }
+  });
+}
+</script>
+{{end}}
+
+{{if .RecentLogs}}
+<div class="card">
+  <h2>Recent Activity</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>User</th>
+        <th>Method</th>
+        <th>Endpoint</th>
+        <th>Duration</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .RecentLogs}}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.85rem">{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+        <td>{{if .Username}}{{.Username}}{{else}}-{{end}}</td>
+        <td><code>{{.Method}}</code></td>
+        <td>{{if .EndpointName}}<code>{{.EndpointName}}</code>{{else}}-{{end}}</td>
+        <td>{{.DurationMs}} ms</td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+<div class="card">
+  <h2>Connection Examples</h2>
+  <p style="margin-bottom: 0.75rem; font-size: 0.9rem; color: var(--text-muted)">
+    Use these snippets to connect AI tools to this MCP server through MCP Wrangler.
+  </p>
+
+  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Code</h3>
+  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1rem;"><code>claude mcp add --transport http {{.Server.Name}} http://{{.Host}}/mcp/{{.Server.Name}} \
+  --header "Authorization: Bearer YOUR_API_KEY"</code></pre>
+
+  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Desktop (claude_desktop_config.json)</h3>
+  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto;"><code>{
+  "mcpServers": {
+    "{{.Server.Name}}": {
+      "url": "http://{{.Host}}/mcp/{{.Server.Name}}",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}</code></pre>
+</div>
+{{end}}
