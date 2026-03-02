@@ -1,15 +1,28 @@
 project_name: mcp-wrangler
 
 builds:
-  - main: ./cmd/mcp-wrangler
+  - id: linux-amd64
+    main: ./cmd/mcp-wrangler
     binary: mcp-wrangler
     env:
       - CGO_ENABLED=1
+      - CC=gcc
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
+    ldflags:
+      - -s -w
+
+  - id: linux-arm64
+    main: ./cmd/mcp-wrangler
+    binary: mcp-wrangler
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s -w
