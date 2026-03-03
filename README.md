@@ -10,7 +10,12 @@ A management proxy for [Model Context Protocol](https://modelcontextprotocol.io/
 - **Web UI** — manage servers, users, and API keys from a browser dashboard
 - **API key authentication** — issue Bearer tokens to control access to proxied MCP servers
 - **Endpoint enumeration** — discovers tools, prompts, and resources exposed by each MCP server
-- **Access tiers** — per-endpoint risk-based access control
+- **Access tiers** — per-endpoint risk-based access control (read/write/admin) with auto-classification
+- **OAuth support** — PKCE authorization flows for remote servers (e.g., Sentry MCP), with automatic token refresh
+- **Request logging** — per-endpoint call counts, error tracking, and recent activity dashboard
+- **Health monitoring** — periodic health checks with automatic recovery for remote and external HTTP servers
+- **Credential encryption** — AES-GCM encryption at rest for server configs (tokens, API keys, env vars)
+- **Rate limiting** — per-user token bucket rate limiting on proxy endpoints
 
 ## Quick Start (Docker Compose)
 
