@@ -21,4 +21,3 @@ RUN mkdir -p /data
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/mcp-wrangler"]
-CMD ["--config", "/etc/mcp-wrangler/config.toml"]
