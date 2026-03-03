@@ -900,8 +900,32 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 			auth.AuthURL = strings.TrimSpace(r.FormValue("oauth_auth_url"))
 			auth.TokenURL = strings.TrimSpace(r.FormValue("oauth_token_url"))
 			auth.Scopes = strings.TrimSpace(r.FormValue("oauth_scopes"))
+
+			// Auto-discover OAuth endpoints + dynamic client registration when fields are missing
 			if auth.ClientID == "" || auth.AuthURL == "" || auth.TokenURL == "" {
-				return nil, fmt.Errorf("client ID, authorization URL, and token URL are required for OAuth")
+				disc, _ := oauth.DiscoverOAuth(r.Context(), url)
+				if disc != nil {
+					if auth.AuthURL == "" {
+						auth.AuthURL = disc.AuthURL
+					}
+					if auth.TokenURL == "" {
+						auth.TokenURL = disc.TokenURL
+					}
+					if auth.Scopes == "" && len(disc.ScopesSupported) > 0 {
+						auth.Scopes = strings.Join(disc.ScopesSupported, " ")
+					}
+					if auth.ClientID == "" && disc.RegistrationEndpoint != "" {
+						reg, _ := oauth.RegisterClient(r.Context(), disc.RegistrationEndpoint, h.oauth.CallbackURL())
+						if reg != nil {
+							auth.ClientID = reg.ClientID
+							auth.ClientSecret = reg.ClientSecret
+						}
+					}
+				}
+			}
+
+			if auth.ClientID == "" || auth.AuthURL == "" || auth.TokenURL == "" {
+				return nil, fmt.Errorf("OAuth auto-discovery failed for this server — provide client ID, authorization URL, and token URL manually")
 			}
 		}
 		cfg := store.RemoteConfig{

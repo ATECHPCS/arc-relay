@@ -183,6 +183,15 @@ function toggleAuthFields() {
   document.getElementById('auth-token').style.display = (authType === 'bearer' || authType === 'api_key') ? 'block' : 'none';
   document.getElementById('auth-header').style.display = (authType === 'api_key') ? 'block' : 'none';
   document.getElementById('auth-oauth').style.display = (authType === 'oauth') ? 'block' : 'none';
+
+  // Auto-discover OAuth when switching to oauth with a URL already entered
+  if (authType === 'oauth') {
+    var remoteURL = document.getElementById('remote_url').value.trim();
+    var clientID = document.getElementById('oauth_client_id').value.trim();
+    if (remoteURL && !clientID) {
+      discoverOAuth(remoteURL);
+    }
+  }
 }
 
 toggleTypeFields();
@@ -263,6 +272,53 @@ function catalogSearch() {
     });
 }
 
+var _discoveringOAuth = false;
+function discoverOAuth(remoteURL) {
+  if (_discoveringOAuth) return;
+  _discoveringOAuth = true;
+  var oauthInfo = document.getElementById('catalog-oauth-info');
+  oauthInfo.innerHTML = '<div class="catalog-loading">Discovering OAuth configuration...</div>';
+
+  fetch('/api/catalog/discover-oauth', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({remote_url: remoteURL})
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(disc) {
+    if (disc && disc.auth_url && disc.token_url) {
+      document.getElementById('remote_auth_type').value = 'oauth';
+      toggleAuthFields();
+      // Only populate empty fields
+      if (!document.getElementById('oauth_auth_url').value.trim()) {
+        document.getElementById('oauth_auth_url').value = disc.auth_url;
+      }
+      if (!document.getElementById('oauth_token_url').value.trim()) {
+        document.getElementById('oauth_token_url').value = disc.token_url;
+      }
+      if (!document.getElementById('oauth_scopes').value.trim() && disc.scopes_supported && disc.scopes_supported.length > 0) {
+        document.getElementById('oauth_scopes').value = disc.scopes_supported.join(' ');
+      }
+      if (!document.getElementById('oauth_client_id').value.trim() && disc.client_id) {
+        document.getElementById('oauth_client_id').value = disc.client_id;
+      }
+      if (!document.getElementById('oauth_client_secret').value.trim() && disc.client_secret) {
+        document.getElementById('oauth_client_secret').value = disc.client_secret;
+      }
+      oauthInfo.innerHTML = '<div class="catalog-info">OAuth auto-configured' +
+        (disc.client_id ? ' with dynamic client registration' : '') +
+        '. Review the settings below, then click Add Server.</div>';
+    } else {
+      oauthInfo.innerHTML = '';
+    }
+    _discoveringOAuth = false;
+  })
+  .catch(function() {
+    oauthInfo.innerHTML = '';
+    _discoveringOAuth = false;
+  });
+}
+
 function catalogSelectRemote(server) {
   document.getElementById('name').value = server.suggested_slug;
   document.getElementById('display_name').value = server.suggested_display;
@@ -272,41 +328,9 @@ function catalogSelectRemote(server) {
 
   // Clear previous hints
   document.getElementById('catalog-env-hint').innerHTML = '';
-  var oauthInfo = document.getElementById('catalog-oauth-info');
-  oauthInfo.innerHTML = '<div class="catalog-loading">Discovering OAuth configuration...</div>';
 
   // Try OAuth auto-discovery
-  fetch('/api/catalog/discover-oauth', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({remote_url: server.remote_url})
-  })
-  .then(function(r) { return r.json(); })
-  .then(function(disc) {
-    if (disc && disc.auth_url && disc.token_url) {
-      document.getElementById('remote_auth_type').value = 'oauth';
-      toggleAuthFields();
-      document.getElementById('oauth_auth_url').value = disc.auth_url;
-      document.getElementById('oauth_token_url').value = disc.token_url;
-      if (disc.scopes_supported && disc.scopes_supported.length > 0) {
-        document.getElementById('oauth_scopes').value = disc.scopes_supported.join(' ');
-      }
-      if (disc.client_id) {
-        document.getElementById('oauth_client_id').value = disc.client_id;
-      }
-      if (disc.client_secret) {
-        document.getElementById('oauth_client_secret').value = disc.client_secret;
-      }
-      oauthInfo.innerHTML = '<div class="catalog-info">OAuth auto-configured' +
-        (disc.client_id ? ' with dynamic client registration' : '') +
-        '. Review the settings below, then click Add Server.</div>';
-    } else {
-      oauthInfo.innerHTML = '';
-    }
-  })
-  .catch(function() {
-    oauthInfo.innerHTML = '';
-  });
+  discoverOAuth(server.remote_url);
 
   // Scroll to form
   document.getElementById('name').scrollIntoView({behavior: 'smooth', block: 'center'});
