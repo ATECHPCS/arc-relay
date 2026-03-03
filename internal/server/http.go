@@ -46,8 +46,9 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 }
 
 func (s *Server) routes() {
-	// MCP proxy endpoints (API key auth)
-	s.mux.Handle("/mcp/", APIKeyAuth(s.users)(http.HandlerFunc(s.handleMCPProxy)))
+	// MCP proxy endpoints (API key auth + rate limiting)
+	limiter := NewRateLimiter(100, 200) // 100 req/sec sustained, 200 burst
+	s.mux.Handle("/mcp/", APIKeyAuth(s.users)(limiter.Middleware(http.HandlerFunc(s.handleMCPProxy))))
 
 	// REST API for server management
 	s.mux.HandleFunc("/api/servers", s.handleServers)
@@ -61,6 +62,7 @@ func (s *Server) routes() {
 
 	// Web UI
 	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs)
+	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
 

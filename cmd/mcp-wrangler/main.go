@@ -36,7 +36,8 @@ func main() {
 	defer db.Close()
 
 	// Initialize stores
-	serverStore := store.NewServerStore(db)
+	crypto := store.NewConfigEncryptor(cfg.Encryption.Key)
+	serverStore := store.NewServerStore(db, crypto)
 	userStore := store.NewUserStore(db)
 	accessStore := store.NewAccessStore(db)
 	requestLogStore := store.NewRequestLogStore(db)

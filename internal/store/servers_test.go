@@ -10,7 +10,7 @@ import (
 
 func TestServerCreate(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{
 		Name:        "test-server",
@@ -39,7 +39,7 @@ func TestServerCreate(t *testing.T) {
 
 func TestServerGetAndGetByName(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{
 		Name:        "findme",
@@ -101,7 +101,7 @@ func TestServerGetAndGetByName(t *testing.T) {
 
 func TestServerList(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	t.Run("empty", func(t *testing.T) {
 		list, err := servers.List()
@@ -129,7 +129,7 @@ func TestServerList(t *testing.T) {
 
 func TestServerUpdate(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{Name: "updatable", DisplayName: "Updatable", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
 	servers.Create(srv)
@@ -155,7 +155,7 @@ func TestServerUpdate(t *testing.T) {
 
 func TestServerUpdateStatus(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{Name: "statustest", DisplayName: "Status Test", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
 	servers.Create(srv)
@@ -175,7 +175,7 @@ func TestServerUpdateStatus(t *testing.T) {
 
 func TestServerUpdateConfig(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{Name: "cfgtest", DisplayName: "Config Test", ServerType: store.ServerTypeHTTP, Config: json.RawMessage(`{"url":"old"}`)}
 	servers.Create(srv)
@@ -195,7 +195,7 @@ func TestServerUpdateConfig(t *testing.T) {
 
 func TestServerDeleteCascadesAccessTiers(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	servers := store.NewServerStore(db)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 	access := store.NewAccessStore(db)
 
 	srv := &store.Server{Name: "cascade", DisplayName: "Cascade", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}

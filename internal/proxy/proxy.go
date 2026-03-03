@@ -73,6 +73,40 @@ func (m *Manager) StartServer(ctx context.Context, srv *store.Server) error {
 	}
 }
 
+// RetryServer attempts to reconnect a stateless server (remote or external HTTP).
+// It removes any stale backend, creates a fresh connection, and pings to verify.
+func (m *Manager) RetryServer(ctx context.Context, srv *store.Server) error {
+	m.mu.Lock()
+	delete(m.backends, srv.ID)
+	m.mu.Unlock()
+
+	if err := m.StartServer(ctx, srv); err != nil {
+		return err
+	}
+
+	// Verify it's actually reachable before declaring recovery
+	backend, ok := m.GetBackend(srv.ID)
+	if !ok {
+		return fmt.Errorf("backend not found after start")
+	}
+
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	id, _ := json.Marshal(999999)
+	req := &mcp.Request{JSONRPC: "2.0", ID: id, Method: "ping"}
+	if _, err := backend.Send(pingCtx, req); err != nil {
+		// Ping failed — clean up the backend we just created
+		m.mu.Lock()
+		delete(m.backends, srv.ID)
+		m.mu.Unlock()
+		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		return err
+	}
+
+	return nil
+}
+
 func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 	var cfg store.StdioConfig
 	if err := json.Unmarshal(srv.Config, &cfg); err != nil {

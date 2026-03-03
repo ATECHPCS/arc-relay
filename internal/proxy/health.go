@@ -64,22 +64,56 @@ func (hm *HealthMonitor) checkAll(ctx context.Context) {
 	}
 
 	for _, srv := range servers {
-		if srv.Status != store.StatusRunning {
-			continue
+		if srv.Status == store.StatusRunning {
+			hm.checkRunning(ctx, srv)
+		} else if srv.Status == store.StatusError {
+			hm.tryRecover(ctx, srv)
 		}
+	}
+}
 
-		backend, ok := hm.proxyMgr.GetBackend(srv.ID)
-		if !ok {
-			// Server marked as running but no backend — mark as stopped
-			hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
-			log.Printf("Health monitor: server %s has no backend, marking stopped", srv.Name)
-			continue
-		}
+func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
+	backend, ok := hm.proxyMgr.GetBackend(srv.ID)
+	if !ok {
+		hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
+		log.Printf("Health monitor: server %s has no backend, marking stopped", srv.Name)
+		return
+	}
 
-		if err := hm.pingServer(ctx, backend, srv.Name); err != nil {
-			log.Printf("Health monitor: server %s ping failed: %v", srv.Name, err)
-			hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+	if err := hm.pingServer(ctx, backend, srv.Name); err != nil {
+		log.Printf("Health monitor: server %s ping failed: %v", srv.Name, err)
+		hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+	}
+}
+
+// tryRecover attempts to reconnect errored remote and external HTTP servers.
+// Docker-managed servers require explicit restart (container lifecycle).
+func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
+	if !hm.isStatelessServer(srv) {
+		return
+	}
+
+	if err := hm.proxyMgr.RetryServer(ctx, srv); err != nil {
+		return // still down, stay in error state silently
+	}
+
+	log.Printf("Health monitor: auto-recovered server %s", srv.Name)
+}
+
+// isStatelessServer returns true for server types that can be reconnected
+// without managing external state (containers, processes, etc).
+func (hm *HealthMonitor) isStatelessServer(srv *store.Server) bool {
+	switch srv.ServerType {
+	case store.ServerTypeRemote:
+		return true
+	case store.ServerTypeHTTP:
+		var cfg store.HTTPConfig
+		if err := json.Unmarshal(srv.Config, &cfg); err != nil {
+			return false
 		}
+		return cfg.URL != "" // external HTTP only, not Docker-managed
+	default:
+		return false
 	}
 }
 

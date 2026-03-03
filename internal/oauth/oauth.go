@@ -52,13 +52,36 @@ type Manager struct {
 	baseURL string
 }
 
+const (
+	pendingAuthExpiry = 10 * time.Minute
+	maxPendingFlows   = 100
+)
+
 // NewManager creates a new OAuth manager.
 func NewManager(servers *store.ServerStore, baseURL string) *Manager {
-	return &Manager{
+	m := &Manager{
 		pending: make(map[string]*PendingAuth),
 		tokens:  make(map[string]*TokenSet),
 		servers: servers,
 		baseURL: baseURL,
+	}
+	go m.cleanupPendingLoop()
+	return m
+}
+
+// cleanupPendingLoop periodically removes expired pending OAuth flows.
+func (m *Manager) cleanupPendingLoop() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		m.mu.Lock()
+		now := time.Now()
+		for state, pa := range m.pending {
+			if now.Sub(pa.CreatedAt) > pendingAuthExpiry {
+				delete(m.pending, state)
+			}
+		}
+		m.mu.Unlock()
 	}
 }
 
@@ -82,6 +105,10 @@ func (m *Manager) StartAuthFlow(serverID string, auth store.RemoteAuth) (string,
 	}
 
 	m.mu.Lock()
+	if len(m.pending) >= maxPendingFlows {
+		m.mu.Unlock()
+		return "", fmt.Errorf("too many pending OAuth flows, try again later")
+	}
 	m.pending[state] = &PendingAuth{
 		ServerID:     serverID,
 		CodeVerifier: verifier,

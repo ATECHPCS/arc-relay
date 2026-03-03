@@ -9,8 +9,11 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/catalog"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
@@ -43,6 +46,12 @@ type ConfigDisplay struct {
 	OAuthTokenExpiry string
 }
 
+// session tracks an authenticated user session with expiry.
+type session struct {
+	User      *store.User
+	ExpiresAt time.Time
+}
+
 // Handlers holds dependencies for web UI handlers.
 type Handlers struct {
 	cfg            *config.Config
@@ -55,8 +64,8 @@ type Handlers struct {
 	catalogClient  *catalog.Client
 	tmpls          map[string]*template.Template
 
-	// Simple in-memory session store (POC quality)
-	sessions map[string]*store.User
+	mu       sync.Mutex
+	sessions map[string]*session
 }
 
 func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore) *Handlers {
@@ -70,7 +79,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		requestLogs:   requestLogs,
 		catalogClient: catalog.NewClient(),
 		tmpls:         make(map[string]*template.Template),
-		sessions:      make(map[string]*store.User),
+		sessions:      make(map[string]*session),
 	}
 
 	// Parse each page template together with the layout
@@ -83,6 +92,24 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	h.tmpls["login.html"] = template.Must(template.ParseFS(templateFS, "templates/login.html"))
 
 	return h
+}
+
+// StartSessionCleanup runs a background goroutine that purges expired sessions.
+func (h *Handlers) StartSessionCleanup(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			h.mu.Lock()
+			now := time.Now()
+			for id, sess := range h.sessions {
+				if now.After(sess.ExpiresAt) {
+					delete(h.sessions, id)
+				}
+			}
+			h.mu.Unlock()
+		}
+	}()
 }
 
 // RegisterRoutes adds web UI routes to the given mux.
@@ -113,12 +140,18 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-		user, ok := h.sessions[cookie.Value]
+		h.mu.Lock()
+		sess, ok := h.sessions[cookie.Value]
+		if ok && time.Now().After(sess.ExpiresAt) {
+			delete(h.sessions, cookie.Value)
+			ok = false
+		}
+		h.mu.Unlock()
 		if !ok {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-		r = r.WithContext(setUser(r.Context(), user))
+		r = r.WithContext(setUser(r.Context(), sess.User))
 		next(w, r)
 	}
 }
@@ -138,13 +171,21 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := generateID()
-	h.sessions[sessionID] = user
+	sessionID, err := generateID()
+	if err != nil {
+		log.Printf("Failed to generate session ID: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	h.mu.Lock()
+	h.sessions[sessionID] = &session{User: user, ExpiresAt: time.Now().Add(24 * time.Hour)}
+	h.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   strings.HasPrefix(h.cfg.PublicBaseURL(), "https"),
 		SameSite: http.SameSiteLaxMode,
 	})
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -152,7 +193,9 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie("session"); err == nil {
+		h.mu.Lock()
 		delete(h.sessions, cookie.Value)
+		h.mu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login", http.StatusFound)
@@ -805,6 +848,11 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 		if img == "" && url == "" {
 			return nil, fmt.Errorf("docker image or external URL is required for HTTP servers")
 		}
+		if url != "" {
+			if err := validateServerURL(url); err != nil {
+				return nil, err
+			}
+		}
 		cfg := store.HTTPConfig{
 			Image:       img,
 			Port:        parseInt(r.FormValue("http_port")),
@@ -818,6 +866,9 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 		url := strings.TrimSpace(r.FormValue("remote_url"))
 		if url == "" {
 			return nil, fmt.Errorf("url is required for remote servers")
+		}
+		if err := validateServerURL(url); err != nil {
+			return nil, err
 		}
 		auth := store.RemoteAuth{
 			Type:       r.FormValue("remote_auth_type"),
@@ -1025,10 +1076,25 @@ func redirectBack(w http.ResponseWriter, r *http.Request, fallback string) {
 	http.Redirect(w, r, fallback, http.StatusFound)
 }
 
-func generateID() string {
+// validateServerURL checks that a URL is a valid http or https URL.
+func validateServerURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL must use http or https scheme, got %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+func generateID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic(err)
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }

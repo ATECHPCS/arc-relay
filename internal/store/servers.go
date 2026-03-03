@@ -76,11 +76,12 @@ type RemoteAuth struct {
 }
 
 type ServerStore struct {
-	db *DB
+	db     *DB
+	crypto *ConfigEncryptor
 }
 
-func NewServerStore(db *DB) *ServerStore {
-	return &ServerStore{db: db}
+func NewServerStore(db *DB, crypto *ConfigEncryptor) *ServerStore {
+	return &ServerStore{db: db, crypto: crypto}
 }
 
 func (s *ServerStore) Create(srv *Server) error {
@@ -91,10 +92,15 @@ func (s *ServerStore) Create(srv *Server) error {
 	srv.CreatedAt = time.Now()
 	srv.UpdatedAt = time.Now()
 
-	_, err := s.db.Exec(`
+	storedConfig, err := s.crypto.Encrypt(srv.Config)
+	if err != nil {
+		return fmt.Errorf("encrypting config: %w", err)
+	}
+
+	_, err = s.db.Exec(`
 		INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		srv.ID, srv.Name, srv.DisplayName, srv.ServerType, srv.Config, srv.Status, srv.CreatedAt, srv.UpdatedAt,
+		srv.ID, srv.Name, srv.DisplayName, srv.ServerType, storedConfig, srv.Status, srv.CreatedAt, srv.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("creating server: %w", err)
@@ -114,6 +120,11 @@ func (s *ServerStore) Get(id string) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("getting server: %w", err)
 	}
+	if plaintext, err := s.crypto.Decrypt(srv.Config); err != nil {
+		return nil, fmt.Errorf("decrypting config: %w", err)
+	} else {
+		srv.Config = plaintext
+	}
 	return srv, nil
 }
 
@@ -128,6 +139,11 @@ func (s *ServerStore) GetByName(name string) (*Server, error) {
 	}
 	if err != nil {
 		return nil, fmt.Errorf("getting server by name: %w", err)
+	}
+	if plaintext, err := s.crypto.Decrypt(srv.Config); err != nil {
+		return nil, fmt.Errorf("decrypting config: %w", err)
+	} else {
+		srv.Config = plaintext
 	}
 	return srv, nil
 }
@@ -147,6 +163,11 @@ func (s *ServerStore) List() ([]*Server, error) {
 		if err := rows.Scan(&srv.ID, &srv.Name, &srv.DisplayName, &srv.ServerType, &srv.Config, &srv.Status, &srv.ErrorMsg, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning server: %w", err)
 		}
+		if plaintext, err := s.crypto.Decrypt(srv.Config); err != nil {
+			return nil, fmt.Errorf("decrypting config for %s: %w", srv.Name, err)
+		} else {
+			srv.Config = plaintext
+		}
 		servers = append(servers, srv)
 	}
 	return servers, nil
@@ -154,10 +175,14 @@ func (s *ServerStore) List() ([]*Server, error) {
 
 func (s *ServerStore) Update(srv *Server) error {
 	srv.UpdatedAt = time.Now()
-	_, err := s.db.Exec(`
+	storedConfig, err := s.crypto.Encrypt(srv.Config)
+	if err != nil {
+		return fmt.Errorf("encrypting config: %w", err)
+	}
+	_, err = s.db.Exec(`
 		UPDATE servers SET name = ?, display_name = ?, server_type = ?, config = ?, status = ?, error_msg = ?, updated_at = ?
 		WHERE id = ?`,
-		srv.Name, srv.DisplayName, srv.ServerType, srv.Config, srv.Status, srv.ErrorMsg, srv.UpdatedAt, srv.ID,
+		srv.Name, srv.DisplayName, srv.ServerType, storedConfig, srv.Status, srv.ErrorMsg, srv.UpdatedAt, srv.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("updating server: %w", err)
@@ -178,8 +203,12 @@ func (s *ServerStore) UpdateStatus(id string, status ServerStatus, errMsg string
 
 // UpdateConfig updates only the JSON config column for a server.
 func (s *ServerStore) UpdateConfig(id string, config json.RawMessage) error {
-	_, err := s.db.Exec(`UPDATE servers SET config = ?, updated_at = ? WHERE id = ?`,
-		config, time.Now(), id,
+	storedConfig, err := s.crypto.Encrypt(config)
+	if err != nil {
+		return fmt.Errorf("encrypting config: %w", err)
+	}
+	_, err = s.db.Exec(`UPDATE servers SET config = ?, updated_at = ? WHERE id = ?`,
+		storedConfig, time.Now(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("updating server config: %w", err)
