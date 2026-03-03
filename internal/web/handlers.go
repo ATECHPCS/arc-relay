@@ -404,8 +404,27 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
+	// Preserve fields not in the form
 	updated.ID = id
+	updated.Status = srv.Status
+	updated.ErrorMsg = srv.ErrorMsg
+	updated.CreatedAt = srv.CreatedAt
+
+	// For OAuth servers, preserve tokens from the existing config
+	if updated.ServerType == store.ServerTypeRemote {
+		var oldCfg, newCfg store.RemoteConfig
+		if json.Unmarshal(srv.Config, &oldCfg) == nil && json.Unmarshal(updated.Config, &newCfg) == nil {
+			if newCfg.Auth.AccessToken == "" && oldCfg.Auth.AccessToken != "" {
+				newCfg.Auth.AccessToken = oldCfg.Auth.AccessToken
+				newCfg.Auth.RefreshToken = oldCfg.Auth.RefreshToken
+				newCfg.Auth.TokenExpiry = oldCfg.Auth.TokenExpiry
+				updated.Config, _ = json.Marshal(newCfg)
+			}
+		}
+	}
+
 	if err := h.servers.Update(updated); err != nil {
+		log.Printf("Error updating server %s: %v", id, err)
 		http.Error(w, "Failed to update server", http.StatusInternalServerError)
 		return
 	}
