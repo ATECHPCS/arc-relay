@@ -27,7 +27,22 @@ func NewManager(socket, networkName string) (*Manager, error) {
 	if socket != "" {
 		opts = append(opts, dclient.WithHost(socket))
 	}
-	opts = append(opts, dclient.WithAPIVersionNegotiation())
+
+	// Create a temporary client to discover the daemon's API version,
+	// then recreate with that version pinned. This avoids the SDK's
+	// minimum version check rejecting older daemons (e.g. Unraid's Docker 24).
+	probe, err := dclient.New(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("creating docker client: %w", err)
+	}
+	ping, err := probe.Ping(context.Background(), dclient.PingOptions{})
+	if err == nil && ping.APIVersion != "" {
+		log.Printf("Docker daemon API version: %s", ping.APIVersion)
+		opts = append(opts, dclient.WithVersion(ping.APIVersion))
+	} else {
+		log.Printf("Warning: Docker ping failed (%v), using default API version", err)
+	}
+	probe.Close()
 
 	cli, err := dclient.New(opts...)
 	if err != nil {
