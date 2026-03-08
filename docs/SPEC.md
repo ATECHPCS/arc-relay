@@ -539,11 +539,359 @@ volumes:
 20. Token storage and refresh
 21. All 5 example servers working end-to-end
 
-### Phase 5: Stretch Goals
+### Phase 5: Polish & Fixes
 22. Request logging to DB
 23. Connection config generation (Claude Desktop, Claude Code snippets)
 24. Access logs dashboard with basic charts
 25. Consolidated stderr/log capture for managed servers
+26. Fix connection examples to use base URL scheme (https:// when configured)
+
+### Phase 6: Auto-Build Stdio Images from Packages
+
+Most MCP servers are distributed as npm or pip packages, not Docker images. Users shouldn't need to find or build Docker images manually. MCP Wrangler should auto-generate and build Docker images from package metadata.
+
+#### Problem
+
+Stdio MCP servers are distributed as:
+- **npm packages** (`npx @anthropic/mcp-server-github`) — most common
+- **pip packages** (`uvx mcp-server-fetch`, `pip install pfsense-mcp-server`) — second most
+- **Git repos with Dockerfile** — project-specific (e.g., pfsense-mcp-server fork)
+- **Git repos without Dockerfile** — smaller community projects
+- **Pre-built Docker images** — rare, only larger projects
+
+Currently users must supply a Docker image, which means they either find a rare pre-built one, build it themselves, or give up.
+
+#### Solution: Package-to-Docker Builder
+
+Add a new input mode for stdio servers: **"Build from Package"** alongside the existing "Docker Image" field.
+
+**Form fields:**
+
+| Field | Required | Example |
+|-------|----------|---------|
+| Runtime | Yes | `python` / `node` (dropdown) |
+| Package | Yes | `pfsense-mcp-server` or `@anthropic/mcp-server-github` |
+| Version | No (default: latest) | `1.2.3` |
+| Git URL | No (alternative to package) | `https://github.com/user/repo` |
+| Custom Dockerfile | No (escape hatch) | Full Dockerfile text |
+
+**Dockerfile templates:**
+
+```dockerfile
+# Python (pip)
+FROM python:3.11-slim
+RUN pip install --no-cache-dir {{package}}{{if version}}=={{version}}{{end}}
+ENTRYPOINT ["{{entry_command}}"]
+# entry_command auto-detected or defaulted to: python -m {{module_name}}
+```
+
+```dockerfile
+# Node (npm)
+FROM node:20-slim
+RUN npm install -g {{package}}{{if version}}@{{version}}{{end}}
+ENTRYPOINT ["npx", "{{package}}"]
+```
+
+```dockerfile
+# Git repo (clone + detect)
+FROM python:3.11-slim  # or node:20-slim, detected from repo
+RUN git clone {{git_url}} /app
+WORKDIR /app
+RUN pip install -r requirements.txt  # or npm install, detected
+ENTRYPOINT ["python", "-m", "{{module}}"]
+```
+
+**Build + cache flow:**
+
+1. User submits package info via form
+2. Wrangler generates Dockerfile from template (or uses custom one)
+3. Wrangler calls Docker build API: `docker build -t mcp-pkg/{{package}}:{{version}} -`
+4. Image is cached locally — only rebuilds when version changes or user forces rebuild
+5. Container starts from the built image using normal stdio flow
+
+**Catalog integration:**
+
+The catalog already knows package type and name. When `catalogSelectStdio()` fires for a server without a `docker_image`, auto-populate the runtime + package fields instead of leaving the user with an empty Docker Image field.
+
+**DB schema change:**
+
+Extend `StdioConfig` with optional build metadata:
+
+```go
+type StdioConfig struct {
+    Image      string            // existing: pre-built image reference
+    Build      *StdioBuildConfig  // new: auto-build from package
+    Command    []string
+    Entrypoint []string
+    Env        map[string]string
+}
+
+type StdioBuildConfig struct {
+    Runtime    string  // "python" or "node"
+    Package    string  // pip/npm package name
+    Version    string  // package version (empty = latest)
+    GitURL     string  // alternative: build from git repo
+    Dockerfile string  // alternative: custom Dockerfile text
+}
+```
+
+When `Build` is set and `Image` is empty, Wrangler builds the image before starting the container. The built image tag is stored back in `Image` for cache.
+
+**Rebuild triggers:**
+- Version change in the build config
+- User clicks "Rebuild Image" button on server detail page
+- Force rebuild on server start (optional checkbox)
+
+**Open questions:**
+- Should we support private git repos? (Needs SSH key or token management)
+- Should we support Rust/Go MCP servers? (Less common, but `cargo install` / `go install` patterns exist)
+- Should auto-build run in a build container for isolation, or directly via the Docker daemon?
+- Image cleanup: auto-prune old versions? Configurable retention?
+
+### Phase 7: Proxy Middleware — Traffic Interception & Processing
+
+MCP Wrangler sits at the chokepoint between AI clients and MCP servers. This position enables powerful traffic processing: sanitization, compliance enforcement, context optimization, and observability — without modifying any server or client.
+
+#### Architecture
+
+```
+AI Client
+    │
+    │  JSON-RPC request
+    ▼
+┌─────────────────────────────────────────────────┐
+│  MCP Wrangler Proxy                             │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │         Middleware Pipeline              │    │
+│  │                                         │    │
+│  │  Request ──► [Auth] ──► [RBAC]          │    │
+│  │              ──► [Middleware 1]          │    │
+│  │              ──► [Middleware 2]          │    │
+│  │              ──► [Middleware N]          │    │
+│  │              ──► Backend Server          │    │
+│  │                                         │    │
+│  │  Response ◄── [Middleware N]             │    │
+│  │               ◄── [Middleware 2]         │    │
+│  │               ◄── [Middleware 1]         │    │
+│  │               ◄── Client                │    │
+│  └─────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────┘
+```
+
+Middleware runs as a bidirectional pipeline: each middleware sees the request going in and the response coming back, and can modify, block, or annotate either.
+
+#### Middleware Interface
+
+```go
+// Middleware processes MCP messages flowing through the proxy.
+// Each middleware can inspect/modify both requests and responses.
+type Middleware interface {
+    // Name returns a unique identifier for this middleware.
+    Name() string
+
+    // ProcessRequest is called before the request reaches the backend.
+    // Return modified request, or error to block the request.
+    ProcessRequest(ctx context.Context, req *MCPMessage, meta *RequestMeta) (*MCPMessage, error)
+
+    // ProcessResponse is called before the response reaches the client.
+    // Return modified response, or error to inject an error response.
+    ProcessResponse(ctx context.Context, resp *MCPMessage, meta *RequestMeta) (*MCPMessage, error)
+}
+
+// RequestMeta carries context about the request for middleware decisions.
+type RequestMeta struct {
+    UserID     string
+    ServerID   string
+    ServerName string
+    Method     string      // e.g. "tools/call", "tools/list"
+    ToolName   string      // for tools/call: which tool
+    ClientIP   string
+    RequestID  string
+}
+
+// MCPMessage is the parsed JSON-RPC message (request or response).
+type MCPMessage struct {
+    JSONRPC string          `json:"jsonrpc"`
+    ID      any             `json:"id,omitempty"`
+    Method  string          `json:"method,omitempty"`
+    Params  json.RawMessage `json:"params,omitempty"`
+    Result  json.RawMessage `json:"result,omitempty"`
+    Error   *JSONRPCError   `json:"error,omitempty"`
+}
+```
+
+#### Built-in Middleware (Day 1)
+
+**1. Sanitizer — PII/Secret Redaction**
+
+Scans tool call results for patterns that look like secrets, credentials, PII, and redacts them before they reach the AI client. Configurable patterns.
+
+```yaml
+sanitizer:
+  enabled: true
+  patterns:
+    - name: api_key
+      regex: '(?i)(api[_-]?key|secret|token|password)\s*[=:]\s*\S+'
+      action: redact  # replace match with [REDACTED]
+    - name: ssn
+      regex: '\b\d{3}-\d{2}-\d{4}\b'
+      action: redact
+    - name: credit_card
+      regex: '\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b'
+      action: block   # block the entire response, return error
+  custom_patterns: []  # user-defined via web UI
+```
+
+**2. Content Sizer — Context Window Optimization**
+
+Measures and optionally truncates/summarizes large tool responses to prevent context window exhaustion. Reports size metrics for analytics.
+
+```yaml
+content_sizer:
+  enabled: true
+  max_response_tokens: 50000     # warn or truncate above this
+  action: truncate_with_summary  # truncate | warn | summarize | pass
+  summary_prompt: "Summarize this tool output, preserving key data..."
+  # For 'summarize' action: uses a small/fast model to compress
+```
+
+**3. Alerter — Keyword & Pattern Alerts**
+
+Fires webhooks or logs alerts when specific content patterns appear in requests or responses. Useful for compliance monitoring without blocking.
+
+```yaml
+alerter:
+  enabled: true
+  rules:
+    - name: production_access
+      match: "production|prod-db|master-password"
+      direction: request  # request | response | both
+      action: log         # log | webhook
+      webhook_url: ""
+    - name: large_data_export
+      match_size: 100000  # bytes
+      direction: response
+      action: webhook
+      webhook_url: "https://hooks.slack.com/..."
+```
+
+#### Configuration Model
+
+Middleware is configured per-server in the web UI, with global defaults:
+
+```sql
+CREATE TABLE middleware_configs (
+    id          TEXT PRIMARY KEY,
+    server_id   TEXT REFERENCES servers(id),  -- NULL = global default
+    middleware  TEXT NOT NULL,                 -- middleware name
+    enabled     BOOLEAN DEFAULT TRUE,
+    config      TEXT NOT NULL,                -- JSON config
+    priority    INTEGER DEFAULT 100,          -- execution order (lower = first)
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(server_id, middleware)
+);
+```
+
+**Web UI:**
+- Server detail page gets a "Middleware" tab
+- Toggle built-in middleware on/off per server
+- Configure patterns, thresholds, actions
+- View middleware-generated alerts/logs
+
+#### Comma Compliance Integration (Phase 8)
+
+MCP Wrangler provides the open-source traffic interception infrastructure. [Comma Compliance](https://commacompliance.com) provides the intelligence layer — policy engines, compliance rule libraries, audit trails, and enterprise reporting.
+
+**Integration model: MCP Wrangler as the enforcement point, Comma Compliance as the policy source.**
+
+```
+┌──────────────────────┐         ┌──────────────────────────┐
+│   MCP Wrangler       │         │   Comma Compliance       │
+│   (open source)      │◄───────►│   (commercial SaaS)      │
+│                      │         │                          │
+│  • Traffic proxy     │  Sync   │  • Policy engine         │
+│  • Middleware engine  │◄───────►│  • Compliance rules      │
+│  • Pattern matching   │  API   │  • Industry templates    │
+│  • Block/redact/alert│         │  • Audit trail           │
+│  • Local enforcement  │────────►│  • Analytics dashboard   │
+│                      │  Events │  • Incident management   │
+│  Free, self-hosted   │         │  • SOC2/HIPAA/PCI reports│
+└──────────────────────┘         └──────────────────────────┘
+```
+
+**How it works:**
+
+1. **Policy sync**: Comma Compliance pushes compliance policies to MCP Wrangler via API. Policies are expressed as middleware configurations (patterns, rules, actions). Wrangler stores them locally and enforces them even if the Comma Compliance service is unreachable.
+
+2. **Event streaming**: MCP Wrangler streams audit events to Comma Compliance — what was accessed, what was redacted, what was blocked, by whom, when. No raw content is sent unless the policy explicitly requires it (configurable).
+
+3. **Compliance middleware**: A special `comma-compliance` middleware that:
+   - Fetches and caches policies from the Comma Compliance API
+   - Evaluates each request/response against the active policy set
+   - Reports violations and enforcement actions back to the service
+   - Falls back to cached policies if the service is unreachable
+
+```go
+// CommaComplianceMiddleware bridges MCP Wrangler to the Comma Compliance service.
+type CommaComplianceMiddleware struct {
+    apiURL    string
+    apiKey    string
+    policies  *PolicyCache   // locally cached, synced periodically
+    eventChan chan AuditEvent // buffered channel for async event delivery
+}
+```
+
+**Configuration:**
+
+```toml
+[comma_compliance]
+enabled = false
+api_url = "https://api.commacompliance.com/v1"
+api_key = ""
+org_id = ""
+sync_interval = "5m"        # how often to pull policy updates
+event_buffer_size = 1000    # buffer events if service is temporarily unreachable
+send_content = false        # never send raw tool content by default
+```
+
+**Web UI integration:**
+- Settings page: "Comma Compliance" section with API key entry and connection status
+- Server detail: "Compliance" badge showing policy coverage
+- Dashboard: compliance summary (violations, blocks, alerts in last 24h)
+
+**Business model alignment:**
+- MCP Wrangler is free, open-source, self-hosted — drives adoption
+- Basic middleware (sanitizer, sizer, alerter) works standalone — immediate value
+- Comma Compliance adds enterprise features: managed policies, audit trails, compliance reporting, multi-tenant management
+- Organizations start with MCP Wrangler, graduate to Comma Compliance when they need compliance automation
+- The open-source middleware interface means competitors can also build on the platform, but Comma Compliance has the first-mover advantage and deepest integration
+
+**Open questions for Comma Compliance integration:**
+- Should MCP Wrangler phone home to Comma Compliance for telemetry/usage stats? (Probably not — keep open source clean)
+- Should the Comma Compliance middleware be a separate binary/plugin, or compiled into MCP Wrangler behind a build tag?
+- How do we handle the free→paid upgrade path in the UI? Subtle "upgrade" prompts? Feature comparison?
+- Should Comma Compliance policies be able to override local middleware config? (Enterprise admin override vs. local autonomy)
+- Multi-tenant: one MCP Wrangler instance serving multiple orgs, each with their own Comma Compliance policy set?
+- What compliance frameworks do we target first? SOC2, HIPAA, PCI-DSS, GDPR?
+- Should the event stream include token counts for billing/usage tracking?
+
+---
+
+## Bugfixes & Small Improvements
+
+### Connection Examples: Use Base URL Scheme
+
+**Status:** Bug — needs fix
+
+The server detail page connection examples (`claude mcp add`, Claude Desktop JSON) hardcode `http://` prefix. When `MCP_WRANGLER_BASE_URL` is set (e.g., `https://mcp.home.jeremiah.church`), the examples should use that URL directly instead of `http://{{.Host}}`.
+
+**Fix:** Pass `BaseURL` (from `cfg.PublicBaseURL()`) to the template instead of `r.Host`. Update `server_detail.html` to use `{{.BaseURL}}` as the full URL prefix.
+
+**Files:**
+- `internal/web/handlers.go` — pass `BaseURL` to template data
+- `internal/web/templates/server_detail.html` — use `{{.BaseURL}}/mcp/{{.Server.Name}}`
 
 ---
 
@@ -556,10 +904,24 @@ The MCP spec doesn't explicitly address concurrent requests over stdio. Most std
 For POC: AES-256-GCM encryption with a key from config/env var. Credentials are encrypted at rest in SQLite. This is "good enough" for a self-hosted tool. A vault integration can come later.
 
 ### Container Image Management
-Pre-built images only (`docker pull`) for the POC. Building from source (Dockerfiles, repos) adds significant complexity and can be added later.
+Pre-built images only (`docker pull`) for the POC. Building from source (Dockerfiles, repos) adds significant complexity and can be added later. See Phase 6 for the auto-build plan.
 
 ### MCP Protocol Version Compatibility
 The current MCP spec (2025-03-26) uses Streamable HTTP. Older servers may use the deprecated SSE transport. MCP Wrangler should attempt Streamable HTTP first, fall back to SSE per the spec's backwards compatibility guidance.
+
+### Middleware Performance
+The middleware pipeline adds latency to every proxied request. Design considerations:
+- Middleware should be fast (microseconds, not milliseconds) for pattern matching
+- Regex patterns should be pre-compiled at config load time
+- Content summarization (via LLM) should be async/optional — never block by default
+- Middleware that calls external services (webhooks, Comma Compliance API) should be non-blocking
+
+### Open Source Governance
+MCP Wrangler under Comma Compliance org branding:
+- License: MIT or Apache 2.0 (permissive, encourages adoption)
+- GitHub org: `comma-compliance/mcp-wrangler` (or keep `JeremiahChurch` and add org attribution?)
+- README: "Built by [Comma Compliance](https://commacompliance.com)" with clear separation between open-source core and commercial offering
+- Contributor agreement: standard CLA or DCO?
 
 ---
 
@@ -567,7 +929,7 @@ The current MCP spec (2025-03-26) uses Streamable HTTP. Older servers may use th
 
 | Package | Purpose |
 |---------|---------|
-| `github.com/docker/docker/client` | Docker API client |
+| `github.com/moby/moby/client` | Docker API client |
 | `github.com/mattn/go-sqlite3` | SQLite driver |
 | `github.com/gorilla/mux` or `net/http` | HTTP routing (stdlib may suffice) |
 | `github.com/BurntSushi/toml` | Config parsing |

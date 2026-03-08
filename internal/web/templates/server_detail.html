@@ -282,14 +282,14 @@ function updateTier(el) {
   </p>
 
   <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Code</h3>
-  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1rem;"><code>claude mcp add --transport http {{.Server.Name}} http://{{.Host}}/mcp/{{.Server.Name}} \
+  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1rem;"><code>claude mcp add --transport http {{.Server.Name}} {{.BaseURL}}/mcp/{{.Server.Name}} \
   --header "Authorization: Bearer YOUR_API_KEY"</code></pre>
 
   <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Desktop (claude_desktop_config.json)</h3>
   <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto;"><code>{
   "mcpServers": {
     "{{.Server.Name}}": {
-      "url": "http://{{.Host}}/mcp/{{.Server.Name}}",
+      "url": "{{.BaseURL}}/mcp/{{.Server.Name}}",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
       }

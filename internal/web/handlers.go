@@ -367,7 +367,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		"User":           getUser(r),
 		"Server":         srv,
 		"ConfigDisplay":  buildConfigDisplay(srv),
-		"Host":           r.Host,
+		"BaseURL":        h.cfg.PublicBaseURL(),
 		"Endpoints":      h.proxy.Endpoints.Get(srv.ID),
 		"TierMap":        tierMap,
 		"EndpointUsage":  endpointUsage,
