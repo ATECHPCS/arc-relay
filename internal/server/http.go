@@ -11,6 +11,7 @@ import (
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
@@ -19,29 +20,33 @@ import (
 
 // Server is the main HTTP server for MCP Wrangler.
 type Server struct {
-	cfg          *config.Config
-	servers      *store.ServerStore
-	users        *store.UserStore
-	proxy        *proxy.Manager
-	oauthMgr     *oauth.Manager
-	accessStore  *store.AccessStore
-	requestLogs  *store.RequestLogStore
-	sessionStore *store.SessionStore
-	mux          *http.ServeMux
+	cfg             *config.Config
+	servers         *store.ServerStore
+	users           *store.UserStore
+	proxy           *proxy.Manager
+	oauthMgr        *oauth.Manager
+	accessStore     *store.AccessStore
+	requestLogs     *store.RequestLogStore
+	sessionStore    *store.SessionStore
+	middlewareStore  *store.MiddlewareStore
+	mwRegistry      *middleware.Registry
+	mux             *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry) *Server {
 	s := &Server{
-		cfg:          cfg,
-		servers:      servers,
-		users:        users,
-		proxy:        proxyMgr,
-		oauthMgr:     oauthMgr,
-		accessStore:  accessStore,
-		requestLogs:  requestLogs,
-		sessionStore: sessionStore,
-		mux:          http.NewServeMux(),
+		cfg:             cfg,
+		servers:         servers,
+		users:           users,
+		proxy:           proxyMgr,
+		oauthMgr:        oauthMgr,
+		accessStore:     accessStore,
+		requestLogs:     requestLogs,
+		sessionStore:    sessionStore,
+		middlewareStore:  middlewareStore,
+		mwRegistry:      mwRegistry,
+		mux:             http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -63,7 +68,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs, s.sessionStore)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
@@ -212,6 +217,40 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Build middleware pipeline for this server
+	var mwMeta *middleware.RequestMeta
+	var pipeline *middleware.Pipeline
+	if s.mwRegistry != nil {
+		pipeline = s.mwRegistry.BuildPipeline(srv.ID)
+		if pipeline.Len() > 0 {
+			mwMeta = &middleware.RequestMeta{
+				ServerID:   srv.ID,
+				ServerName: srv.Name,
+				Method:     mcpReq.Method,
+				ToolName:   endpointName,
+				ClientIP:   r.RemoteAddr,
+				RequestID:  string(mcpReq.ID),
+			}
+			if user != nil {
+				mwMeta.UserID = user.ID
+			}
+
+			// Run request middleware
+			modifiedReq, err := pipeline.ProcessRequest(r.Context(), &mcpReq, mwMeta)
+			if err != nil {
+				durationMs := time.Since(startTime).Milliseconds()
+				if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
+					go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "blocked", "middleware: "+err.Error())
+				}
+				errResp := mcp.NewErrorResponse(mcpReq.ID, mcp.ErrCodeInternal, err.Error())
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(errResp)
+				return
+			}
+			mcpReq = *modifiedReq
+		}
+	}
+
 	resp, err := backend.Send(r.Context(), &mcpReq)
 	durationMs := time.Since(startTime).Milliseconds()
 
@@ -224,6 +263,20 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(errResp)
 		return
+	}
+
+	// Run response middleware
+	if pipeline != nil && pipeline.Len() > 0 {
+		resp, err = pipeline.ProcessResponse(r.Context(), &mcpReq, resp, mwMeta)
+		if err != nil {
+			if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
+				go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "blocked", "middleware: "+err.Error())
+			}
+			errResp := mcp.NewErrorResponse(mcpReq.ID, mcp.ErrCodeInternal, err.Error())
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(errResp)
+			return
+		}
 	}
 
 	if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {

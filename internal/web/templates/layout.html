@@ -144,6 +144,33 @@
     .tier-read, select.tier-read { background: #d1e7dd; color: var(--success); border-color: #badbcc; }
     .tier-write, select.tier-write { background: #cfe2ff; color: #084298; border-color: #b6d4fe; }
     .tier-admin, select.tier-admin { background: #f8d7da; color: var(--danger); border-color: #f5c2c7; }
+
+    /* Middleware cards */
+    .mw-card {
+      border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem;
+      transition: border-color 0.15s;
+    }
+    .mw-card:hover { border-color: var(--primary); }
+
+    /* Toggle switch */
+    .toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; cursor: pointer; inset: 0;
+      background: #ccc; border-radius: 22px; transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: ""; position: absolute; height: 16px; width: 16px;
+      left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s;
+    }
+    .toggle input:checked + .toggle-slider { background: var(--success); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+    /* Middleware event badges */
+    .badge-redacted { background: #fff3cd; color: #664d03; }
+    .badge-blocked { background: #f8d7da; color: var(--danger); }
+    .badge-truncated { background: #cfe2ff; color: #084298; }
+    .badge-alert { background: #e0cffc; color: #59359a; }
   </style>
 </head>
 <body>

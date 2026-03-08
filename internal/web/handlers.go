@@ -16,6 +16,7 @@ import (
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/catalog"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
+	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
@@ -54,30 +55,34 @@ type ConfigDisplay struct {
 
 // Handlers holds dependencies for web UI handlers.
 type Handlers struct {
-	cfg            *config.Config
-	servers        *store.ServerStore
-	users          *store.UserStore
-	proxy          *proxy.Manager
-	oauth          *oauth.Manager
-	accessStore    *store.AccessStore
-	requestLogs    *store.RequestLogStore
-	sessionStore   *store.SessionStore
-	catalogClient  *catalog.Client
-	tmpls          map[string]*template.Template
+	cfg             *config.Config
+	servers         *store.ServerStore
+	users           *store.UserStore
+	proxy           *proxy.Manager
+	oauth           *oauth.Manager
+	accessStore     *store.AccessStore
+	requestLogs     *store.RequestLogStore
+	sessionStore    *store.SessionStore
+	middlewareStore  *store.MiddlewareStore
+	mwRegistry      *middleware.Registry
+	catalogClient   *catalog.Client
+	tmpls           map[string]*template.Template
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry) *Handlers {
 	h := &Handlers{
-		cfg:           cfg,
-		servers:       servers,
-		users:         users,
-		proxy:         proxyMgr,
-		oauth:         oauthMgr,
-		accessStore:   accessStore,
-		requestLogs:   requestLogs,
-		sessionStore:  sessionStore,
-		catalogClient: catalog.NewClient(),
-		tmpls:         make(map[string]*template.Template),
+		cfg:            cfg,
+		servers:        servers,
+		users:          users,
+		proxy:          proxyMgr,
+		oauth:          oauthMgr,
+		accessStore:    accessStore,
+		requestLogs:    requestLogs,
+		sessionStore:   sessionStore,
+		middlewareStore: middlewareStore,
+		mwRegistry:     mwRegistry,
+		catalogClient:  catalog.NewClient(),
+		tmpls:          make(map[string]*template.Template),
 	}
 
 	// Parse each page template together with the layout
@@ -325,6 +330,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleServerRebuild(w, r, id)
 	case "access-tier":
 		h.handleAccessTier(w, r, id)
+	case "middleware":
+		h.handleServerMiddleware(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -357,16 +364,26 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		serverLogs, _ = h.requestLogs.ByServer(srv.ID, 20)
 	}
 
+	// Middleware configs and events
+	var mwConfigs []*store.MiddlewareConfig
+	var mwEvents []*store.MiddlewareEvent
+	if h.middlewareStore != nil {
+		mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
+		mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
+	}
+
 	h.render(w, "server_detail.html", map[string]any{
-		"Nav":            "servers",
-		"User":           getUser(r),
-		"Server":         srv,
-		"ConfigDisplay":  buildConfigDisplay(srv),
-		"BaseURL":        h.cfg.PublicBaseURL(),
-		"Endpoints":      h.proxy.Endpoints.Get(srv.ID),
-		"TierMap":        tierMap,
-		"EndpointUsage":  endpointUsage,
-		"RecentLogs":     serverLogs,
+		"Nav":              "servers",
+		"User":             getUser(r),
+		"Server":           srv,
+		"ConfigDisplay":    buildConfigDisplay(srv),
+		"BaseURL":          h.cfg.PublicBaseURL(),
+		"Endpoints":        h.proxy.Endpoints.Get(srv.ID),
+		"TierMap":          tierMap,
+		"EndpointUsage":    endpointUsage,
+		"RecentLogs":       serverLogs,
+		"MiddlewareConfigs": mwConfigs,
+		"MiddlewareEvents":  mwEvents,
 	})
 }
 
@@ -535,6 +552,83 @@ func (h *Handlers) handleAccessTier(w http.ResponseWriter, r *http.Request, id s
 
 	if err := h.accessStore.SetTier(id, body.EndpointType, body.EndpointName, body.AccessTier); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to set tier"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// --- Middleware ---
+
+func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request, serverID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	var body struct {
+		Middleware string          `json:"middleware"`
+		Enabled    *bool           `json:"enabled"`
+		Config     json.RawMessage `json:"config"`
+		Priority   int             `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if body.Middleware == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "middleware name required"})
+		return
+	}
+
+	// Validate middleware name
+	validNames := map[string]bool{"sanitizer": true, "sizer": true, "alerter": true}
+	if !validNames[body.Middleware] {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown middleware: " + body.Middleware})
+		return
+	}
+
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
+
+	cfg := json.RawMessage("{}")
+	if body.Config != nil {
+		cfg = body.Config
+	}
+
+	priority := body.Priority
+	if priority == 0 {
+		// Default priorities: sanitizer=10, sizer=20, alerter=30
+		switch body.Middleware {
+		case "sanitizer":
+			priority = 10
+		case "sizer":
+			priority = 20
+		case "alerter":
+			priority = 30
+		default:
+			priority = 100
+		}
+	}
+
+	mc := &store.MiddlewareConfig{
+		ServerID:   &serverID,
+		Middleware: body.Middleware,
+		Enabled:    enabled,
+		Config:     cfg,
+		Priority:   priority,
+	}
+
+	if err := h.middlewareStore.Upsert(mc); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
 		return
 	}
 

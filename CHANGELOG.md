@@ -2,6 +2,18 @@
 
 All notable changes to MCP Wrangler are documented here.
 
+## [0.3.0] - 2026-03-08
+
+### Added
+- **Phase 7: Proxy Middleware Pipeline** — bidirectional request/response processing for MCP traffic
+- **Sanitizer middleware** — PII/secret redaction with configurable regex patterns (redact or block)
+- **Content Sizer middleware** — response size limits with truncate/block/warn actions (default 500KB)
+- **Alerter middleware** — pattern monitoring with log and webhook alert actions
+- Middleware toggle UI on server detail page (per-server enable/disable)
+- Middleware event log with event type badges (redacted, blocked, truncated, alert)
+- `middleware_configs` and `middleware_events` database tables (migration 004)
+- 10 unit tests covering all middleware and pipeline behavior
+
 ## [0.2.3] - 2026-03-08
 
 ### Fixed
