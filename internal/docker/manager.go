@@ -27,6 +27,7 @@ func NewManager(socket, networkName string) (*Manager, error) {
 	if socket != "" {
 		opts = append(opts, dclient.WithHost(socket))
 	}
+	opts = append(opts, dclient.WithAPIVersionNegotiation())
 
 	cli, err := dclient.New(opts...)
 	if err != nil {
