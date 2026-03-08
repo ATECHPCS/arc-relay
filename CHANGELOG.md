@@ -5,7 +5,7 @@ All notable changes to MCP Wrangler are documented here.
 ## [0.2.3] - 2026-03-08
 
 ### Fixed
-- Docker API version negotiation: auto-downgrade client API version to match the host daemon (fixes "client version 1.53 is too new" on older Docker hosts like Unraid)
+- Docker API compatibility: probe daemon version via `/_ping` and pin client API version to match, bypassing the SDK's minimum version check (fixes Docker on Unraid 6.x / Docker 24.x with API 1.43)
 
 ## [0.2.2] - 2026-03-08
 
