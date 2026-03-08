@@ -115,6 +115,15 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 
 	m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
 
+	// Auto-build image from package if Build config is set and no image exists
+	if cfg.Build != nil && cfg.Image == "" {
+		tag := cfg.Build.BuildImageTag()
+		if err := m.buildImageIfNeeded(ctx, srv, &cfg, tag, false); err != nil {
+			return err
+		}
+		cfg.Image = tag
+	}
+
 	// Pull image
 	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
 	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
@@ -227,6 +236,54 @@ func (m *Manager) startRemote(ctx context.Context, srv *store.Server) error {
 	log.Printf("Connected to remote server %s at %s", srv.Name, cfg.URL)
 	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
+}
+
+// buildImageIfNeeded generates and builds a Docker image from a StdioBuildConfig.
+// If force is false, it skips the build when the image already exists locally.
+func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg *store.StdioConfig, tag string, force bool) error {
+	if !force && m.docker.ImageExists(ctx, tag) {
+		log.Printf("Image %s already exists for server %s, skipping build", tag, srv.Name)
+		return nil
+	}
+
+	build := cfg.Build
+	dockerfile, err := dockermgr.GenerateDockerfile(build.Runtime, build.Package, build.Version, build.GitURL, build.Dockerfile)
+	if err != nil {
+		m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
+		return fmt.Errorf("generating Dockerfile: %w", err)
+	}
+
+	log.Printf("Building image %s for server %s...", tag, srv.Name)
+	if err := m.docker.BuildImage(ctx, dockerfile, tag); err != nil {
+		m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
+		return fmt.Errorf("building image: %w", err)
+	}
+
+	// Persist the built image tag back to config
+	cfg.Image = tag
+	updatedConfig, _ := json.Marshal(cfg)
+	m.servers.UpdateConfig(srv.ID, updatedConfig)
+
+	log.Printf("Built image %s for server %s", tag, srv.Name)
+	return nil
+}
+
+// RebuildImage force-rebuilds the Docker image for a stdio server with build config.
+func (m *Manager) RebuildImage(ctx context.Context, srv *store.Server) error {
+	if srv.ServerType != store.ServerTypeStdio {
+		return fmt.Errorf("rebuild is only supported for stdio servers")
+	}
+
+	var cfg store.StdioConfig
+	if err := json.Unmarshal(srv.Config, &cfg); err != nil {
+		return fmt.Errorf("parsing stdio config: %w", err)
+	}
+	if cfg.Build == nil {
+		return fmt.Errorf("server has no build config")
+	}
+
+	tag := cfg.Build.BuildImageTag()
+	return m.buildImageIfNeeded(ctx, srv, &cfg, tag, true)
 }
 
 // EnumerateServer discovers tools, resources, and prompts from a running server.

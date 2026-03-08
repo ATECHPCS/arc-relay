@@ -49,11 +49,64 @@
 
     <!-- Stdio fields -->
     <div id="fields-stdio" class="type-fields">
+      <input type="hidden" id="stdio_mode" name="stdio_mode" value="{{if .StdioMode}}{{.StdioMode}}{{else}}image{{end}}">
       <div class="form-group">
-        <label for="stdio_image">Docker Image</label>
-        <input type="text" id="stdio_image" name="stdio_image" value="{{.StdioImage}}"
-               placeholder="ghcr.io/org/mcp-server:latest">
+        <label>Image Source</label>
+        <div style="display:flex;gap:0;margin-bottom:0.5rem;">
+          <button type="button" id="tab-image" class="btn btn-sm"
+                  onclick="setStdioMode('image')" style="border-radius:6px 0 0 6px;">Docker Image</button>
+          <button type="button" id="tab-build" class="btn btn-sm"
+                  onclick="setStdioMode('build')" style="border-radius:0 6px 6px 0;">Build from Package</button>
+        </div>
       </div>
+
+      <!-- Docker Image mode -->
+      <div id="stdio-image-fields">
+        <div class="form-group">
+          <label for="stdio_image">Docker Image</label>
+          <input type="text" id="stdio_image" name="stdio_image" value="{{.StdioImage}}"
+                 placeholder="ghcr.io/org/mcp-server:latest">
+        </div>
+      </div>
+
+      <!-- Build from Package mode -->
+      <div id="stdio-build-fields" style="display:none">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="build_runtime">Runtime</label>
+            <select id="build_runtime" name="build_runtime">
+              <option value="python" {{if eq (printf "%s" .BuildRuntime) "python"}}selected{{end}}>Python (pip)</option>
+              <option value="node" {{if eq (printf "%s" .BuildRuntime) "node"}}selected{{end}}>Node.js (npm)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="build_package">Package Name</label>
+            <input type="text" id="build_package" name="build_package" value="{{.BuildPackage}}"
+                   placeholder="pfsense-mcp-server or @anthropic/mcp-server-github">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="build_version">Version (optional)</label>
+            <input type="text" id="build_version" name="build_version" value="{{.BuildVersion}}"
+                   placeholder="latest">
+            <div class="help">Leave blank for latest version.</div>
+          </div>
+          <div class="form-group">
+            <label for="build_git_url">Git URL (alternative to package)</label>
+            <input type="text" id="build_git_url" name="build_git_url" value="{{.BuildGitURL}}"
+                   placeholder="https://github.com/user/repo">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="build_dockerfile">Custom Dockerfile (optional escape hatch)</label>
+          <textarea id="build_dockerfile" name="build_dockerfile"
+                    placeholder="FROM python:3.11-slim&#10;RUN pip install ...&#10;ENTRYPOINT [...]"
+                    style="font-family:monospace;font-size:0.85rem;min-height:80px;">{{.BuildDockerfile}}</textarea>
+          <div class="help">If provided, this Dockerfile is used as-is instead of generating one from the package info.</div>
+        </div>
+      </div>
+
       <div class="form-group">
         <label for="stdio_entrypoint">Entrypoint Override (optional)</label>
         <input type="text" id="stdio_entrypoint" name="stdio_entrypoint" value="{{.StdioEntrypoint}}"
@@ -176,6 +229,25 @@ function toggleTypeFields() {
   var target = document.getElementById('fields-' + type);
   if (target) target.style.display = 'block';
   if (type === 'remote') toggleAuthFields();
+  if (type === 'stdio') {
+    var mode = document.getElementById('stdio_mode').value || 'image';
+    setStdioMode(mode);
+  }
+}
+
+function setStdioMode(mode) {
+  document.getElementById('stdio_mode').value = mode;
+  document.getElementById('stdio-image-fields').style.display = (mode === 'image') ? 'block' : 'none';
+  document.getElementById('stdio-build-fields').style.display = (mode === 'build') ? 'block' : 'none';
+  var tabImage = document.getElementById('tab-image');
+  var tabBuild = document.getElementById('tab-build');
+  if (mode === 'image') {
+    tabImage.className = 'btn btn-sm btn-primary';
+    tabBuild.className = 'btn btn-sm btn-outline';
+  } else {
+    tabImage.className = 'btn btn-sm btn-outline';
+    tabBuild.className = 'btn btn-sm btn-primary';
+  }
 }
 
 function toggleAuthFields() {
@@ -254,8 +326,9 @@ function catalogSearch() {
           html += '<button type="button" class="btn btn-sm btn-primary" onclick=\'catalogSelectRemote(' + JSON.stringify(r) + ')\'>' + label + '</button>';
         });
         group.stdios.forEach(function(s) {
-          var label = s.docker_image ? 'Use Docker' : 'Use Stdio (needs image)';
-          html += '<button type="button" class="btn btn-sm btn-outline" onclick=\'catalogSelectStdio(' + JSON.stringify(s) + ')\'>' + label + '</button>';
+          var label = s.docker_image ? 'Use Docker' : (s.package_name ? 'Build from Package' : 'Use Stdio (needs image)');
+          var btnClass = s.package_name && !s.docker_image ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline';
+          html += '<button type="button" class="' + btnClass + '" onclick=\'catalogSelectStdio(' + JSON.stringify(s) + ')\'>' + label + '</button>';
         });
 
         if (first.repo_url) {
@@ -341,9 +414,28 @@ function catalogSelectStdio(server) {
   document.getElementById('display_name').value = server.suggested_display;
   document.getElementById('server_type').value = 'stdio';
   toggleTypeFields();
-  document.getElementById('stdio_image').value = server.docker_image || '';
 
   document.getElementById('catalog-oauth-info').innerHTML = '';
+
+  // If the catalog entry has a Docker image, use image mode
+  if (server.docker_image) {
+    setStdioMode('image');
+    document.getElementById('stdio_image').value = server.docker_image;
+  }
+  // If the catalog entry has package info (npm/pypi), switch to build mode
+  else if (server.package_type && server.package_name) {
+    setStdioMode('build');
+    var runtime = (server.package_type === 'npm') ? 'node' : 'python';
+    document.getElementById('build_runtime').value = runtime;
+    document.getElementById('build_package').value = server.package_name;
+    document.getElementById('build_version').value = '';
+    document.getElementById('build_git_url').value = '';
+    document.getElementById('build_dockerfile').value = '';
+    document.getElementById('stdio_image').value = '';
+  } else {
+    setStdioMode('image');
+    document.getElementById('stdio_image').value = '';
+  }
 
   // Show env var hints
   var envHint = document.getElementById('catalog-env-hint');

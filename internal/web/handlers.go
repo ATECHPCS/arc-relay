@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/catalog"
@@ -44,12 +43,13 @@ type ConfigDisplay struct {
 	OAuthAuthorized  bool
 	OAuthScopes      string
 	OAuthTokenExpiry string
-}
-
-// session tracks an authenticated user session with expiry.
-type session struct {
-	User      *store.User
-	ExpiresAt time.Time
+	// Build fields
+	HasBuild       bool
+	BuildRuntime   string
+	BuildPackage   string
+	BuildVersion   string
+	BuildGitURL    string
+	BuildCustom    bool
 }
 
 // Handlers holds dependencies for web UI handlers.
@@ -61,14 +61,12 @@ type Handlers struct {
 	oauth          *oauth.Manager
 	accessStore    *store.AccessStore
 	requestLogs    *store.RequestLogStore
+	sessionStore   *store.SessionStore
 	catalogClient  *catalog.Client
 	tmpls          map[string]*template.Template
-
-	mu       sync.Mutex
-	sessions map[string]*session
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore) *Handlers {
 	h := &Handlers{
 		cfg:           cfg,
 		servers:       servers,
@@ -77,9 +75,9 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		oauth:         oauthMgr,
 		accessStore:   accessStore,
 		requestLogs:   requestLogs,
+		sessionStore:  sessionStore,
 		catalogClient: catalog.NewClient(),
 		tmpls:         make(map[string]*template.Template),
-		sessions:      make(map[string]*session),
 	}
 
 	// Parse each page template together with the layout
@@ -100,14 +98,7 @@ func (h *Handlers) StartSessionCleanup(interval time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			h.mu.Lock()
-			now := time.Now()
-			for id, sess := range h.sessions {
-				if now.After(sess.ExpiresAt) {
-					delete(h.sessions, id)
-				}
-			}
-			h.mu.Unlock()
+			h.sessionStore.Cleanup()
 		}
 	}()
 }
@@ -140,18 +131,12 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-		h.mu.Lock()
-		sess, ok := h.sessions[cookie.Value]
-		if ok && time.Now().After(sess.ExpiresAt) {
-			delete(h.sessions, cookie.Value)
-			ok = false
-		}
-		h.mu.Unlock()
+		user, _, ok := h.sessionStore.Get(cookie.Value)
 		if !ok {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-		r = r.WithContext(setUser(r.Context(), sess.User))
+		r = r.WithContext(setUser(r.Context(), user))
 		next(w, r)
 	}
 }
@@ -177,13 +162,17 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	h.mu.Lock()
-	h.sessions[sessionID] = &session{User: user, ExpiresAt: time.Now().Add(24 * time.Hour)}
-	h.mu.Unlock()
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+	if err := h.sessionStore.Create(sessionID, user.ID, expiresAt); err != nil {
+		log.Printf("Failed to create session: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session",
 		Value:    sessionID,
 		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60, // 30 days
 		HttpOnly: true,
 		Secure:   strings.HasPrefix(h.cfg.PublicBaseURL(), "https"),
 		SameSite: http.SameSiteLaxMode,
@@ -193,9 +182,7 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie("session"); err == nil {
-		h.mu.Lock()
-		delete(h.sessions, cookie.Value)
-		h.mu.Unlock()
+		h.sessionStore.Delete(cookie.Value)
 	}
 	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login", http.StatusFound)
@@ -277,12 +264,18 @@ func (h *Handlers) handleServersList(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleServerNew(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		h.render(w, "server_form.html", map[string]any{
-			"Nav":            "servers",
-			"User":           getUser(r),
-			"IsEdit":         false,
-			"Server":         &store.Server{},
-			"ServerType":     "stdio",
-			"RemoteAuthType": "none",
+			"Nav":             "servers",
+			"User":            getUser(r),
+			"IsEdit":          false,
+			"Server":          &store.Server{},
+			"ServerType":      "stdio",
+			"RemoteAuthType":  "none",
+			"StdioMode":       "image",
+			"BuildRuntime":    "",
+			"BuildPackage":    "",
+			"BuildVersion":    "",
+			"BuildGitURL":     "",
+			"BuildDockerfile": "",
 		})
 		return
 	}
@@ -328,6 +321,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleServerDelete(w, r, id)
 	case "enumerate":
 		h.handleServerEnumerate(w, r, id)
+	case "rebuild":
+		h.handleServerRebuild(w, r, id)
 	case "access-tier":
 		h.handleAccessTier(w, r, id)
 	default:
@@ -410,6 +405,21 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 	updated.ErrorMsg = srv.ErrorMsg
 	updated.CreatedAt = srv.CreatedAt
 
+	// For build-mode stdio servers, preserve the built image tag if package hasn't changed
+	if updated.ServerType == store.ServerTypeStdio {
+		var oldCfg, newCfg store.StdioConfig
+		if json.Unmarshal(srv.Config, &oldCfg) == nil && json.Unmarshal(updated.Config, &newCfg) == nil {
+			if newCfg.Build != nil && oldCfg.Build != nil && oldCfg.Image != "" {
+				if newCfg.Build.Package == oldCfg.Build.Package &&
+					newCfg.Build.Version == oldCfg.Build.Version &&
+					newCfg.Build.Runtime == oldCfg.Build.Runtime {
+					newCfg.Image = oldCfg.Image
+					updated.Config, _ = json.Marshal(newCfg)
+				}
+			}
+		}
+	}
+
 	// For OAuth servers, preserve tokens from the existing config
 	if updated.ServerType == store.ServerTypeRemote {
 		var oldCfg, newCfg store.RemoteConfig
@@ -477,6 +487,22 @@ func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request,
 		log.Printf("Error enumerating server %s: %v", id, err)
 	}
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+}
+
+func (h *Handlers) handleServerRebuild(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	srv, _ := h.servers.Get(id)
+	if srv == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.proxy.RebuildImage(r.Context(), srv); err != nil {
+		log.Printf("Error rebuilding image for server %s: %v", srv.Name, err)
+	}
+	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
 
 // --- Access Tiers ---
@@ -818,6 +844,12 @@ func (h *Handlers) serverFormData(r *http.Request, srv *store.Server, errMsg str
 		"StdioEntrypoint": r.FormValue("stdio_entrypoint"),
 		"StdioCommand":    r.FormValue("stdio_command"),
 		"StdioEnv":        r.FormValue("stdio_env"),
+		"StdioMode":       r.FormValue("stdio_mode"),
+		"BuildRuntime":    r.FormValue("build_runtime"),
+		"BuildPackage":    r.FormValue("build_package"),
+		"BuildVersion":    r.FormValue("build_version"),
+		"BuildGitURL":     r.FormValue("build_git_url"),
+		"BuildDockerfile": r.FormValue("build_dockerfile"),
 		"HTTPImage":      r.FormValue("http_image"),
 		"HTTPPort":       r.FormValue("http_port"),
 		"HTTPURL":        r.FormValue("http_url"),
@@ -850,14 +882,38 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 	switch store.ServerType(serverType) {
 	case store.ServerTypeStdio:
 		img := strings.TrimSpace(r.FormValue("stdio_image"))
-		if img == "" {
-			return nil, fmt.Errorf("docker image is required for stdio servers")
-		}
+		stdioMode := r.FormValue("stdio_mode") // "image" or "build"
 		cfg := store.StdioConfig{
 			Image:      img,
 			Entrypoint: parseCommand(r.FormValue("stdio_entrypoint")),
 			Command:    parseCommand(r.FormValue("stdio_command")),
 			Env:        parseEnvVars(r.FormValue("stdio_env")),
+		}
+
+		if stdioMode == "build" {
+			runtime := r.FormValue("build_runtime")
+			pkg := strings.TrimSpace(r.FormValue("build_package"))
+			version := strings.TrimSpace(r.FormValue("build_version"))
+			gitURL := strings.TrimSpace(r.FormValue("build_git_url"))
+			customDockerfile := strings.TrimSpace(r.FormValue("build_dockerfile"))
+
+			if pkg == "" && gitURL == "" && customDockerfile == "" {
+				return nil, fmt.Errorf("package name, git URL, or custom Dockerfile is required for build mode")
+			}
+			if runtime != "python" && runtime != "node" {
+				return nil, fmt.Errorf("runtime must be python or node")
+			}
+
+			cfg.Build = &store.StdioBuildConfig{
+				Runtime:    runtime,
+				Package:    pkg,
+				Version:    version,
+				GitURL:     gitURL,
+				Dockerfile: customDockerfile,
+			}
+			cfg.Image = "" // will be set after build
+		} else if img == "" {
+			return nil, fmt.Errorf("docker image is required for stdio servers")
 		}
 		configJSON, err = json.Marshal(cfg)
 
@@ -960,6 +1016,14 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		cd.Command = strings.Join(cfg.Command, " ")
 		cd.EnvKeys = envKeys(cfg.Env)
 		cd.EnvVars = cfg.Env
+		if cfg.Build != nil {
+			cd.HasBuild = true
+			cd.BuildRuntime = cfg.Build.Runtime
+			cd.BuildPackage = cfg.Build.Package
+			cd.BuildVersion = cfg.Build.Version
+			cd.BuildGitURL = cfg.Build.GitURL
+			cd.BuildCustom = cfg.Build.Dockerfile != ""
+		}
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
 		json.Unmarshal(srv.Config, &cfg)
@@ -996,6 +1060,21 @@ func serverToFormData(srv *store.Server) map[string]any {
 		data["StdioEntrypoint"] = strings.Join(cfg.Entrypoint, " ")
 		data["StdioCommand"] = joinQuoted(cfg.Command)
 		data["StdioEnv"] = envToText(cfg.Env)
+		if cfg.Build != nil {
+			data["StdioMode"] = "build"
+			data["BuildRuntime"] = cfg.Build.Runtime
+			data["BuildPackage"] = cfg.Build.Package
+			data["BuildVersion"] = cfg.Build.Version
+			data["BuildGitURL"] = cfg.Build.GitURL
+			data["BuildDockerfile"] = cfg.Build.Dockerfile
+		} else {
+			data["StdioMode"] = "image"
+			data["BuildRuntime"] = ""
+			data["BuildPackage"] = ""
+			data["BuildVersion"] = ""
+			data["BuildGitURL"] = ""
+			data["BuildDockerfile"] = ""
+		}
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
 		json.Unmarshal(srv.Config, &cfg)

@@ -26,20 +26,22 @@ type Server struct {
 	oauthMgr     *oauth.Manager
 	accessStore  *store.AccessStore
 	requestLogs  *store.RequestLogStore
+	sessionStore *store.SessionStore
 	mux          *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore) *Server {
 	s := &Server{
-		cfg:         cfg,
-		servers:     servers,
-		users:       users,
-		proxy:       proxyMgr,
-		oauthMgr:    oauthMgr,
-		accessStore: accessStore,
-		requestLogs: requestLogs,
-		mux:         http.NewServeMux(),
+		cfg:          cfg,
+		servers:      servers,
+		users:        users,
+		proxy:        proxyMgr,
+		oauthMgr:     oauthMgr,
+		accessStore:  accessStore,
+		requestLogs:  requestLogs,
+		sessionStore: sessionStore,
+		mux:          http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -61,7 +63,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs, s.sessionStore)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }

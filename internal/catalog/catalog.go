@@ -96,6 +96,8 @@ type ResolvedServer struct {
 	SuggestedDisplay string                `json:"suggested_display"`
 	ServerType       string                `json:"server_type"`  // "stdio" or "remote"
 	DockerImage      string                `json:"docker_image"` // for OCI packages
+	PackageType      string                `json:"package_type,omitempty"` // "npm", "pypi" — for auto-build
+	PackageName      string                `json:"package_name,omitempty"` // package identifier — for auto-build
 	EnvVars          []EnvironmentVariable `json:"env_vars,omitempty"`
 	RemoteURL        string                `json:"remote_url"`  // for remotes
 	RemoteType       string                `json:"remote_type"` // "sse" or "streamable-http"
@@ -312,7 +314,7 @@ func Resolve(entry RegistryEntry) []ResolvedServer {
 		}
 	}
 
-	// npm/pypi packages — include as stdio hint with env var info
+	// npm/pypi packages — include as stdio hint with package metadata for auto-build
 	if len(results) == 0 {
 		for _, pkg := range info.Packages {
 			if pkg.RegistryType == "npm" || pkg.RegistryType == "pypi" {
@@ -326,6 +328,8 @@ func Resolve(entry RegistryEntry) []ResolvedServer {
 					SuggestedDisplay: display,
 					ServerType:       "stdio",
 					DockerImage:      "",
+					PackageType:      pkg.RegistryType,
+					PackageName:      pkg.Identifier,
 					EnvVars:          pkg.EnvironmentVariables,
 				}
 				results = append(results, rs)

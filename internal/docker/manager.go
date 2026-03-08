@@ -1,12 +1,16 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/netip"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -144,6 +148,11 @@ func (m *Manager) StartContainer(ctx context.Context, cfg ContainerConfig) (stri
 	}
 
 	containerName := "mcp-wrangler-" + cfg.Name
+
+	// Remove any leftover container with the same name (e.g. from a previous run
+	// that wasn't cleaned up, or from a wrangler restart).
+	m.cli.ContainerRemove(ctx, containerName, dclient.ContainerRemoveOptions{Force: true})
+
 	createResult, err := m.cli.ContainerCreate(ctx, dclient.ContainerCreateOptions{
 		Config:           containerCfg,
 		HostConfig:       hostCfg,
@@ -247,6 +256,138 @@ func (m *Manager) WaitForHTTP(ctx context.Context, containerID string, timeout t
 			return ctx.Err()
 		}
 	}
+}
+
+// ImageExists checks if a Docker image exists locally.
+func (m *Manager) ImageExists(ctx context.Context, ref string) bool {
+	_, err := m.cli.ImageInspect(ctx, ref)
+	return err == nil
+}
+
+// BuildImage builds a Docker image from a Dockerfile string.
+// The Dockerfile is sent as a tar archive to the Docker build API.
+func (m *Manager) BuildImage(ctx context.Context, dockerfile string, tag string) error {
+	// Create a tar archive containing just the Dockerfile
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	header := &tar.Header{
+		Name: "Dockerfile",
+		Size: int64(len(dockerfile)),
+		Mode: 0644,
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		return fmt.Errorf("writing tar header: %w", err)
+	}
+	if _, err := tw.Write([]byte(dockerfile)); err != nil {
+		return fmt.Errorf("writing tar body: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("closing tar: %w", err)
+	}
+
+	result, err := m.cli.ImageBuild(ctx, &buf, dclient.ImageBuildOptions{
+		Tags:       []string{tag},
+		Dockerfile: "Dockerfile",
+		Remove:     true,
+		NoCache:    false,
+	})
+	if err != nil {
+		return fmt.Errorf("building image %s: %w", tag, err)
+	}
+	defer result.Body.Close()
+
+	// Read the build output to completion and check for errors
+	if err := parseBuildOutput(result.Body); err != nil {
+		return fmt.Errorf("building image %s: %w", tag, err)
+	}
+
+	return nil
+}
+
+// parseBuildOutput reads Docker build JSON stream and checks for errors.
+func parseBuildOutput(reader io.Reader) error {
+	decoder := json.NewDecoder(reader)
+	for {
+		var msg struct {
+			Stream string `json:"stream"`
+			Error  string `json:"error"`
+		}
+		if err := decoder.Decode(&msg); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if msg.Error != "" {
+			return fmt.Errorf("%s", msg.Error)
+		}
+		if msg.Stream != "" {
+			log.Printf("[build] %s", strings.TrimRight(msg.Stream, "\n"))
+		}
+	}
+}
+
+// Dockerfile templates for auto-building from packages.
+var dockerfileTemplates = map[string]*template.Template{
+	"python": template.Must(template.New("python").Parse(`FROM python:3.11-slim
+RUN pip install --no-cache-dir {{.Package}}{{if .Version}}=={{.Version}}{{end}}
+`)),
+	"node": template.Must(template.New("node").Parse(`FROM node:20-slim
+RUN npm install -g {{.Package}}{{if .Version}}@{{.Version}}{{end}}
+`)),
+	"git-python": template.Must(template.New("git-python").Parse(`FROM python:3.11-slim
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN git clone {{.GitURL}} /app
+WORKDIR /app
+RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || pip install --no-cache-dir .
+`)),
+	"git-node": template.Must(template.New("git-node").Parse(`FROM node:20-slim
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN git clone {{.GitURL}} /app
+WORKDIR /app
+RUN npm install
+`)),
+}
+
+// BuildConfig holds the template data for Dockerfile generation.
+type BuildConfig struct {
+	Runtime string
+	Package string
+	Version string
+	GitURL  string
+}
+
+// GenerateDockerfile creates a Dockerfile from a build config.
+// If a custom Dockerfile is provided, it is returned as-is.
+func GenerateDockerfile(runtime, pkg, version, gitURL, customDockerfile string) (string, error) {
+	if customDockerfile != "" {
+		return customDockerfile, nil
+	}
+
+	data := BuildConfig{
+		Runtime: runtime,
+		Package: pkg,
+		Version: version,
+		GitURL:  gitURL,
+	}
+
+	var tmplKey string
+	if gitURL != "" {
+		tmplKey = "git-" + runtime
+	} else {
+		tmplKey = runtime
+	}
+
+	tmpl, ok := dockerfileTemplates[tmplKey]
+	if !ok {
+		return "", fmt.Errorf("unsupported build template: %s", tmplKey)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("executing dockerfile template: %w", err)
+	}
+	return buf.String(), nil
 }
 
 func (m *Manager) Close() error {

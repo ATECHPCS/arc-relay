@@ -18,6 +18,9 @@ COPY --from=builder /mcp-wrangler /usr/local/bin/mcp-wrangler
 
 RUN mkdir -p /data
 
+# Default DB path inside the container — matches the /data volume mount
+ENV MCP_WRANGLER_DB_PATH=/data/mcp-wrangler.db
+
 EXPOSE 8080
 
 ENTRYPOINT ["/usr/local/bin/mcp-wrangler"]

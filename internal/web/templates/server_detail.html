@@ -47,7 +47,22 @@
 {{if .ConfigDisplay}}
 <div class="card">
   <h2>Configuration</h2>
-  {{if .ConfigDisplay.Image}}
+  {{if .ConfigDisplay.HasBuild}}
+  <div class="detail-grid">
+    <dt>Image Source</dt><dd><span class="badge" style="background:#0d6efd;color:#fff">Auto-built from package</span></dd>
+    <dt>Runtime</dt><dd>{{.ConfigDisplay.BuildRuntime}}</dd>
+    {{if .ConfigDisplay.BuildPackage}}<dt>Package</dt><dd><code>{{.ConfigDisplay.BuildPackage}}{{if .ConfigDisplay.BuildVersion}}=={{.ConfigDisplay.BuildVersion}}{{end}}</code></dd>{{end}}
+    {{if .ConfigDisplay.BuildGitURL}}<dt>Git URL</dt><dd><code>{{.ConfigDisplay.BuildGitURL}}</code></dd>{{end}}
+    {{if .ConfigDisplay.BuildCustom}}<dt>Dockerfile</dt><dd>Custom</dd>{{end}}
+    {{if .ConfigDisplay.Image}}<dt>Built Image</dt><dd><code>{{.ConfigDisplay.Image}}</code></dd>{{end}}
+    {{if .ConfigDisplay.Command}}<dt>Command</dt><dd><code>{{.ConfigDisplay.Command}}</code></dd>{{end}}
+  </div>
+  <div style="margin-top: 0.75rem;">
+    <form method="POST" action="/servers/{{.Server.ID}}/rebuild" style="display:inline">
+      <button type="submit" class="btn btn-outline btn-sm">Rebuild Image</button>
+    </form>
+  </div>
+  {{else if .ConfigDisplay.Image}}
   <div class="detail-grid">
     <dt>Docker Image</dt><dd><code>{{.ConfigDisplay.Image}}</code></dd>
     {{if .ConfigDisplay.Command}}<dt>Command</dt><dd><code>{{.ConfigDisplay.Command}}</code></dd>{{end}}

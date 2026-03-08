@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,9 +42,38 @@ type Server struct {
 // StdioConfig holds config for Docker-managed stdio servers.
 type StdioConfig struct {
 	Image      string            `json:"image"`
+	Build      *StdioBuildConfig `json:"build,omitempty"`
 	Entrypoint []string          `json:"entrypoint,omitempty"`
 	Command    []string          `json:"command,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
+}
+
+// StdioBuildConfig holds metadata for auto-building a Docker image from a package.
+type StdioBuildConfig struct {
+	Runtime    string `json:"runtime"`              // "python" or "node"
+	Package    string `json:"package"`              // pip/npm package name
+	Version    string `json:"version,omitempty"`    // package version (empty = latest)
+	GitURL     string `json:"git_url,omitempty"`    // alternative: build from git repo
+	Dockerfile string `json:"dockerfile,omitempty"` // alternative: custom Dockerfile text
+}
+
+// BuildImageTag returns the Docker image tag for an auto-built image.
+func (b *StdioBuildConfig) BuildImageTag() string {
+	name := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == '/' {
+			return r
+		}
+		if r >= 'A' && r <= 'Z' {
+			return r + 32 // lowercase
+		}
+		return '-'
+	}, b.Package)
+	name = strings.Trim(name, "-")
+	version := b.Version
+	if version == "" {
+		version = "latest"
+	}
+	return fmt.Sprintf("mcp-wrangler-build/%s:%s", name, version)
 }
 
 // HTTPConfig holds config for Docker-managed or external HTTP servers.
