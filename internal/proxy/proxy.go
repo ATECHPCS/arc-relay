@@ -377,6 +377,44 @@ func (m *Manager) GetBackend(serverID string) (Backend, bool) {
 	return b, ok
 }
 
+// Docker returns the Docker manager for image/container inspection.
+func (m *Manager) Docker() *dockermgr.Manager {
+	return m.docker
+}
+
+// GetContainerID returns the Docker container ID for a managed server, if any.
+func (m *Manager) GetContainerID(serverID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	id, ok := m.containers[serverID]
+	return id, ok
+}
+
+// RebuildAndRestart force-rebuilds the image then restarts the server.
+func (m *Manager) RebuildAndRestart(ctx context.Context, srv *store.Server) error {
+	if err := m.RebuildImage(ctx, srv); err != nil {
+		return fmt.Errorf("rebuild failed: %w", err)
+	}
+	m.StopServer(ctx, srv.ID)
+	// Re-fetch to get updated config (image tag may have changed)
+	updated, err := m.servers.Get(srv.ID)
+	if err != nil || updated == nil {
+		return fmt.Errorf("failed to refresh server after rebuild: %w", err)
+	}
+	return m.StartServer(ctx, updated)
+}
+
+// RecreateContainer stops the current container and starts a fresh one.
+// Used for image-based servers where the image was updated externally.
+func (m *Manager) RecreateContainer(ctx context.Context, srv *store.Server) error {
+	m.StopServer(ctx, srv.ID)
+	updated, err := m.servers.Get(srv.ID)
+	if err != nil || updated == nil {
+		return fmt.Errorf("failed to refresh server: %w", err)
+	}
+	return m.StartServer(ctx, updated)
+}
+
 // StopAll stops all running servers.
 func (m *Manager) StopAll(ctx context.Context) {
 	m.mu.Lock()

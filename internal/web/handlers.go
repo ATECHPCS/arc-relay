@@ -51,6 +51,13 @@ type ConfigDisplay struct {
 	BuildVersion   string
 	BuildGitURL    string
 	BuildCustom    bool
+	// Image staleness fields
+	ImageID          string // sha256 ID of the current image tag
+	ImageCreated     string // human-readable image creation time
+	ImageAge         string // human-readable age (e.g., "3 days ago")
+	ContainerImageID string // sha256 ID used when container was created
+	ImageStale       bool   // true if container is running an older image
+	IsDocker         bool   // true if this server uses Docker (has an image)
 }
 
 // Handlers holds dependencies for web UI handlers.
@@ -328,6 +335,10 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleServerEnumerate(w, r, id)
 	case "rebuild":
 		h.handleServerRebuild(w, r, id)
+	case "rebuild-restart":
+		h.handleServerRebuildRestart(w, r, id)
+	case "recreate":
+		h.handleServerRecreate(w, r, id)
 	case "access-tier":
 		h.handleAccessTier(w, r, id)
 	case "middleware":
@@ -372,11 +383,31 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
 	}
 
+	cd := buildConfigDisplay(srv)
+
+	// Populate image staleness info for Docker-managed servers
+	if cd.Image != "" && h.proxy.Docker() != nil {
+		ctx := r.Context()
+		if imgInfo, err := h.proxy.Docker().InspectImage(ctx, cd.Image); err == nil {
+			cd.ImageID = imgInfo.ID
+			if !imgInfo.Created.IsZero() {
+				cd.ImageCreated = imgInfo.Created.Format("2006-01-02 15:04:05")
+				cd.ImageAge = humanizeAge(imgInfo.Created)
+			}
+		}
+		if containerID, ok := h.proxy.GetContainerID(srv.ID); ok {
+			if cImgID, err := h.proxy.Docker().GetContainerImageID(ctx, containerID); err == nil {
+				cd.ContainerImageID = cImgID
+				cd.ImageStale = cd.ImageID != "" && cd.ImageID != cImgID
+			}
+		}
+	}
+
 	h.render(w, "server_detail.html", map[string]any{
 		"Nav":              "servers",
 		"User":             getUser(r),
 		"Server":           srv,
-		"ConfigDisplay":    buildConfigDisplay(srv),
+		"ConfigDisplay":    cd,
 		"BaseURL":          h.cfg.PublicBaseURL(),
 		"Endpoints":        h.proxy.Endpoints.Get(srv.ID),
 		"TierMap":          tierMap,
@@ -469,6 +500,10 @@ func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id 
 		http.NotFound(w, r)
 		return
 	}
+	// Clean up stale backend/container if server is in error state
+	if srv.Status == store.StatusError {
+		h.proxy.StopServer(r.Context(), id)
+	}
 	if err := h.proxy.StartServer(r.Context(), srv); err != nil {
 		log.Printf("Error starting server %s: %v", srv.Name, err)
 	}
@@ -518,6 +553,38 @@ func (h *Handlers) handleServerRebuild(w http.ResponseWriter, r *http.Request, i
 	}
 	if err := h.proxy.RebuildImage(r.Context(), srv); err != nil {
 		log.Printf("Error rebuilding image for server %s: %v", srv.Name, err)
+	}
+	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
+}
+
+func (h *Handlers) handleServerRebuildRestart(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	srv, _ := h.servers.Get(id)
+	if srv == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.proxy.RebuildAndRestart(r.Context(), srv); err != nil {
+		log.Printf("Error rebuild+restart for server %s: %v", srv.Name, err)
+	}
+	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
+}
+
+func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	srv, _ := h.servers.Get(id)
+	if srv == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := h.proxy.RecreateContainer(r.Context(), srv); err != nil {
+		log.Printf("Error recreating container for server %s: %v", srv.Name, err)
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -1107,6 +1174,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		var cfg store.StdioConfig
 		json.Unmarshal(srv.Config, &cfg)
 		cd.Image = cfg.Image
+		cd.IsDocker = true
 		cd.Command = strings.Join(cfg.Command, " ")
 		cd.EnvKeys = envKeys(cfg.Env)
 		cd.EnvVars = cfg.Env
@@ -1122,6 +1190,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		var cfg store.HTTPConfig
 		json.Unmarshal(srv.Config, &cfg)
 		cd.Image = cfg.Image
+		cd.IsDocker = cfg.Image != "" // Docker-managed if image set (vs external URL)
 		cd.Port = cfg.Port
 		cd.URL = cfg.URL
 		cd.HealthCheck = cfg.HealthCheck
@@ -1191,6 +1260,31 @@ func serverToFormData(srv *store.Server) map[string]any {
 		data["OAuthScopes"] = cfg.Auth.Scopes
 	}
 	return data
+}
+
+func humanizeAge(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		if h == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", h)
+	default:
+		days := int(d.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	}
 }
 
 func parseEnvVars(text string) map[string]string {

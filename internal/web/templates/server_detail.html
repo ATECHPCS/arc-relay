@@ -11,9 +11,18 @@
     <form method="POST" action="/servers/{{.Server.ID}}/stop" style="display:inline">
       <button type="submit" class="btn btn-outline">Stop</button>
     </form>
+    {{if .ConfigDisplay.ImageStale}}
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
+          onsubmit="return confirm('Recreate container with updated image?')">
+      <button type="submit" class="btn btn-outline" style="border-color:#e6a817;color:#664d03">Recreate Container</button>
+    </form>
+    {{end}}
     {{else if eq (printf "%s" .Server.Status) "error"}}
     <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
       <button type="submit" class="btn btn-success">Restart</button>
+    </form>
+    <form method="POST" action="/servers/{{.Server.ID}}/stop" style="display:inline">
+      <button type="submit" class="btn btn-outline">Stop</button>
     </form>
     {{end}}
     {{if eq (printf "%s" .Server.Status) "running"}}
@@ -56,11 +65,25 @@
     {{if .ConfigDisplay.BuildCustom}}<dt>Dockerfile</dt><dd>Custom</dd>{{end}}
     {{if .ConfigDisplay.Image}}<dt>Built Image</dt><dd><code>{{.ConfigDisplay.Image}}</code></dd>{{end}}
     {{if .ConfigDisplay.Command}}<dt>Command</dt><dd><code>{{.ConfigDisplay.Command}}</code></dd>{{end}}
+    {{if .ConfigDisplay.ImageAge}}<dt>Image Built</dt><dd>{{.ConfigDisplay.ImageAge}}</dd>{{end}}
+    {{if .ConfigDisplay.ImageStale}}
+    <dt>Image Status</dt>
+    <dd>
+      <span class="badge" style="background:#fff3cd;color:#664d03">Image Updated</span>
+      <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">Restart to use the latest image</span>
+    </dd>
+    {{end}}
   </div>
   <div style="margin-top: 0.75rem;">
     <form method="POST" action="/servers/{{.Server.ID}}/rebuild" style="display:inline">
       <button type="submit" class="btn btn-outline btn-sm">Rebuild Image</button>
     </form>
+    {{if eq (printf "%s" .Server.Status) "running"}}
+    <form method="POST" action="/servers/{{.Server.ID}}/rebuild-restart" style="display:inline"
+          onsubmit="return confirm('This will rebuild the image and restart the server. Continue?')">
+      <button type="submit" class="btn btn-primary btn-sm">Rebuild &amp; Restart</button>
+    </form>
+    {{end}}
   </div>
   {{else if .ConfigDisplay.Image}}
   <div class="detail-grid">
@@ -70,7 +93,23 @@
     {{if .ConfigDisplay.URL}}<dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>{{end}}
     {{if .ConfigDisplay.HealthCheck}}<dt>Health Check</dt><dd><code>{{.ConfigDisplay.HealthCheck}}</code></dd>{{end}}
     {{if .ConfigDisplay.AuthType}}<dt>Auth Type</dt><dd>{{.ConfigDisplay.AuthType}}</dd>{{end}}
+    {{if .ConfigDisplay.ImageAge}}<dt>Image Built</dt><dd>{{.ConfigDisplay.ImageAge}}</dd>{{end}}
+    {{if .ConfigDisplay.ImageStale}}
+    <dt>Image Status</dt>
+    <dd>
+      <span class="badge" style="background:#fff3cd;color:#664d03">Image Updated</span>
+      <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">Recreate container to use the latest image</span>
+    </dd>
+    {{end}}
   </div>
+  {{if and .ConfigDisplay.IsDocker (eq (printf "%s" .Server.Status) "running")}}
+  <div style="margin-top: 0.75rem;">
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
+          onsubmit="return confirm('This will stop and recreate the container from the current local image. Continue?')">
+      <button type="submit" class="btn btn-outline btn-sm">Recreate Container</button>
+    </form>
+  </div>
+  {{end}}
   {{else if .ConfigDisplay.URL}}
   <div class="detail-grid">
     <dt>URL</dt><dd><code>{{.ConfigDisplay.URL}}</code></dd>

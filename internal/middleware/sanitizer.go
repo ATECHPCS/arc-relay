@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
@@ -156,25 +155,4 @@ func (s *Sanitizer) RedactText(text string) string {
 		}
 	}
 	return text
-}
-
-// contentToString extracts readable text from MCP result JSON for scanning.
-// MCP tool results typically contain a "content" array with text entries.
-func contentToString(result json.RawMessage) string {
-	var r struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if json.Unmarshal(result, &r) == nil && len(r.Content) > 0 {
-		var parts []string
-		for _, c := range r.Content {
-			if c.Text != "" {
-				parts = append(parts, c.Text)
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	return string(result)
 }

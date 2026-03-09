@@ -390,6 +390,42 @@ func GenerateDockerfile(runtime, pkg, version, gitURL, customDockerfile string) 
 	return buf.String(), nil
 }
 
+// ImageInfo holds metadata from a Docker image inspection.
+type ImageInfo struct {
+	ID      string    // content-addressable image ID (sha256:...)
+	Created time.Time // image creation timestamp
+	Size    int64     // total image size in bytes
+	Tags    []string  // repo tags referencing this image
+}
+
+// InspectImage returns metadata for a Docker image.
+func (m *Manager) InspectImage(ctx context.Context, ref string) (*ImageInfo, error) {
+	result, err := m.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return nil, fmt.Errorf("inspecting image %s: %w", ref, err)
+	}
+	info := &ImageInfo{
+		ID:   result.ID,
+		Size: result.Size,
+		Tags: result.RepoTags,
+	}
+	if result.Created != "" {
+		if t, err := time.Parse(time.RFC3339Nano, result.Created); err == nil {
+			info.Created = t
+		}
+	}
+	return info, nil
+}
+
+// GetContainerImageID returns the image ID that the container was created with.
+func (m *Manager) GetContainerImageID(ctx context.Context, containerID string) (string, error) {
+	result, err := m.cli.ContainerInspect(ctx, containerID, dclient.ContainerInspectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("inspecting container %s: %w", containerID, err)
+	}
+	return result.Container.Image, nil
+}
+
 func (m *Manager) Close() error {
 	return m.cli.Close()
 }
