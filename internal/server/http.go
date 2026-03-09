@@ -57,9 +57,10 @@ func (s *Server) routes() {
 	limiter := NewRateLimiter(100, 200) // 100 req/sec sustained, 200 burst
 	s.mux.Handle("/mcp/", APIKeyAuth(s.users)(limiter.Middleware(http.HandlerFunc(s.handleMCPProxy))))
 
-	// REST API for server management
-	s.mux.HandleFunc("/api/servers", s.handleServers)
-	s.mux.HandleFunc("/api/servers/", s.handleServerByID)
+	// REST API for server management (API key auth required)
+	apiAuth := APIKeyAuth(s.users)
+	s.mux.Handle("/api/servers", apiAuth(http.HandlerFunc(s.handleServers)))
+	s.mux.Handle("/api/servers/", apiAuth(http.HandlerFunc(s.handleServerByID)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -353,6 +354,10 @@ func (s *Server) listServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
+	if !requireWriteAccess(w, r) {
+		return
+	}
+
 	var srv store.Server
 	if err := json.NewDecoder(r.Body).Decode(&srv); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -361,6 +366,13 @@ func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
 
 	if srv.Name == "" || srv.DisplayName == "" || srv.ServerType == "" {
 		http.Error(w, `{"error":"name, display_name, and server_type are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Check for duplicate name
+	existing, _ := s.servers.GetByName(srv.Name)
+	if existing != nil {
+		http.Error(w, `{"error":"server name already exists"}`, http.StatusConflict)
 		return
 	}
 
@@ -427,6 +439,10 @@ func (s *Server) getServer(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string) {
+	if !requireWriteAccess(w, r) {
+		return
+	}
+
 	existing, err := s.servers.Get(id)
 	if err != nil || existing == nil {
 		http.Error(w, `{"error":"server not found"}`, http.StatusNotFound)
@@ -450,6 +466,10 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string)
 }
 
 func (s *Server) deleteServer(w http.ResponseWriter, r *http.Request, id string) {
+	if !requireAdminAccess(w, r) {
+		return
+	}
+
 	s.proxy.StopServer(r.Context(), id)
 	if err := s.servers.Delete(id); err != nil {
 		http.Error(w, `{"error":"failed to delete server"}`, http.StatusInternalServerError)
@@ -461,6 +481,10 @@ func (s *Server) deleteServer(w http.ResponseWriter, r *http.Request, id string)
 func (s *Server) startServer(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !requireWriteAccess(w, r) {
 		return
 	}
 
@@ -482,6 +506,10 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, id string) 
 func (s *Server) stopServer(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !requireWriteAccess(w, r) {
 		return
 	}
 

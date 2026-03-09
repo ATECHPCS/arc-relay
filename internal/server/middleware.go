@@ -61,3 +61,33 @@ func AdminOnly(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// requireWriteAccess checks that the authenticated user has write or admin access level.
+// Returns true if access is granted, false if a 403 was sent.
+func requireWriteAccess(w http.ResponseWriter, r *http.Request) bool {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"authentication required"}`, http.StatusUnauthorized)
+		return false
+	}
+	if user.AccessLevel != "write" && user.AccessLevel != "admin" {
+		http.Error(w, `{"error":"write access required"}`, http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// requireAdminAccess checks that the authenticated user has admin access level.
+// Returns true if access is granted, false if a 403 was sent.
+func requireAdminAccess(w http.ResponseWriter, r *http.Request) bool {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		http.Error(w, `{"error":"authentication required"}`, http.StatusUnauthorized)
+		return false
+	}
+	if user.AccessLevel != "admin" {
+		http.Error(w, `{"error":"admin access required"}`, http.StatusForbidden)
+		return false
+	}
+	return true
+}
