@@ -103,6 +103,9 @@ type RemoteAuth struct {
 	AccessToken  string `json:"access_token,omitempty"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	TokenExpiry  string `json:"token_expiry,omitempty"` // RFC3339
+	// Registration tracking: stored so we can detect redirect_uri changes
+	RegisteredRedirectURI string `json:"registered_redirect_uri,omitempty"`
+	RegistrationEndpoint  string `json:"registration_endpoint,omitempty"`
 }
 
 type ServerStore struct {

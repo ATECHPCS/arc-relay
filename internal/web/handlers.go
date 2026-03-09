@@ -476,8 +476,15 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 				newCfg.Auth.AccessToken = oldCfg.Auth.AccessToken
 				newCfg.Auth.RefreshToken = oldCfg.Auth.RefreshToken
 				newCfg.Auth.TokenExpiry = oldCfg.Auth.TokenExpiry
-				updated.Config, _ = json.Marshal(newCfg)
 			}
+			// Preserve registration tracking fields
+			if newCfg.Auth.RegisteredRedirectURI == "" {
+				newCfg.Auth.RegisteredRedirectURI = oldCfg.Auth.RegisteredRedirectURI
+			}
+			if newCfg.Auth.RegistrationEndpoint == "" {
+				newCfg.Auth.RegistrationEndpoint = oldCfg.Auth.RegistrationEndpoint
+			}
+			updated.Config, _ = json.Marshal(newCfg)
 		}
 	}
 
@@ -844,6 +851,15 @@ func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-re-register if redirect URI has changed (e.g. base URL update)
+	if reregistered, err := h.oauth.ReRegisterIfNeeded(r.Context(), serverID, srv, &cfg); err != nil {
+		log.Printf("OAuth re-registration failed for %s: %v", srv.Name, err)
+		http.Error(w, fmt.Sprintf("OAuth re-registration failed: %s", err), http.StatusInternalServerError)
+		return
+	} else if reregistered {
+		log.Printf("OAuth re-registered for %s with updated redirect URI", srv.Name)
+	}
+
 	authURL, err := h.oauth.StartAuthFlow(serverID, cfg.Auth)
 	if err != nil {
 		log.Printf("Error starting OAuth flow for %s: %v", srv.Name, err)
@@ -929,6 +945,7 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 		} else if reg != nil {
 			discovery.ClientID = reg.ClientID
 			discovery.ClientSecret = reg.ClientSecret
+			discovery.RegisteredRedirectURI = h.oauth.CallbackURL()
 		}
 	}
 
@@ -1131,11 +1148,15 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 					if auth.Scopes == "" && len(disc.ScopesSupported) > 0 {
 						auth.Scopes = strings.Join(disc.ScopesSupported, " ")
 					}
+					if disc.RegistrationEndpoint != "" {
+						auth.RegistrationEndpoint = disc.RegistrationEndpoint
+					}
 					if auth.ClientID == "" && disc.RegistrationEndpoint != "" {
 						reg, _ := oauth.RegisterClient(r.Context(), disc.RegistrationEndpoint, h.oauth.CallbackURL())
 						if reg != nil {
 							auth.ClientID = reg.ClientID
 							auth.ClientSecret = reg.ClientSecret
+							auth.RegisteredRedirectURI = h.oauth.CallbackURL()
 						}
 					}
 				}

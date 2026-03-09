@@ -83,9 +83,6 @@ func (p *RemoteProxy) SendNotification(n *mcp.Notification) error {
 // Send forwards an MCP request to the remote server.
 func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, error) {
 	resp, statusCode, err := p.doSend(ctx, req)
-	if err != nil {
-		return nil, err
-	}
 
 	// If 401 and OAuth, try refreshing token and retry once
 	if statusCode == http.StatusUnauthorized && p.config.Auth.Type == "oauth" && p.oauthManager != nil {
@@ -94,11 +91,11 @@ func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 			return nil, fmt.Errorf("token refresh after 401 failed: %w", refreshErr)
 		}
 		resp, _, err = p.doSend(ctx, req)
-		if err != nil {
-			return nil, err
-		}
 	}
 
+	if err != nil {
+		return nil, err
+	}
 	return resp, nil
 }
 

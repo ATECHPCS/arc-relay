@@ -90,6 +90,91 @@ func (m *Manager) CallbackURL() string {
 	return m.baseURL + "/oauth/callback"
 }
 
+// ReRegisterIfNeeded checks if the current callback URL matches the registered
+// redirect URI. If not, it re-discovers OAuth endpoints and performs DCR to get
+// new credentials with the correct redirect URI. Returns updated auth config.
+func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *store.Server, cfg *store.RemoteConfig) (bool, error) {
+	callbackURL := m.CallbackURL()
+	auth := cfg.Auth
+
+	// If redirect URI matches the current callback, nothing to do
+	if auth.RegisteredRedirectURI == callbackURL {
+		return false, nil
+	}
+
+	// If we've never tracked the redirect URI, try to discover a registration
+	// endpoint and re-register proactively. This handles the case where existing
+	// servers were registered before tracking was added.
+	if auth.RegisteredRedirectURI == "" {
+		log.Printf("OAuth redirect URI not tracked for server %s, attempting discovery + re-registration", serverID)
+	} else {
+		log.Printf("OAuth redirect URI changed for server %s: %q → %q, re-registering", serverID, auth.RegisteredRedirectURI, callbackURL)
+	}
+
+	// Try using stored registration endpoint first, fall back to re-discovery
+	regEndpoint := auth.RegistrationEndpoint
+	if regEndpoint == "" {
+		// Try discovering from the server URL first, then from the auth URL origin
+		// (the OAuth provider may be on a different host than the MCP server)
+		var disc *OAuthDiscovery
+		for _, tryURL := range []string{cfg.URL, auth.AuthURL} {
+			if tryURL == "" {
+				continue
+			}
+			log.Printf("Discovering OAuth for server %s at %s", serverID, tryURL)
+			d, err := DiscoverOAuth(ctx, tryURL)
+			if err != nil {
+				log.Printf("OAuth discovery error for server %s at %s: %v", serverID, tryURL, err)
+				continue
+			}
+			if d != nil && d.RegistrationEndpoint != "" {
+				disc = d
+				log.Printf("OAuth discovery found registration endpoint: %s", d.RegistrationEndpoint)
+				break
+			}
+		}
+		if disc == nil || disc.RegistrationEndpoint == "" {
+			if auth.RegisteredRedirectURI == "" {
+				// Never tracked — can't re-register, proceed with existing credentials
+				log.Printf("No registration endpoint found for server %s, proceeding with existing credentials", serverID)
+				return false, nil
+			}
+			return false, fmt.Errorf("redirect URI changed but cannot re-register: no registration endpoint found (update client credentials manually)")
+		}
+		regEndpoint = disc.RegistrationEndpoint
+	}
+
+	reg, err := RegisterClient(ctx, regEndpoint, callbackURL)
+	if err != nil {
+		return false, fmt.Errorf("re-registration failed: %w", err)
+	}
+
+	// Update auth config with new credentials
+	cfg.Auth.ClientID = reg.ClientID
+	cfg.Auth.ClientSecret = reg.ClientSecret
+	cfg.Auth.RegisteredRedirectURI = callbackURL
+	cfg.Auth.RegistrationEndpoint = regEndpoint
+	// Clear old tokens since they belong to the old client
+	cfg.Auth.AccessToken = ""
+	cfg.Auth.RefreshToken = ""
+	cfg.Auth.TokenExpiry = ""
+
+	// Persist to DB
+	configJSON, err := json.Marshal(cfg)
+	if err != nil {
+		return false, fmt.Errorf("marshaling updated config: %w", err)
+	}
+	m.servers.UpdateConfig(serverID, configJSON)
+
+	// Clear cached tokens
+	m.mu.Lock()
+	delete(m.tokens, serverID)
+	m.mu.Unlock()
+
+	log.Printf("OAuth re-registered for server %s: new client_id=%s", serverID, reg.ClientID)
+	return true, nil
+}
+
 // StartAuthFlow begins an OAuth authorization code flow with PKCE.
 // Returns the full authorization URL to redirect the user to.
 func (m *Manager) StartAuthFlow(serverID string, auth store.RemoteAuth) (string, error) {

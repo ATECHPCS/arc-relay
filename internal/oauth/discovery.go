@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -19,6 +20,7 @@ type OAuthDiscovery struct {
 	ScopesSupported      []string `json:"scopes_supported,omitempty"`
 	ClientID             string   `json:"client_id,omitempty"`
 	ClientSecret         string   `json:"client_secret,omitempty"`
+	RegisteredRedirectURI string  `json:"registered_redirect_uri,omitempty"`
 }
 
 // ClientRegistration holds the result of dynamic client registration.
@@ -38,13 +40,18 @@ func DiscoverOAuth(ctx context.Context, serverURL string) (*OAuthDiscovery, erro
 	}
 	origin := parsed.Scheme + "://" + parsed.Host
 
-	// Step 1: Probe /.well-known/oauth-protected-resource
+	// Step 1: Probe /.well-known/oauth-protected-resource to find the auth server
 	authServer, err := probeProtectedResource(ctx, origin)
 	if err != nil || authServer == "" {
-		return nil, nil
+		// Fallback: try the origin itself as the authorization server.
+		// Some providers (e.g. Shortcut) only expose oauth-authorization-server
+		// without the oauth-protected-resource endpoint.
+		log.Printf("OAuth discovery: no protected-resource at %s, falling back to origin as auth server", origin)
+		authServer = origin
 	}
 
 	// Step 2: Probe /.well-known/oauth-authorization-server on the auth server
+	log.Printf("OAuth discovery: probing authorization server at %s", authServer)
 	discovery, err := probeAuthorizationServer(ctx, authServer)
 	if err != nil || discovery == nil {
 		return nil, nil
