@@ -1011,6 +1011,13 @@ func (h *Handlers) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	serverID, err := h.oauth.HandleCallback(r.Context(), state, code)
 	if err != nil {
+		// On duplicate callbacks (browser double-request), the state is already
+		// consumed but tokens were acquired. Redirect to dashboard gracefully.
+		if strings.Contains(err.Error(), "unknown or expired OAuth state") {
+			log.Printf("OAuth callback: duplicate or expired state (likely double-request), redirecting to dashboard")
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
 		log.Printf("OAuth callback error: %v", err)
 		http.Error(w, fmt.Sprintf("OAuth callback failed: %s", err), http.StatusBadRequest)
 		return

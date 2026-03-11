@@ -463,17 +463,38 @@ function updateTier(el) {
 <div class="card">
   <h2>Connection Examples</h2>
   <p style="margin-bottom: 0.75rem; font-size: 0.9rem; color: var(--text-muted)">
-    Use these snippets to connect AI tools to this MCP server through MCP Wrangler.
+    Connect AI tools to this MCP server through MCP Wrangler.
   </p>
 
-  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Code</h3>
-  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; margin-bottom: 1rem;"><code>claude mcp add --transport http {{.Server.Name}} {{.BaseURL}}/mcp/{{.Server.Name}} \
-  --header "Authorization: Bearer YOUR_API_KEY"</code></pre>
+  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">mcp-sync CLI (Recommended)</h3>
+  <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+    The easiest way to connect. Handles config files, auth headers, and per-project management automatically.
+  </p>
+  <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
+    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; flex:1; margin:0;"><code id="sync-cmd">mcp-sync add {{.Server.Name}}</code></pre>
+    <button type="button" class="btn btn-outline btn-sm" onclick="copyText('sync-cmd')" title="Copy command">Copy</button>
+  </div>
+  <details style="margin-bottom: 1rem;">
+    <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer; margin-bottom: 0.5rem;">First-time setup &amp; install</summary>
+    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto; margin: 0.5rem 0;"><code># Install (Linux)
+sudo curl -fsSL https://github.com/JeremiahChurch/mcp-sync/releases/latest/download/mcp-sync-linux-amd64 \
+  -o /usr/local/bin/mcp-sync && sudo chmod +x /usr/local/bin/mcp-sync
 
-  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">Claude Desktop (claude_desktop_config.json)</h3>
-  <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto;"><code>{
+# Install (macOS Apple Silicon)
+sudo curl -fsSL https://github.com/JeremiahChurch/mcp-sync/releases/latest/download/mcp-sync-darwin-arm64 \
+  -o /usr/local/bin/mcp-sync && sudo chmod +x /usr/local/bin/mcp-sync
+
+# First-time setup — enter this wrangler's URL and your API key
+mcp-sync init</code></pre>
+  </details>
+
+  <details style="margin-bottom: 0.75rem;">
+    <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">Claude Code (.mcp.json) — manual setup</summary>
+    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0.3rem;">Add to <code>.mcp.json</code> in your project root:</p>
+    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto;"><code>{
   "mcpServers": {
     "{{.Server.Name}}": {
+      "type": "http",
       "url": "{{.BaseURL}}/mcp/{{.Server.Name}}",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
@@ -481,5 +502,33 @@ function updateTier(el) {
     }
   }
 }</code></pre>
+  </details>
+
+  <details>
+    <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">Claude Desktop (claude_desktop_config.json) — manual setup</summary>
+    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0.3rem;">Config file: macOS <code>~/Library/Application Support/Claude/</code> · Windows <code>%APPDATA%\Claude\</code> · Linux <code>~/.config/Claude/</code></p>
+    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto;"><code>{
+  "mcpServers": {
+    "{{.Server.Name}}": {
+      "type": "http",
+      "url": "{{.BaseURL}}/mcp/{{.Server.Name}}",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}</code></pre>
+  </details>
+
+  <script>
+  function copyText(id) {
+    var text = document.getElementById(id).textContent;
+    navigator.clipboard.writeText(text).then(function() {
+      var btn = document.getElementById(id).closest('div').querySelector('button');
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+    });
+  }
+  </script>
 </div>
 {{end}}
