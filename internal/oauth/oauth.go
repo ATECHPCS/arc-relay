@@ -358,7 +358,7 @@ func (m *Manager) refreshToken(ctx context.Context, serverID string) error {
 	m.mu.Unlock()
 
 	if !ok || ts.RefreshToken == "" {
-		return fmt.Errorf("no refresh token available for server %s", serverID)
+		return fmt.Errorf("no refresh token available for server %s — reauthorize via the server detail page", serverID)
 	}
 
 	srv, err := m.servers.Get(serverID)
@@ -379,10 +379,20 @@ func (m *Manager) refreshToken(ctx context.Context, serverID string) error {
 	if cfg.Auth.ClientSecret != "" {
 		data.Set("client_secret", cfg.Auth.ClientSecret)
 	}
+	// Some providers require redirect_uri on refresh requests
+	if cfg.Auth.RegisteredRedirectURI != "" {
+		data.Set("redirect_uri", cfg.Auth.RegisteredRedirectURI)
+	}
 
 	newTS, err := m.tokenRequest(ctx, cfg.Auth.TokenURL, data)
 	if err != nil {
-		return fmt.Errorf("token refresh failed: %w", err)
+		// On invalid_grant (revoked/expired refresh token), clear stale tokens
+		// so the UI shows "Not Authorized" with a reauthorize button
+		if strings.Contains(err.Error(), "invalid_grant") {
+			log.Printf("OAuth refresh token invalid for server %s, clearing stale tokens", serverID)
+			m.clearTokens(serverID, srv, &cfg)
+		}
+		return fmt.Errorf("token refresh failed (reauthorize via server detail page): %w", err)
 	}
 
 	// Some providers don't return a new refresh token; keep the old one
@@ -448,6 +458,26 @@ func (m *Manager) tokenRequest(ctx context.Context, tokenURL string, data url.Va
 		ts.ExpiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
 	}
 	return ts, nil
+}
+
+// clearTokens removes stale tokens from memory and DB so the UI reflects "Not Authorized".
+func (m *Manager) clearTokens(serverID string, srv *store.Server, cfg *store.RemoteConfig) {
+	cfg.Auth.AccessToken = ""
+	cfg.Auth.RefreshToken = ""
+	cfg.Auth.TokenExpiry = ""
+
+	configJSON, err := json.Marshal(cfg)
+	if err != nil {
+		log.Printf("Failed to marshal config when clearing tokens for %s: %v", serverID, err)
+		return
+	}
+	if err := m.servers.UpdateConfig(serverID, configJSON); err != nil {
+		log.Printf("Failed to clear tokens in DB for %s: %v", serverID, err)
+	}
+
+	m.mu.Lock()
+	delete(m.tokens, serverID)
+	m.mu.Unlock()
 }
 
 func (m *Manager) saveTokens(serverID string, srv *store.Server, cfg *store.RemoteConfig, ts *TokenSet) error {

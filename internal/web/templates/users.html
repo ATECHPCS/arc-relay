@@ -6,6 +6,7 @@
 
 <div class="card">
   {{if .Users}}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr><th>Username</th><th>Role</th><th>Access Level</th><th>Created</th><th>Actions</th></tr>
@@ -32,6 +33,7 @@
       {{end}}
     </tbody>
   </table>
+  </div>
   {{else}}
   <div class="empty-state"><p>No users found.</p></div>
   {{end}}

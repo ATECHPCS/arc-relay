@@ -261,6 +261,7 @@
 {{if .MiddlewareEvents}}
 <div class="card">
   <h2>Middleware Events <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .MiddlewareEvents}}</span></h2>
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -285,6 +286,7 @@
       {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 
@@ -302,6 +304,7 @@
 {{if .Endpoints.Tools}}
 <div class="card">
   <h2>Tools <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Tools}}</span></h2>
+  <div class="table-wrap">
   <table class="table">
     <thead>
       <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
@@ -328,12 +331,14 @@
       {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 
 {{if .Endpoints.Resources}}
 <div class="card">
   <h2>Resources <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Resources}}</span></h2>
+  <div class="table-wrap">
   <table class="table">
     <thead>
       <tr><th>URI</th><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
@@ -361,12 +366,14 @@
       {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 
 {{if .Endpoints.Prompts}}
 <div class="card">
   <h2>Prompts <span class="badge" style="background:#6c757d;color:#fff;font-size:0.8rem;margin-left:0.5rem">{{len .Endpoints.Prompts}}</span></h2>
+  <div class="table-wrap">
   <table class="table">
     <thead>
       <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
@@ -393,6 +400,7 @@
       {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 
@@ -423,6 +431,7 @@ function updateTier(el) {
 {{if .RecentLogs}}
 <div class="card">
   <h2>Recent Activity</h2>
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -447,6 +456,7 @@ function updateTier(el) {
       {{end}}
     </tbody>
   </table>
+  </div>
 </div>
 {{end}}
 

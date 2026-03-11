@@ -8,6 +8,7 @@
 <div class="card">
   <h2>MCP Servers</h2>
   {{if .Servers}}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -51,6 +52,7 @@
       {{end}}
     </tbody>
   </table>
+  </div>
   {{else}}
   <div class="empty-state">
     <p>No MCP servers configured yet.</p>
@@ -76,6 +78,7 @@
 {{if .RecentLogs}}
 <div class="card">
   <h2>Recent Activity</h2>
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -102,6 +105,7 @@
       {{end}}
     </tbody>
   </table>
+  </div>
   <div style="margin-top:0.75rem"><a href="/logs" class="btn btn-outline btn-sm">View All Logs</a></div>
 </div>
 {{end}}

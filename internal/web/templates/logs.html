@@ -19,6 +19,7 @@
   </div>
 
   {{if .Logs}}
+  <div class="table-wrap">
   <table>
     <thead>
       <tr>
@@ -47,6 +48,7 @@
       {{end}}
     </tbody>
   </table>
+  </div>
   {{else}}
   <div class="empty-state">
     <p>No request logs yet. Logs will appear here as MCP requests are proxied.</p>
