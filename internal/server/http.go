@@ -30,11 +30,12 @@ type Server struct {
 	sessionStore    *store.SessionStore
 	middlewareStore  *store.MiddlewareStore
 	mwRegistry      *middleware.Registry
+	healthMon       *proxy.HealthMonitor
 	mux             *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor) *Server {
 	s := &Server{
 		cfg:             cfg,
 		servers:         servers,
@@ -46,6 +47,7 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		sessionStore:    sessionStore,
 		middlewareStore:  middlewareStore,
 		mwRegistry:      mwRegistry,
+		healthMon:       healthMon,
 		mux:             http.NewServeMux(),
 	}
 	s.routes()
@@ -69,7 +71,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
@@ -410,6 +412,8 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 			s.enumerateServer(w, r, id)
 		case "endpoints":
 			s.getEndpoints(w, r, id)
+		case "health":
+			s.checkServerHealth(w, r, id)
 		default:
 			http.Error(w, `{"error":"unknown action"}`, http.StatusNotFound)
 		}
@@ -540,6 +544,29 @@ func (s *Server) enumerateServer(w http.ResponseWriter, r *http.Request, id stri
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(endpoints)
+}
+
+func (s *Server) checkServerHealth(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	srv, err := s.servers.Get(id)
+	if err != nil || srv == nil {
+		http.Error(w, `{"error":"server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	health, healthErr := s.healthMon.CheckHealth(r.Context(), id)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":          srv.Status,
+		"health":          health,
+		"health_check_at": time.Now().Format(time.RFC3339),
+		"health_error":    healthErr,
+	})
 }
 
 func (s *Server) getEndpoints(w http.ResponseWriter, r *http.Request, id string) {

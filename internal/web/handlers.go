@@ -134,13 +134,14 @@ type Handlers struct {
 	sessionStore    *store.SessionStore
 	middlewareStore  *store.MiddlewareStore
 	mwRegistry      *middleware.Registry
+	healthMon       *proxy.HealthMonitor
 	catalogClient   *catalog.Client
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
 	loginLimiter    *loginRateLimiter
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor) *Handlers {
 	// Generate a per-process CSRF secret. Use session_secret from config if set.
 	csrfSecret := []byte(cfg.Auth.SessionSecret)
 	if len(csrfSecret) == 0 {
@@ -160,6 +161,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		sessionStore:   sessionStore,
 		middlewareStore: middlewareStore,
 		mwRegistry:     mwRegistry,
+		healthMon:      healthMon,
 		catalogClient:  catalog.NewClient(),
 		tmpls:          make(map[string]*template.Template),
 		csrfSecret:     csrfSecret,
@@ -467,6 +469,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleAccessTier(w, r, id)
 	case "middleware":
 		h.handleServerMiddleware(w, r, id)
+	case "health-check":
+		h.handleServerHealthCheck(w, r, id)
 	default:
 		http.NotFound(w, r)
 	}
@@ -668,6 +672,18 @@ func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request,
 	_, err := h.proxy.EnumerateServer(r.Context(), id)
 	if err != nil {
 		log.Printf("Error enumerating server %s: %v", id, err)
+	}
+	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
+}
+
+func (h *Handlers) handleServerHealthCheck(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.healthMon != nil {
+		health, healthErr := h.healthMon.CheckHealth(r.Context(), id)
+		log.Printf("On-demand health check for %s: %s %s", id, health, healthErr)
 	}
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }

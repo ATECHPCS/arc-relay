@@ -26,7 +26,10 @@
       <tr>
         <td><a href="/servers/{{.ID}}">{{.DisplayName}}</a></td>
         <td><span class="badge badge-{{.ServerType}}">{{.ServerType}}</span></td>
-        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+        <td>
+          <span class="badge badge-{{.Status}}">{{.Status}}</span>
+          {{if eq (printf "%s" .Status) "running"}}<span class="health-dot health-dot-{{.Health}}" title="MCP health: {{.Health}}{{if .HealthError}} — {{.HealthError}}{{end}}"></span>{{end}}
+        </td>
         <td>{{with index $.EndpointCounts .ID}}{{.}}{{else}}-{{end}}</td>
         <td>{{with index $.ServerCallCounts .ID}}{{.}}{{else}}0{{end}}</td>
         <td><code>/mcp/{{.Name}}</code></td>

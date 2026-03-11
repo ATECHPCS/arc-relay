@@ -366,6 +366,7 @@ func (m *Manager) StopServer(ctx context.Context, serverID string) error {
 	}
 
 	m.servers.UpdateStatus(serverID, store.StatusStopped, "")
+	m.servers.UpdateHealth(serverID, store.HealthUnknown, "")
 	return nil
 }
 

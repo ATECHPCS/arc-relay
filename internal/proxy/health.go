@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -56,6 +57,23 @@ func (hm *HealthMonitor) Stop() {
 	}
 }
 
+// CheckHealth performs an on-demand MCP health check for a single server.
+// Returns the health status and any error message.
+func (hm *HealthMonitor) CheckHealth(ctx context.Context, serverID string) (store.HealthStatus, string) {
+	backend, ok := hm.proxyMgr.GetBackend(serverID)
+	if !ok {
+		return store.HealthUnknown, "no backend available"
+	}
+
+	if err := hm.probeServer(ctx, backend); err != nil {
+		hm.servers.UpdateHealth(serverID, store.HealthUnhealthy, err.Error())
+		return store.HealthUnhealthy, err.Error()
+	}
+
+	hm.servers.UpdateHealth(serverID, store.HealthHealthy, "")
+	return store.HealthHealthy, ""
+}
+
 func (hm *HealthMonitor) checkAll(ctx context.Context) {
 	servers, err := hm.servers.List()
 	if err != nil {
@@ -68,6 +86,9 @@ func (hm *HealthMonitor) checkAll(ctx context.Context) {
 			hm.checkRunning(ctx, srv)
 		} else if srv.Status == store.StatusError {
 			hm.tryRecover(ctx, srv)
+		} else if srv.Status == store.StatusStopped && srv.Health != store.HealthUnknown {
+			// Reset health to unknown when stopped
+			hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
 		}
 	}
 }
@@ -76,13 +97,22 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 	backend, ok := hm.proxyMgr.GetBackend(srv.ID)
 	if !ok {
 		hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
+		hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
 		log.Printf("Health monitor: server %s has no backend, marking stopped", srv.Name)
 		return
 	}
 
-	if err := hm.pingServer(ctx, backend, srv.Name); err != nil {
-		log.Printf("Health monitor: server %s ping failed: %v", srv.Name, err)
+	if err := hm.probeServer(ctx, backend); err != nil {
+		log.Printf("Health monitor: server %s probe failed: %v", srv.Name, err)
+		hm.servers.UpdateHealth(srv.ID, store.HealthUnhealthy, err.Error())
+		// Also mark process-level error if the ping itself fails
 		hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+	} else {
+		// Server responded to MCP initialize — mark healthy
+		if srv.Health != store.HealthHealthy {
+			log.Printf("Health monitor: server %s is healthy", srv.Name)
+		}
+		hm.servers.UpdateHealth(srv.ID, store.HealthHealthy, "")
 	}
 }
 
@@ -117,23 +147,44 @@ func (hm *HealthMonitor) isStatelessServer(srv *store.Server) bool {
 	}
 }
 
-// pingServer sends an MCP ping request to verify the server is responsive.
-func (hm *HealthMonitor) pingServer(ctx context.Context, backend Backend, name string) error {
+// probeServer sends an MCP initialize request to verify the server's MCP layer is working.
+// This validates that the server can complete a full MCP handshake, not just respond to pings.
+func (hm *HealthMonitor) probeServer(ctx context.Context, backend Backend) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	id, _ := json.Marshal(999999)
+	params := mcp.InitializeParams{
+		ProtocolVersion: "2024-11-05",
+		Capabilities:    map[string]any{},
+		ClientInfo:      mcp.ServerInfo{Name: "mcp-wrangler-health-check", Version: "1.0.0"},
+	}
+	paramsJSON, _ := json.Marshal(params)
 	req := &mcp.Request{
 		JSONRPC: "2.0",
 		ID:      id,
-		Method:  "ping",
+		Method:  "initialize",
+		Params:  paramsJSON,
 	}
 
-	_, err := backend.Send(ctx, req)
+	resp, err := backend.Send(ctx, req)
 	if err != nil {
-		return err
+		return fmt.Errorf("initialize probe failed: %w", err)
 	}
 
-	// Any response (even an error response) means the server is alive
+	if resp.Error != nil {
+		return fmt.Errorf("initialize error %d: %s", resp.Error.Code, resp.Error.Message)
+	}
+
+	// Validate we got a valid MCP response with serverInfo
+	var result mcp.InitializeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return fmt.Errorf("invalid initialize response: %w", err)
+	}
+
+	if result.ServerInfo.Name == "" {
+		return fmt.Errorf("initialize response missing serverInfo")
+	}
+
 	return nil
 }

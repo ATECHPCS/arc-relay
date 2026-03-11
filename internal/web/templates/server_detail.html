@@ -54,6 +54,23 @@
     {{if .Server.ErrorMsg}}
     <dt>Error</dt><dd style="color:var(--danger)">{{.Server.ErrorMsg}}</dd>
     {{end}}
+    <dt>Health</dt>
+    <dd>
+      <span class="health-dot health-dot-{{.Server.Health}}"></span>
+      <span class="badge badge-{{.Server.Health}}">{{.Server.Health}}</span>
+      {{if .Server.HealthCheckAt}}
+        <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">checked {{.Server.HealthCheckAt.Format "15:04:05"}}</span>
+      {{end}}
+      {{if eq (printf "%s" .Server.Status) "running"}}
+      <form method="POST" action="/servers/{{.Server.ID}}/health-check" style="display:inline;margin-left:0.5rem">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <button type="submit" class="btn btn-outline btn-sm">Check Now</button>
+      </form>
+      {{end}}
+    </dd>
+    {{if .Server.HealthError}}
+    <dt>Health Error</dt><dd style="color:var(--danger);font-size:0.85rem">{{.Server.HealthError}}</dd>
+    {{end}}
     <dt>Proxy URL</dt><dd><code>/mcp/{{.Server.Name}}</code></dd>
     <dt>Created</dt><dd>{{.Server.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
     <dt>Updated</dt><dd>{{.Server.UpdatedAt.Format "2006-01-02 15:04:05"}}</dd>

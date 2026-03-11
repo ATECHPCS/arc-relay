@@ -104,7 +104,7 @@ func main() {
 	healthMon.Start()
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, requestLogStore, sessionStore, middlewareStore, mwRegistry)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
