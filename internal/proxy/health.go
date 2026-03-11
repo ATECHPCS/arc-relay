@@ -65,7 +65,7 @@ func (hm *HealthMonitor) CheckHealth(ctx context.Context, serverID string) (stor
 		return store.HealthUnknown, "no backend available"
 	}
 
-	if err := hm.probeServer(ctx, backend); err != nil {
+	if err := hm.pingServer(ctx, backend); err != nil {
 		hm.servers.UpdateHealth(serverID, store.HealthUnhealthy, err.Error())
 		return store.HealthUnhealthy, err.Error()
 	}
@@ -102,13 +102,11 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 		return
 	}
 
-	if err := hm.probeServer(ctx, backend); err != nil {
+	if err := hm.pingServer(ctx, backend); err != nil {
 		log.Printf("Health monitor: server %s probe failed: %v", srv.Name, err)
 		hm.servers.UpdateHealth(srv.ID, store.HealthUnhealthy, err.Error())
-		// Also mark process-level error if the ping itself fails
 		hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 	} else {
-		// Server responded to MCP initialize — mark healthy
 		if srv.Health != store.HealthHealthy {
 			log.Printf("Health monitor: server %s is healthy", srv.Name)
 		}
@@ -147,43 +145,28 @@ func (hm *HealthMonitor) isStatelessServer(srv *store.Server) bool {
 	}
 }
 
-// probeServer sends an MCP initialize request to verify the server's MCP layer is working.
-// This validates that the server can complete a full MCP handshake, not just respond to pings.
-func (hm *HealthMonitor) probeServer(ctx context.Context, backend Backend) error {
+// pingServer sends an MCP ping request to verify the server is responsive.
+// Uses the standard MCP ping method which works on established sessions
+// without requiring re-initialization.
+func (hm *HealthMonitor) pingServer(ctx context.Context, backend Backend) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	id, _ := json.Marshal(999999)
-	params := mcp.InitializeParams{
-		ProtocolVersion: "2024-11-05",
-		Capabilities:    map[string]any{},
-		ClientInfo:      mcp.ServerInfo{Name: "mcp-wrangler-health-check", Version: "1.0.0"},
-	}
-	paramsJSON, _ := json.Marshal(params)
 	req := &mcp.Request{
 		JSONRPC: "2.0",
 		ID:      id,
-		Method:  "initialize",
-		Params:  paramsJSON,
+		Method:  "ping",
 	}
 
 	resp, err := backend.Send(ctx, req)
 	if err != nil {
-		return fmt.Errorf("initialize probe failed: %w", err)
+		return fmt.Errorf("ping failed: %w", err)
 	}
 
-	if resp.Error != nil {
-		return fmt.Errorf("initialize error %d: %s", resp.Error.Code, resp.Error.Message)
-	}
-
-	// Validate we got a valid MCP response with serverInfo
-	var result mcp.InitializeResult
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return fmt.Errorf("invalid initialize response: %w", err)
-	}
-
-	if result.ServerInfo.Name == "" {
-		return fmt.Errorf("initialize response missing serverInfo")
+	// A valid JSON-RPC response (even an error response) means the MCP layer is alive
+	if resp == nil {
+		return fmt.Errorf("no response to ping")
 	}
 
 	return nil
