@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"log"
 	"os"
@@ -47,7 +49,16 @@ func main() {
 	// Ensure default admin user exists
 	adminPw := cfg.Auth.AdminPassword
 	if adminPw == "" {
-		adminPw = "changeme"
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err != nil {
+			log.Fatalf("Failed to generate random admin password: %v", err)
+		}
+		adminPw = hex.EncodeToString(b)
+		log.Println("========================================")
+		log.Println("WARNING: No admin password configured!")
+		log.Printf("Generated random admin password: %s", adminPw)
+		log.Println("Set MCP_WRANGLER_ADMIN_PASSWORD to use a fixed password.")
+		log.Println("========================================")
 	}
 	if err := userStore.EnsureAdmin(adminPw); err != nil {
 		log.Fatalf("Failed to ensure admin user: %v", err)

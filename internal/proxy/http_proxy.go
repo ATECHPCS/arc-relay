@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 )
@@ -13,6 +14,7 @@ import (
 // HTTPProxy forwards MCP requests to an HTTP-based MCP server.
 type HTTPProxy struct {
 	targetURL  string
+	mu         sync.Mutex
 	sessionID  string
 	httpClient *http.Client
 }
@@ -33,8 +35,11 @@ func (p *HTTPProxy) SendNotification(n *mcp.Notification) error {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if p.sessionID != "" {
-		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	p.mu.Lock()
+	sid := p.sessionID
+	p.mu.Unlock()
+	if sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
@@ -57,8 +62,11 @@ func (p *HTTPProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
-	if p.sessionID != "" {
-		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	p.mu.Lock()
+	sendSID := p.sessionID
+	p.mu.Unlock()
+	if sendSID != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sendSID)
 	}
 
 	httpResp, err := p.httpClient.Do(httpReq)
@@ -72,8 +80,10 @@ func (p *HTTPProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, 
 	}
 
 	// Capture session ID if provided
-	if sid := httpResp.Header.Get("Mcp-Session-Id"); sid != "" {
-		p.sessionID = sid
+	if newSID := httpResp.Header.Get("Mcp-Session-Id"); newSID != "" {
+		p.mu.Lock()
+		p.sessionID = newSID
+		p.mu.Unlock()
 	}
 
 	return parseHTTPResponse(httpResp)

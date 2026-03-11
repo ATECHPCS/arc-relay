@@ -24,6 +24,7 @@
   <div class="alert alert-danger">{{.Error}}</div>
   {{end}}
   <form method="POST" action="{{if .IsEdit}}/servers/{{.Server.ID}}/edit{{else}}/servers/new{{end}}">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <div class="form-row">
       <div class="form-group">
         <label for="name">Slug Name</label>
@@ -352,9 +353,10 @@ function discoverOAuth(remoteURL) {
   var oauthInfo = document.getElementById('catalog-oauth-info');
   oauthInfo.innerHTML = '<div class="catalog-loading">Discovering OAuth configuration...</div>';
 
+  var _csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
   fetch('/api/catalog/discover-oauth', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
     body: JSON.stringify({remote_url: remoteURL})
   })
   .then(function(r) { return r.json(); })

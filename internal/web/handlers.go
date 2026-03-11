@@ -1,17 +1,21 @@
 package web
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/catalog"
@@ -60,6 +64,64 @@ type ConfigDisplay struct {
 	IsDocker         bool   // true if this server uses Docker (has an image)
 }
 
+// loginRateLimiter tracks failed login attempts per IP.
+type loginRateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+}
+
+func newLoginRateLimiter() *loginRateLimiter {
+	rl := &loginRateLimiter{attempts: make(map[string][]time.Time)}
+	go rl.cleanup()
+	return rl
+}
+
+// allow returns true if the IP is allowed to attempt login.
+// Limit: 5 attempts per 15 minutes.
+func (rl *loginRateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	cutoff := time.Now().Add(-15 * time.Minute)
+	recent := rl.attempts[ip]
+	filtered := recent[:0]
+	for _, t := range recent {
+		if t.After(cutoff) {
+			filtered = append(filtered, t)
+		}
+	}
+	rl.attempts[ip] = filtered
+	return len(filtered) < 5
+}
+
+func (rl *loginRateLimiter) record(ip string) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.attempts[ip] = append(rl.attempts[ip], time.Now())
+}
+
+func (rl *loginRateLimiter) cleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		rl.mu.Lock()
+		cutoff := time.Now().Add(-15 * time.Minute)
+		for ip, attempts := range rl.attempts {
+			filtered := attempts[:0]
+			for _, t := range attempts {
+				if t.After(cutoff) {
+					filtered = append(filtered, t)
+				}
+			}
+			if len(filtered) == 0 {
+				delete(rl.attempts, ip)
+			} else {
+				rl.attempts[ip] = filtered
+			}
+		}
+		rl.mu.Unlock()
+	}
+}
+
 // Handlers holds dependencies for web UI handlers.
 type Handlers struct {
 	cfg             *config.Config
@@ -74,9 +136,19 @@ type Handlers struct {
 	mwRegistry      *middleware.Registry
 	catalogClient   *catalog.Client
 	tmpls           map[string]*template.Template
+	csrfSecret      []byte
+	loginLimiter    *loginRateLimiter
 }
 
 func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry) *Handlers {
+	// Generate a per-process CSRF secret. Use session_secret from config if set.
+	csrfSecret := []byte(cfg.Auth.SessionSecret)
+	if len(csrfSecret) == 0 {
+		csrfSecret = make([]byte, 32)
+		if _, err := rand.Read(csrfSecret); err != nil {
+			panic("failed to generate CSRF secret: " + err.Error())
+		}
+	}
 	h := &Handlers{
 		cfg:            cfg,
 		servers:        servers,
@@ -90,6 +162,8 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		mwRegistry:     mwRegistry,
 		catalogClient:  catalog.NewClient(),
 		tmpls:          make(map[string]*template.Template),
+		csrfSecret:     csrfSecret,
+		loginLimiter:   newLoginRateLimiter(),
 	}
 
 	// Parse each page template together with the layout
@@ -134,6 +208,40 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/oauth/callback", h.handleOAuthCallback) // No session auth — browser redirect from provider
 }
 
+// --- CSRF ---
+
+// csrfToken computes an HMAC-based CSRF token from the session ID.
+func (h *Handlers) csrfToken(sessionID string) string {
+	mac := hmac.New(sha256.New, h.csrfSecret)
+	mac.Write([]byte(sessionID))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// validateCSRF checks the CSRF token from form data or X-CSRF-Token header.
+func (h *Handlers) validateCSRF(r *http.Request, sessionID string) bool {
+	token := r.FormValue("csrf_token")
+	if token == "" {
+		token = r.Header.Get("X-CSRF-Token")
+	}
+	if token == "" {
+		return false
+	}
+	expected := h.csrfToken(sessionID)
+	return hmac.Equal([]byte(token), []byte(expected))
+}
+
+// clientIP extracts the client IP from the request for rate limiting.
+func clientIP(r *http.Request) string {
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		return strings.SplitN(fwd, ",", 2)[0]
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // --- Auth ---
 
 func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -148,7 +256,16 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
-		r = r.WithContext(setUser(r.Context(), user))
+		// Validate CSRF for state-changing requests
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
+			if !h.validateCSRF(r, cookie.Value) {
+				http.Error(w, "Invalid or missing CSRF token", http.StatusForbidden)
+				return
+			}
+		}
+		ctx := setUser(r.Context(), user)
+		ctx = setSessionID(ctx, cookie.Value)
+		r = r.WithContext(ctx)
 		next(w, r)
 	}
 }
@@ -159,11 +276,18 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ip := clientIP(r)
+	if !h.loginLimiter.allow(ip) {
+		h.renderLogin(w, "Too many login attempts. Please try again later.")
+		return
+	}
+
 	username := r.FormValue("username")
 	password := r.FormValue("password")
 
 	user, err := h.users.Authenticate(username, password)
 	if err != nil || user == nil {
+		h.loginLimiter.record(ip)
 		h.renderLogin(w, "Invalid username or password")
 		return
 	}
@@ -230,7 +354,7 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		serverCallCounts, _ = h.requestLogs.ServerTotalCounts()
 	}
 
-	h.render(w, "dashboard.html", map[string]any{
+	h.render(w, r, "dashboard.html", map[string]any{
 		"Nav":              "dashboard",
 		"User":             getUser(r),
 		"Servers":          servers,
@@ -258,7 +382,7 @@ func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, "logs.html", map[string]any{
+	h.render(w, r, "logs.html", map[string]any{
 		"Nav":          "logs",
 		"User":         getUser(r),
 		"Logs":         logs,
@@ -275,7 +399,7 @@ func (h *Handlers) handleServersList(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) handleServerNew(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		h.render(w, "server_form.html", map[string]any{
+		h.render(w, r, "server_form.html", map[string]any{
 			"Nav":             "servers",
 			"User":            getUser(r),
 			"IsEdit":          false,
@@ -294,12 +418,12 @@ func (h *Handlers) handleServerNew(w http.ResponseWriter, r *http.Request) {
 
 	srv, err := h.parseServerForm(r)
 	if err != nil {
-		h.render(w, "server_form.html", h.serverFormData(r, nil, err.Error()))
+		h.render(w, r, "server_form.html", h.serverFormData(r, nil, err.Error()))
 		return
 	}
 
 	if err := h.servers.Create(srv); err != nil {
-		h.render(w, "server_form.html", h.serverFormData(r, srv, fmt.Sprintf("Failed to create server: %s", err)))
+		h.render(w, r, "server_form.html", h.serverFormData(r, srv, fmt.Sprintf("Failed to create server: %s", err)))
 		return
 	}
 
@@ -403,7 +527,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		}
 	}
 
-	h.render(w, "server_detail.html", map[string]any{
+	h.render(w, r, "server_detail.html", map[string]any{
 		"Nav":              "servers",
 		"User":             getUser(r),
 		"Server":           srv,
@@ -431,7 +555,7 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 		formData["User"] = getUser(r)
 		formData["IsEdit"] = true
 		formData["Server"] = srv
-		h.render(w, "server_form.html", formData)
+		h.render(w, r, "server_form.html", formData)
 		return
 	}
 
@@ -443,7 +567,7 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 		formData["IsEdit"] = true
 		formData["Server"] = srv
 		formData["Error"] = err.Error()
-		h.render(w, "server_form.html", formData)
+		h.render(w, r, "server_form.html", formData)
 		return
 	}
 
@@ -718,7 +842,7 @@ func (h *Handlers) handleUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	users, _ := h.users.List()
-	h.render(w, "users.html", map[string]any{
+	h.render(w, r, "users.html", map[string]any{
 		"Nav":   "users",
 		"User":  user,
 		"Users": users,
@@ -761,7 +885,7 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 
 	if username == "" || password == "" {
 		users, _ := h.users.List()
-		h.render(w, "users.html", map[string]any{
+		h.render(w, r, "users.html", map[string]any{
 			"Nav": "users", "User": getUser(r), "Users": users,
 			"Error": "Username and password are required",
 		})
@@ -770,7 +894,7 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := h.users.CreateWithAccessLevel(username, password, role, accessLevel); err != nil {
 		users, _ := h.users.List()
-		h.render(w, "users.html", map[string]any{
+		h.render(w, r, "users.html", map[string]any{
 			"Nav": "users", "User": getUser(r), "Users": users,
 			"Error": fmt.Sprintf("Failed to create user: %s", err),
 		})
@@ -784,7 +908,7 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
 	keys, _ := h.users.ListAPIKeys(user.ID)
-	h.render(w, "api_keys.html", map[string]any{
+	h.render(w, r, "api_keys.html", map[string]any{
 		"Nav": "apikeys", "User": user, "Keys": keys,
 	})
 }
@@ -806,7 +930,7 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		keys, _ := h.users.ListAPIKeys(user.ID)
-		h.render(w, "api_keys.html", map[string]any{
+		h.render(w, r, "api_keys.html", map[string]any{
 			"Nav": "apikeys", "User": user, "Keys": keys, "NewKey": rawKey,
 		})
 		return
@@ -960,12 +1084,17 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 // --- Helpers ---
 
-func (h *Handlers) render(w http.ResponseWriter, name string, data map[string]any) {
+func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, data map[string]any) {
 	t, ok := h.tmpls[name]
 	if !ok {
 		log.Printf("Template %s not found", name)
 		http.Error(w, "Template not found", http.StatusInternalServerError)
 		return
+	}
+
+	// Auto-inject CSRF token from session context
+	if sessionID := getSessionID(r.Context()); sessionID != "" {
+		data["CSRFToken"] = h.csrfToken(sessionID)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

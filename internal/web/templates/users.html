@@ -22,6 +22,7 @@
             {{if ne .Username "admin"}}
             <form method="POST" action="/users/{{.ID}}/delete"
                   onsubmit="return confirm('Delete user {{.Username}}?')">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
               <button type="submit" class="btn btn-danger btn-sm">Delete</button>
             </form>
             {{end}}
@@ -42,6 +43,7 @@
   <div class="alert alert-danger">{{.Error}}</div>
   {{end}}
   <form method="POST" action="/users/new">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <div class="form-row">
       <div class="form-group">
         <label for="username">Username</label>

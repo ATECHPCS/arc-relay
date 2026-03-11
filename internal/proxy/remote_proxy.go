@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
@@ -17,6 +18,7 @@ import (
 type RemoteProxy struct {
 	serverID     string
 	config       store.RemoteConfig
+	mu           sync.Mutex
 	sessionID    string
 	httpClient   *http.Client
 	oauthManager *oauth.Manager
@@ -66,8 +68,11 @@ func (p *RemoteProxy) SendNotification(n *mcp.Notification) error {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if p.sessionID != "" {
-		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	p.mu.Lock()
+	sid := p.sessionID
+	p.mu.Unlock()
+	if sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
 	if err := p.applyAuth(context.Background(), httpReq); err != nil {
 		return err
@@ -111,8 +116,11 @@ func (p *RemoteProxy) doSend(ctx context.Context, req *mcp.Request) (*mcp.Respon
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
-	if p.sessionID != "" {
-		httpReq.Header.Set("Mcp-Session-Id", p.sessionID)
+	p.mu.Lock()
+	sid := p.sessionID
+	p.mu.Unlock()
+	if sid != "" {
+		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
 
 	if err := p.applyAuth(ctx, httpReq); err != nil {
@@ -134,8 +142,10 @@ func (p *RemoteProxy) doSend(ctx context.Context, req *mcp.Request) (*mcp.Respon
 	}
 
 	// Capture session ID if provided
-	if sid := httpResp.Header.Get("Mcp-Session-Id"); sid != "" {
-		p.sessionID = sid
+	if newSID := httpResp.Header.Get("Mcp-Session-Id"); newSID != "" {
+		p.mu.Lock()
+		p.sessionID = newSID
+		p.mu.Unlock()
 	}
 
 	resp, err := parseHTTPResponse(httpResp)

@@ -5,34 +5,41 @@
   <div class="actions">
     {{if eq (printf "%s" .Server.Status) "stopped"}}
     <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-success">Start</button>
     </form>
     {{else if eq (printf "%s" .Server.Status) "running"}}
     <form method="POST" action="/servers/{{.Server.ID}}/stop" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline">Stop</button>
     </form>
     {{if .ConfigDisplay.ImageStale}}
     <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
           onsubmit="return confirm('Recreate container with updated image?')">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline" style="border-color:#e6a817;color:#664d03">Recreate Container</button>
     </form>
     {{end}}
     {{else if eq (printf "%s" .Server.Status) "error"}}
     <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-success">Restart</button>
     </form>
     <form method="POST" action="/servers/{{.Server.ID}}/stop" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline">Stop</button>
     </form>
     {{end}}
     {{if eq (printf "%s" .Server.Status) "running"}}
     <form method="POST" action="/servers/{{.Server.ID}}/enumerate" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline">Re-enumerate</button>
     </form>
     {{end}}
     <a href="/servers/{{.Server.ID}}/edit" class="btn btn-outline">Edit</a>
     <form method="POST" action="/servers/{{.Server.ID}}/delete" style="display:inline"
           onsubmit="return confirm('Delete this server? This cannot be undone.')">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-danger">Delete</button>
     </form>
   </div>
@@ -76,11 +83,13 @@
   </div>
   <div style="margin-top: 0.75rem;">
     <form method="POST" action="/servers/{{.Server.ID}}/rebuild" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline btn-sm">Rebuild Image</button>
     </form>
     {{if eq (printf "%s" .Server.Status) "running"}}
     <form method="POST" action="/servers/{{.Server.ID}}/rebuild-restart" style="display:inline"
           onsubmit="return confirm('This will rebuild the image and restart the server. Continue?')">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-primary btn-sm">Rebuild &amp; Restart</button>
     </form>
     {{end}}
@@ -106,6 +115,7 @@
   <div style="margin-top: 0.75rem;">
     <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
           onsubmit="return confirm('This will stop and recreate the container from the current local image. Continue?')">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline btn-sm">Recreate Container</button>
     </form>
   </div>
@@ -235,10 +245,11 @@
   </div>
 
   <script>
+  var _csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
   function toggleMiddleware(name, enabled) {
     fetch('/servers/{{.Server.ID}}/middleware', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
       body: JSON.stringify({middleware: name, enabled: enabled})
     }).then(r => {
       if (!r.ok) alert('Failed to update middleware');
@@ -388,6 +399,7 @@
 <script>
 function updateTier(el) {
   const serverID = el.dataset.server;
+  const csrfTok = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
   const body = JSON.stringify({
     endpoint_type: el.dataset.type,
     endpoint_name: el.dataset.name,
@@ -395,7 +407,7 @@ function updateTier(el) {
   });
   fetch('/servers/' + serverID + '/access-tier', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok},
     body: body
   }).then(r => {
     if (r.ok) {

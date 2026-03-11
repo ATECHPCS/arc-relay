@@ -31,6 +31,7 @@
           {{if not .Revoked}}
           <form method="POST" action="/api-keys/{{.ID}}/revoke"
                 onsubmit="return confirm('Revoke this API key? Clients using it will lose access.')">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
             <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
           </form>
           {{end}}
@@ -49,6 +50,7 @@
 <div class="card">
   <h2>Generate New API Key</h2>
   <form method="POST" action="/api-keys/new">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <div class="form-group">
       <label for="key_name">Key Name</label>
       <input type="text" id="key_name" name="key_name" required placeholder="e.g. claude-desktop, dev-testing">
