@@ -54,6 +54,7 @@ type ConfigDisplay struct {
 	BuildPackage   string
 	BuildVersion   string
 	BuildGitURL    string
+	BuildGitRef    string
 	BuildCustom    bool
 	// Image staleness fields
 	ImageID          string // sha256 ID of the current image tag
@@ -136,6 +137,7 @@ type Handlers struct {
 	mwRegistry      *middleware.Registry
 	healthMon       *proxy.HealthMonitor
 	catalogClient   *catalog.Client
+	deviceAuth      *deviceAuthStore
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
 	loginLimiter    *loginRateLimiter
@@ -163,13 +165,14 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		mwRegistry:     mwRegistry,
 		healthMon:      healthMon,
 		catalogClient:  catalog.NewClient(),
+		deviceAuth:     newDeviceAuthStore(),
 		tmpls:          make(map[string]*template.Template),
 		csrfSecret:     csrfSecret,
 		loginLimiter:   newLoginRateLimiter(),
 	}
 
 	// Parse each page template together with the layout
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html"}
 	for _, page := range pages {
 		t := template.Must(template.ParseFS(templateFS, "templates/layout.html", "templates/"+page))
 		h.tmpls[page] = t
@@ -208,6 +211,15 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
 	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
 	mux.HandleFunc("/oauth/callback", h.handleOAuthCallback) // No session auth — browser redirect from provider
+
+	// Device auth flow (RFC 8628-style)
+	mux.HandleFunc("/api/auth/device", h.handleDeviceAuthStart)       // No auth — CLI calls before having a key
+	mux.HandleFunc("/api/auth/device/token", h.handleDeviceAuthToken) // No auth — CLI polls for token
+	mux.HandleFunc("/auth/device", h.handleDeviceAuthPage)            // Session auth checked internally (redirects to login)
+
+	// Binary hosting for mcp-sync CLI
+	mux.HandleFunc("/install.sh", h.handleInstallScript)
+	mux.HandleFunc("/download/", h.handleDownload)
 }
 
 // --- CSRF ---
@@ -274,23 +286,25 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		h.renderLogin(w, "")
+		next := r.URL.Query().Get("next")
+		h.renderLogin(w, "", next)
 		return
 	}
 
 	ip := clientIP(r)
 	if !h.loginLimiter.allow(ip) {
-		h.renderLogin(w, "Too many login attempts. Please try again later.")
+		h.renderLogin(w, "Too many login attempts. Please try again later.", "")
 		return
 	}
 
 	username := r.FormValue("username")
 	password := r.FormValue("password")
+	next := r.FormValue("next")
 
 	user, err := h.users.Authenticate(username, password)
 	if err != nil || user == nil {
 		h.loginLimiter.record(ip)
-		h.renderLogin(w, "Invalid username or password")
+		h.renderLogin(w, "Invalid username or password", next)
 		return
 	}
 
@@ -315,7 +329,13 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   strings.HasPrefix(h.cfg.PublicBaseURL(), "https"),
 		SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/", http.StatusFound)
+
+	// Redirect to the original destination if set, but only allow local paths
+	redirectTo := "/"
+	if next != "" && strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") {
+		redirectTo = next
+	}
+	http.Redirect(w, r, redirectTo, http.StatusFound)
 }
 
 func (h *Handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -1135,7 +1155,7 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 	}
 }
 
-func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg string) {
+func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Login - MCP Wrangler</title>
 <style>body{font-family:system-ui,sans-serif;background:#f8f9fa;color:#212529;}
@@ -1150,10 +1170,13 @@ func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg string) {
 </style></head><body>
 <div class="card"><h2>Log in to MCP Wrangler</h2>`)
 	if errMsg != "" {
-		fmt.Fprintf(w, `<div class="alert">%s</div>`, errMsg)
+		fmt.Fprintf(w, `<div class="alert">%s</div>`, template.HTMLEscapeString(errMsg))
 	}
-	fmt.Fprint(w, `<form method="POST" action="/login">
-<div class="form-group"><label for="username">Username</label><input type="text" id="username" name="username" required autofocus></div>
+	fmt.Fprint(w, `<form method="POST" action="/login">`)
+	if next != "" && strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") {
+		fmt.Fprintf(w, `<input type="hidden" name="next" value="%s">`, template.HTMLEscapeString(next))
+	}
+	fmt.Fprint(w, `<div class="form-group"><label for="username">Username</label><input type="text" id="username" name="username" required autofocus></div>
 <div class="form-group"><label for="password">Password</label><input type="password" id="password" name="password" required></div>
 <button type="submit" class="btn">Log In</button>
 </form></div></body></html>`)
@@ -1225,6 +1248,7 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 			pkg := strings.TrimSpace(r.FormValue("build_package"))
 			version := strings.TrimSpace(r.FormValue("build_version"))
 			gitURL := strings.TrimSpace(r.FormValue("build_git_url"))
+			gitRef := strings.TrimSpace(r.FormValue("build_git_ref"))
 			customDockerfile := strings.TrimSpace(r.FormValue("build_dockerfile"))
 
 			if pkg == "" && gitURL == "" && customDockerfile == "" {
@@ -1239,6 +1263,7 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 				Package:    pkg,
 				Version:    version,
 				GitURL:     gitURL,
+				GitRef:     gitRef,
 				Dockerfile: customDockerfile,
 			}
 			cfg.Image = "" // will be set after build
@@ -1357,6 +1382,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 			cd.BuildPackage = cfg.Build.Package
 			cd.BuildVersion = cfg.Build.Version
 			cd.BuildGitURL = cfg.Build.GitURL
+			cd.BuildGitRef = cfg.Build.GitRef
 			cd.BuildCustom = cfg.Build.Dockerfile != ""
 		}
 	case store.ServerTypeHTTP:
@@ -1402,6 +1428,7 @@ func serverToFormData(srv *store.Server) map[string]any {
 			data["BuildPackage"] = cfg.Build.Package
 			data["BuildVersion"] = cfg.Build.Version
 			data["BuildGitURL"] = cfg.Build.GitURL
+			data["BuildGitRef"] = cfg.Build.GitRef
 			data["BuildDockerfile"] = cfg.Build.Dockerfile
 		} else {
 			data["StdioMode"] = "image"
@@ -1409,6 +1436,7 @@ func serverToFormData(srv *store.Server) map[string]any {
 			data["BuildPackage"] = ""
 			data["BuildVersion"] = ""
 			data["BuildGitURL"] = ""
+			data["BuildGitRef"] = ""
 			data["BuildDockerfile"] = ""
 		}
 	case store.ServerTypeHTTP:

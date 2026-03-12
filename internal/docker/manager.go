@@ -2,6 +2,7 @@ package docker
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,8 @@ import (
 	"io"
 	"log"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -266,7 +269,7 @@ func (m *Manager) ImageExists(ctx context.Context, ref string) bool {
 
 // BuildImage builds a Docker image from a Dockerfile string.
 // The Dockerfile is sent as a tar archive to the Docker build API.
-func (m *Manager) BuildImage(ctx context.Context, dockerfile string, tag string) error {
+func (m *Manager) BuildImage(ctx context.Context, dockerfile string, tag string, noCache bool) error {
 	// Create a tar archive containing just the Dockerfile
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -289,7 +292,7 @@ func (m *Manager) BuildImage(ctx context.Context, dockerfile string, tag string)
 		Tags:       []string{tag},
 		Dockerfile: "Dockerfile",
 		Remove:     true,
-		NoCache:    false,
+		NoCache:    noCache,
 	})
 	if err != nil {
 		return fmt.Errorf("building image %s: %w", tag, err)
@@ -297,6 +300,41 @@ func (m *Manager) BuildImage(ctx context.Context, dockerfile string, tag string)
 	defer result.Body.Close()
 
 	// Read the build output to completion and check for errors
+	if err := parseBuildOutput(result.Body); err != nil {
+		return fmt.Errorf("building image %s: %w", tag, err)
+	}
+
+	return nil
+}
+
+// BuildImageFromContext builds a Docker image from a directory context.
+// It streams a tar archive of the directory to the Docker build API.
+// Symlinks are preserved (never dereferenced), .git/ is skipped, and
+// .dockerignore is respected if present.
+func (m *Manager) BuildImageFromContext(ctx context.Context, contextDir, dockerfilePath, tag string, noCache bool) error {
+	pr, pw := io.Pipe()
+
+	// Parse .dockerignore if present
+	ignorePatterns := parseDockerignore(contextDir)
+
+	go func() {
+		tw := tar.NewWriter(pw)
+		err := tarDirectory(tw, contextDir, ignorePatterns)
+		tw.Close()
+		pw.CloseWithError(err)
+	}()
+
+	result, err := m.cli.ImageBuild(ctx, pr, dclient.ImageBuildOptions{
+		Tags:       []string{tag},
+		Dockerfile: dockerfilePath,
+		Remove:     true,
+		NoCache:    noCache,
+	})
+	if err != nil {
+		return fmt.Errorf("building image %s: %w", tag, err)
+	}
+	defer result.Body.Close()
+
 	if err := parseBuildOutput(result.Body); err != nil {
 		return fmt.Errorf("building image %s: %w", tag, err)
 	}
@@ -428,4 +466,134 @@ func (m *Manager) GetContainerImageID(ctx context.Context, containerID string) (
 
 func (m *Manager) Close() error {
 	return m.cli.Close()
+}
+
+// tarDirectory walks a directory and writes its contents as a tar stream.
+// It skips .git/ directories, rejects paths with ".." segments, and
+// preserves symlinks without dereferencing them.
+func tarDirectory(tw *tar.Writer, root string, ignorePatterns []string) error {
+	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Get path relative to root
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if relPath == "." {
+			return nil
+		}
+
+		// Use forward slashes for Docker
+		relPath = filepath.ToSlash(relPath)
+
+		// Reject path traversal
+		for _, part := range strings.Split(relPath, "/") {
+			if part == ".." {
+				return fmt.Errorf("path traversal detected: %s", relPath)
+			}
+		}
+
+		// Skip .git directory
+		if info.IsDir() && info.Name() == ".git" {
+			return filepath.SkipDir
+		}
+
+		// Check dockerignore patterns
+		if shouldIgnore(relPath, info.IsDir(), ignorePatterns) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Handle symlinks — preserve as symlinks, never dereference
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("reading symlink %s: %w", relPath, err)
+			}
+			header := &tar.Header{
+				Typeflag: tar.TypeSymlink,
+				Name:     relPath,
+				Linkname: target,
+				Mode:     int64(info.Mode().Perm()),
+				ModTime:  info.ModTime(),
+			}
+			return tw.WriteHeader(header)
+		}
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return fmt.Errorf("creating tar header for %s: %w", relPath, err)
+		}
+		header.Name = relPath
+
+		if err := tw.WriteHeader(header); err != nil {
+			return fmt.Errorf("writing tar header for %s: %w", relPath, err)
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("opening %s: %w", relPath, err)
+		}
+		defer f.Close()
+		_, err = io.Copy(tw, f)
+		return err
+	})
+}
+
+// parseDockerignore reads a .dockerignore file and returns the patterns.
+func parseDockerignore(contextDir string) []string {
+	f, err := os.Open(filepath.Join(contextDir, ".dockerignore"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
+
+// shouldIgnore checks if a path matches any dockerignore pattern.
+func shouldIgnore(relPath string, isDir bool, patterns []string) bool {
+	for _, pattern := range patterns {
+		negate := false
+		p := pattern
+		if strings.HasPrefix(p, "!") {
+			negate = true
+			p = p[1:]
+		}
+		// Match against the path
+		matched, _ := filepath.Match(p, relPath)
+		if !matched {
+			// Also try matching against the base name
+			matched, _ = filepath.Match(p, filepath.Base(relPath))
+		}
+		if !matched && isDir {
+			// Try matching directory patterns like "dir/"
+			matched, _ = filepath.Match(strings.TrimSuffix(p, "/"), relPath)
+		}
+		if matched {
+			if negate {
+				return false
+			}
+			return true
+		}
+	}
+	return false
 }

@@ -5,6 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +42,9 @@ type Manager struct {
 
 	// OAuth manager for remote servers with OAuth auth
 	OAuthManager *oauth.Manager
+
+	// Per-server build locks to prevent concurrent rebuild races
+	buildLocks sync.Map // server ID -> *sync.Mutex
 }
 
 // NewManager creates a new proxy manager.
@@ -238,15 +246,31 @@ func (m *Manager) startRemote(ctx context.Context, srv *store.Server) error {
 	return nil
 }
 
+// acquireBuildLock returns a per-server mutex for serializing builds.
+func (m *Manager) acquireBuildLock(serverID string) *sync.Mutex {
+	v, _ := m.buildLocks.LoadOrStore(serverID, &sync.Mutex{})
+	return v.(*sync.Mutex)
+}
+
 // buildImageIfNeeded generates and builds a Docker image from a StdioBuildConfig.
 // If force is false, it skips the build when the image already exists locally.
 func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg *store.StdioConfig, tag string, force bool) error {
+	mu := m.acquireBuildLock(srv.ID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if !force && m.docker.ImageExists(ctx, tag) {
 		log.Printf("Image %s already exists for server %s, skipping build", tag, srv.Name)
 		return nil
 	}
 
 	build := cfg.Build
+
+	// Route to git repo build when GitURL is set without a Package or custom Dockerfile
+	if build.GitURL != "" && build.Package == "" && build.Dockerfile == "" {
+		return m.buildFromGitRepo(ctx, srv, cfg, tag, force)
+	}
+
 	dockerfile, err := dockermgr.GenerateDockerfile(build.Runtime, build.Package, build.Version, build.GitURL, build.Dockerfile)
 	if err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
@@ -254,7 +278,7 @@ func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg
 	}
 
 	log.Printf("Building image %s for server %s...", tag, srv.Name)
-	if err := m.docker.BuildImage(ctx, dockerfile, tag); err != nil {
+	if err := m.docker.BuildImage(ctx, dockerfile, tag, force); err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
 		return fmt.Errorf("building image: %w", err)
 	}
@@ -265,6 +289,90 @@ func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg
 	m.servers.UpdateConfig(srv.ID, updatedConfig)
 
 	log.Printf("Built image %s for server %s", tag, srv.Name)
+	return nil
+}
+
+// buildFromGitRepo clones a git repository and builds using the repo's own Dockerfile.
+// If the repo has no Dockerfile, it falls back to the generated template.
+func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *store.StdioConfig, tag string, noCache bool) error {
+	build := cfg.Build
+
+	// Validate URL scheme — only allow https://
+	if err := validateGitURL(build.GitURL); err != nil {
+		m.servers.UpdateStatus(srv.ID, store.StatusError, "Invalid git URL: "+err.Error())
+		return fmt.Errorf("invalid git URL: %w", err)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "mcp-wrangler-git-*")
+	if err != nil {
+		return fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Build git clone command with security hardening
+	args := []string{"clone", "--depth", "1"}
+	if build.GitRef != "" {
+		args = append(args, "--branch", build.GitRef)
+	}
+	args = append(args, "--", build.GitURL, tmpDir)
+
+	log.Printf("Cloning %s (ref: %s) for server %s...", build.GitURL, build.GitRef, srv.Name)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		errMsg := fmt.Sprintf("git clone failed: %s", strings.TrimSpace(string(output)))
+		m.servers.UpdateStatus(srv.ID, store.StatusError, errMsg)
+		return fmt.Errorf("%s: %w", errMsg, err)
+	}
+
+	// Check if repo has its own Dockerfile
+	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
+	if _, err := os.Stat(dockerfilePath); err == nil {
+		// Build using repo's own Dockerfile with full repo as context
+		log.Printf("Building image %s from repo Dockerfile for server %s...", tag, srv.Name)
+		if err := m.docker.BuildImageFromContext(ctx, tmpDir, "Dockerfile", tag, noCache); err != nil {
+			m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
+			return fmt.Errorf("building image from context: %w", err)
+		}
+	} else {
+		// No Dockerfile in repo — fall back to generated template
+		log.Printf("No Dockerfile in repo, using generated template for server %s", srv.Name)
+		dockerfile, err := dockermgr.GenerateDockerfile(build.Runtime, "", "", build.GitURL, "")
+		if err != nil {
+			m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
+			return fmt.Errorf("generating Dockerfile: %w", err)
+		}
+		if err := m.docker.BuildImage(ctx, dockerfile, tag, noCache); err != nil {
+			m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
+			return fmt.Errorf("building image: %w", err)
+		}
+	}
+
+	// Persist the built image tag back to config
+	cfg.Image = tag
+	updatedConfig, _ := json.Marshal(cfg)
+	m.servers.UpdateConfig(srv.ID, updatedConfig)
+
+	log.Printf("Built image %s for server %s", tag, srv.Name)
+	return nil
+}
+
+// validateGitURL ensures only https:// URLs are accepted for git clone.
+func validateGitURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("malformed URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("only https:// git URLs are allowed, got %q", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("git URL must include a host")
+	}
 	return nil
 }
 

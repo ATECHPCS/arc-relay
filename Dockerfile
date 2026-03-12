@@ -12,7 +12,7 @@ RUN CGO_ENABLED=1 go build -o /mcp-wrangler ./cmd/mcp-wrangler
 
 FROM alpine:3.21
 
-RUN apk add --no-cache ca-certificates sqlite-libs
+RUN apk add --no-cache ca-certificates sqlite-libs git
 
 COPY --from=builder /mcp-wrangler /usr/local/bin/mcp-wrangler
 

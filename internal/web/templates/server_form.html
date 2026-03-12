@@ -100,6 +100,12 @@
           </div>
         </div>
         <div class="form-group">
+          <label for="build_git_ref">Branch / Tag (optional)</label>
+          <input type="text" id="build_git_ref" name="build_git_ref" value="{{.BuildGitRef}}"
+                 placeholder="main, v1.0.0, etc.">
+          <div class="help">Leave blank for default branch. If the repo has a Dockerfile, it will be used automatically.</div>
+        </div>
+        <div class="form-group">
           <label for="build_dockerfile">Custom Dockerfile (optional escape hatch)</label>
           <textarea id="build_dockerfile" name="build_dockerfile"
                     placeholder="FROM python:3.11-slim&#10;RUN pip install ...&#10;ENTRYPOINT [...]"

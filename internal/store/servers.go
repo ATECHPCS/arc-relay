@@ -64,12 +64,17 @@ type StdioBuildConfig struct {
 	Runtime    string `json:"runtime"`              // "python" or "node"
 	Package    string `json:"package"`              // pip/npm package name
 	Version    string `json:"version,omitempty"`    // package version (empty = latest)
-	GitURL     string `json:"git_url,omitempty"`    // alternative: build from git repo
-	Dockerfile string `json:"dockerfile,omitempty"` // alternative: custom Dockerfile text
+	GitURL     string `json:"git_url,omitempty"`     // alternative: build from git repo
+	GitRef     string `json:"git_ref,omitempty"`     // branch, tag, or commit hash
+	Dockerfile string `json:"dockerfile,omitempty"`  // alternative: custom Dockerfile text
 }
 
 // BuildImageTag returns the Docker image tag for an auto-built image.
 func (b *StdioBuildConfig) BuildImageTag() string {
+	source := b.Package
+	if source == "" && b.GitURL != "" {
+		source = repoNameFromURL(b.GitURL)
+	}
 	name := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == '/' {
 			return r
@@ -78,13 +83,36 @@ func (b *StdioBuildConfig) BuildImageTag() string {
 			return r + 32 // lowercase
 		}
 		return '-'
-	}, b.Package)
+	}, source)
 	name = strings.Trim(name, "-")
 	version := b.Version
+	if version == "" && b.GitRef != "" {
+		// Sanitize git ref for Docker tag safety (replace / with -)
+		version = strings.ReplaceAll(b.GitRef, "/", "-")
+	}
 	if version == "" {
 		version = "latest"
 	}
 	return fmt.Sprintf("mcp-wrangler-build/%s:%s", name, version)
+}
+
+// repoNameFromURL extracts the repository name from a git URL.
+// Handles both https://github.com/user/repo.git and git@host:user/repo.git formats.
+func repoNameFromURL(u string) string {
+	// Handle scp-style: git@host:user/repo.git
+	if idx := strings.LastIndex(u, ":"); idx > 0 && !strings.Contains(u, "://") {
+		u = u[idx+1:]
+	}
+	// Strip trailing .git
+	u = strings.TrimSuffix(u, ".git")
+	// Take the last path component
+	if idx := strings.LastIndex(u, "/"); idx >= 0 {
+		u = u[idx+1:]
+	}
+	if u == "" {
+		return "unknown"
+	}
+	return u
 }
 
 // HTTPConfig holds config for Docker-managed or external HTTP servers.

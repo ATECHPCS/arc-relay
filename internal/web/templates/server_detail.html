@@ -82,10 +82,11 @@
   <h2>Configuration</h2>
   {{if .ConfigDisplay.HasBuild}}
   <div class="detail-grid">
-    <dt>Image Source</dt><dd><span class="badge" style="background:#0d6efd;color:#fff">Auto-built from package</span></dd>
+    <dt>Image Source</dt><dd>{{if and .ConfigDisplay.BuildGitURL (not .ConfigDisplay.BuildPackage)}}<span class="badge" style="background:#198754;color:#fff">Built from Git repo</span>{{else}}<span class="badge" style="background:#0d6efd;color:#fff">Auto-built from package</span>{{end}}</dd>
     <dt>Runtime</dt><dd>{{.ConfigDisplay.BuildRuntime}}</dd>
     {{if .ConfigDisplay.BuildPackage}}<dt>Package</dt><dd><code>{{.ConfigDisplay.BuildPackage}}{{if .ConfigDisplay.BuildVersion}}=={{.ConfigDisplay.BuildVersion}}{{end}}</code></dd>{{end}}
     {{if .ConfigDisplay.BuildGitURL}}<dt>Git URL</dt><dd><code>{{.ConfigDisplay.BuildGitURL}}</code></dd>{{end}}
+    {{if .ConfigDisplay.BuildGitRef}}<dt>Git Ref</dt><dd><code>{{.ConfigDisplay.BuildGitRef}}</code></dd>{{end}}
     {{if .ConfigDisplay.BuildCustom}}<dt>Dockerfile</dt><dd>Custom</dd>{{end}}
     {{if .ConfigDisplay.Image}}<dt>Built Image</dt><dd><code>{{.ConfigDisplay.Image}}</code></dd>{{end}}
     {{if .ConfigDisplay.Command}}<dt>Command</dt><dd><code>{{.ConfigDisplay.Command}}</code></dd>{{end}}
@@ -493,16 +494,11 @@ function updateTier(el) {
   </div>
   <details style="margin-bottom: 1rem;">
     <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer; margin-bottom: 0.5rem;">First-time setup &amp; install</summary>
-    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto; margin: 0.5rem 0;"><code># Install (Linux)
-sudo curl -fsSL https://github.com/JeremiahChurch/mcp-sync/releases/latest/download/mcp-sync-linux-amd64 \
-  -o /usr/local/bin/mcp-sync && sudo chmod +x /usr/local/bin/mcp-sync
+    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto; margin: 0.5rem 0;"><code># One-line install &amp; setup (Linux/macOS)
+curl -fsSL {{.BaseURL}}/install.sh | bash
 
-# Install (macOS Apple Silicon)
-sudo curl -fsSL https://github.com/JeremiahChurch/mcp-sync/releases/latest/download/mcp-sync-darwin-arm64 \
-  -o /usr/local/bin/mcp-sync && sudo chmod +x /usr/local/bin/mcp-sync
-
-# First-time setup — enter this wrangler's URL and your API key
-mcp-sync init</code></pre>
+# Or install manually, then init with browser-based auth
+mcp-sync init {{.BaseURL}}</code></pre>
   </details>
 
   <details style="margin-bottom: 0.75rem;">
