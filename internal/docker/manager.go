@@ -372,6 +372,8 @@ RUN pip install --no-cache-dir {{.Package}}{{if .Version}}=={{.Version}}{{end}}
 `)),
 	"node": template.Must(template.New("node").Parse(`FROM node:20-slim
 RUN npm install -g {{.Package}}{{if .Version}}@{{.Version}}{{end}}
+ENTRYPOINT ["npx"]
+CMD ["{{.Package}}"]
 `)),
 	"git-python": template.Must(template.New("git-python").Parse(`FROM python:3.11-slim
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
