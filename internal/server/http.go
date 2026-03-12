@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -502,7 +503,13 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 
-	if err := s.proxy.StartServer(r.Context(), srv); err != nil {
+	// Use a detached context so the build/start survives client disconnects.
+	// Image builds can take minutes; if the CLI or browser closes the connection,
+	// we still want the operation to complete.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	if err := s.proxy.StartServer(ctx, srv); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"failed to start server: %s"}`, err), http.StatusInternalServerError)
 		return
 	}
