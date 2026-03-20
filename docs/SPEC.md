@@ -877,6 +877,457 @@ send_content = false        # never send raw tool content by default
 - What compliance frameworks do we target first? SOC2, HIPAA, PCI-DSS, GDPR?
 - Should the event stream include token counts for billing/usage tracking?
 
+### Phase 9: Platform Abstraction & Agent Traffic Proxy
+
+Three interrelated changes that evolve MCP Wrangler from a Docker-specific MCP proxy into a broader AI agent traffic management platform. Each sub-phase was pressure-tested for architectural flaws and descoped where the original plan was overambitious.
+
+#### 9A: External Identity Providers (OIDC)
+
+**Problem:** Every MCP Wrangler instance manages its own user database. In teams, this means another password to manage. Enterprise deployments need SSO.
+
+**Solution:** Federated login via OpenID Connect (covers Google Workspace, Microsoft Entra/M365, Okta, Auth0, Keycloak, and any OIDC-compliant IdP). No SAML — orgs that need SAML can use an OIDC broker (Keycloak, Dex, Authentik, Azure AD as broker) and Wrangler stays an OIDC Relying Party only. This avoids owning XML signatures, clock skew, metadata parsing, and SAML session index handling.
+
+**Login flow:**
+
+```
+User clicks "Log in with Google" (or M365, etc.)
+    │
+    ▼
+MCP Wrangler redirects to IdP authorize endpoint
+    │  (with state, nonce, redirect_uri)
+    ▼
+User authenticates at IdP
+    │
+    ▼
+IdP redirects back to /auth/oidc/callback
+    │  (with authorization code)
+    ▼
+Wrangler exchanges code for tokens
+    │  → validates id_token
+    │  → extracts claims (email, name, groups)
+    ▼
+JIT provisioning: create or update local user record
+    │  → map IdP groups to wrangler roles/access levels
+    │  → link identity to user_identities table
+    ▼
+Create session cookie, redirect to dashboard
+```
+
+**Configuration:**
+
+```toml
+# Multiple providers supported. First one becomes the default login button.
+[[auth.oidc]]
+name = "google"
+display_name = "Google Workspace"
+issuer = "https://accounts.google.com"
+client_id = "..."
+client_secret = "encrypted:..."
+scopes = ["openid", "email", "profile"]
+# Optional: restrict to specific domain
+allowed_domains = ["yourcompany.com"]
+# Claim used for group extraction (varies by IdP)
+group_claim = "groups"  # or "roles", "hd", custom claim
+# Map IdP groups/roles to wrangler access levels
+[auth.oidc.role_mapping]
+"admin@yourcompany.com" = "admin"
+"mcp-admins" = "admin"       # group claim
+"*" = "write"                 # default for all authenticated users
+
+[[auth.oidc]]
+name = "microsoft"
+display_name = "Microsoft 365"
+issuer = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+client_id = "..."
+client_secret = "encrypted:..."
+scopes = ["openid", "email", "profile"]
+# Azure AD often hits group overage (>200 groups) — may need Graph API fallback
+group_claim = "groups"
+```
+
+**User model changes:**
+
+```sql
+-- Separate identity table supports multiple providers per user
+-- and avoids the "Google first, then M365 = two users" problem.
+CREATE TABLE user_identities (
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider_type   TEXT NOT NULL,     -- 'local', 'oidc'
+    issuer          TEXT,              -- OIDC issuer URL
+    subject         TEXT,              -- OIDC subject claim (stable, unique per user per IdP)
+    email           TEXT,
+    email_verified  BOOLEAN DEFAULT FALSE,
+    display_name    TEXT,
+    avatar_url      TEXT,
+    raw_claims      TEXT,              -- JSON snapshot for debugging
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login_at   DATETIME,
+    UNIQUE(issuer, subject)
+);
+
+CREATE INDEX idx_user_identities_user ON user_identities(user_id);
+
+-- Deprovisioning support
+ALTER TABLE users ADD COLUMN email TEXT;
+ALTER TABLE users ADD COLUMN disabled_at DATETIME;
+    -- When set, all sessions + API keys are rejected
+ALTER TABLE users ADD COLUMN last_idp_login_at DATETIME;
+```
+
+**Deprovisioning (the hard part):**
+
+JIT provisioning alone doesn't handle offboarding. If a user is removed from the IdP, Wrangler won't know until the next login. Options in order of complexity:
+
+1. **Baseline (ship this first):** Roles update on login. Add `disabled_at` to users table. Enforce on every request (UI session check, API key validation, proxy auth). Admin can manually disable users. API keys fail immediately for disabled users.
+2. **Better:** Short session TTL (e.g., 8h instead of 30d) for OIDC users — forces re-auth, which fails if IdP access is revoked.
+3. **Enterprise (later):** SCIM provisioning endpoint — IdP pushes user create/disable/delete events. This is the real answer for enterprise offboarding but is a significant feature.
+
+**Multi-provider identity linking:**
+
+A user who logs in with Google and then M365 should NOT create two separate user accounts. But auto-merging by email is an account takeover risk (emails can be unverified, reused, or change ownership).
+
+Rules:
+- `user_identities` table keyed by `(issuer, subject)` — each identity links to one `users` row
+- First login from a new IdP creates a new user
+- Account linking is **explicit**: logged-in user clicks "Link another provider" which adds a second row in `user_identities` pointing to the same `user_id`
+- Auto-linking (if enabled) requires `email_verified=true` + email matches existing user + issuer is in allowlist. Still risky — off by default.
+
+**Service accounts for CI/automation:**
+
+Humans use OIDC browser flow. CI systems can't. Options:
+
+- **Wrangler-native service accounts (ship this):** Separate principal type in `users` table (`role = 'service'`). Admin creates them via UI, gets a long-lived API key. No IdP required. Scoped by access level like normal users.
+- **OIDC client credentials (later):** Machine-to-machine tokens — but many IdPs lock this down, and you need per-tenant client registration.
+- **Workload identity federation (much later):** GitHub Actions OIDC → token exchange. Powerful but a whole project.
+
+**Role resolution debugging:**
+
+Group claims are unreliable across IdPs (Azure AD group overage, Okta config differences, Google requiring extra setup). Admins will ask "why does Alice have admin?" A TOML mapping with no visibility is painful.
+
+Ship with:
+- A "Role debug" screen: shows raw claims (redacted sensitive fields), matched mapping rules, resulting role
+- Support multiple group claim strategies: `claim=groups`, `claim=roles`, regex matches
+- Log claim hash on each login for audit trail
+
+**Key behaviors:**
+- Local password auth remains for admin recovery and air-gapped deployments
+- Login page shows configured IdP buttons + optional local login form
+- API keys are independent of session lifecycle (but fail if user is disabled)
+- Consider `api_keys.expires_at` for time-limited keys
+- Device auth flow (mcp-sync) still works — user approves via browser using whatever login method they have
+- Admin can disable local auth entirely (force SSO)
+
+**New endpoints:**
+- `GET /auth/oidc/{provider}` — initiate OIDC flow (redirect to IdP)
+- `GET /auth/oidc/callback` — handle IdP callback
+- `POST /auth/oidc/link` — link additional provider to current user (requires session)
+- Admin UI: "Identity Providers" settings page + "Role debug" screen
+
+**Dependencies:**
+- `github.com/coreos/go-oidc/v3` — OIDC discovery, token validation, JWK handling
+
+---
+
+#### 9B: Container Runtime Abstraction
+
+**Problem:** MCP Wrangler is hardwired to the Docker socket. This limits deployment to machines with Docker installed and prevents using managed container services.
+
+**Descoped reality check:** Supporting ACI/ECS/K8s is not "a runtime adapter" — it's a product line (credentials, networking, RBAC, cost controls, drift handling, image registries). Cloud runtimes also can't do Docker-style exec-attach for stdio servers, and networking/addressing varies wildly between providers. The original plan for a true "sidecar" was architecturally flawed — a sidecar process in another container *cannot* read the main container's stdin/stdout.
+
+**Phase 9B scope: Interface extraction + Docker remote only.** Cloud backends are deferred to a future phase with validated demand.
+
+**Runtime interface (capability-based):**
+
+Rather than pretending all runtimes are equivalent, the interface explicitly declares capabilities:
+
+```go
+// ContainerRuntime manages the lifecycle of MCP server containers.
+type ContainerRuntime interface {
+    // Name returns the runtime identifier (e.g., "docker-local", "docker-remote").
+    Name() string
+
+    // Capabilities returns what this runtime supports.
+    Capabilities() RuntimeCapabilities
+
+    // PullImage ensures the image is available.
+    PullImage(ctx context.Context, ref string) error
+
+    // BuildImage builds an image from a Dockerfile.
+    // Returns ErrNotSupported if !Capabilities().Build.
+    BuildImage(ctx context.Context, opts BuildOptions) (string, error)
+
+    // CreateContainer creates a container but doesn't start it.
+    CreateContainer(ctx context.Context, opts ContainerOptions) (ContainerID, error)
+
+    // StartContainer starts a created container.
+    StartContainer(ctx context.Context, id ContainerID) error
+
+    // StopContainer stops a running container.
+    StopContainer(ctx context.Context, id ContainerID) error
+
+    // RemoveContainer removes a stopped container.
+    RemoveContainer(ctx context.Context, id ContainerID) error
+
+    // AttachStdio returns an io.ReadWriteCloser connected to the
+    // container's stdin/stdout for stdio-mode MCP servers.
+    // Returns ErrNotSupported if !Capabilities().StdioAttach.
+    AttachStdio(ctx context.Context, id ContainerID) (io.ReadWriteCloser, error)
+
+    // ContainerAddr returns the network address (host:port) for an
+    // HTTP-mode MCP server running in the container.
+    ContainerAddr(ctx context.Context, id ContainerID, port int) (string, error)
+
+    // ContainerStatus returns the current state of a container.
+    ContainerStatus(ctx context.Context, id ContainerID) (ContainerState, error)
+
+    // Ping verifies connectivity to the runtime.
+    Ping(ctx context.Context) error
+}
+
+type RuntimeCapabilities struct {
+    StdioAttach bool // Can attach to container stdin/stdout (Docker only)
+    Build       bool // Can build images from Dockerfile
+    ExecHealth  bool // Can exec commands for health checks
+}
+
+var ErrNotSupported = errors.New("operation not supported by this runtime")
+```
+
+**Docker backend** (current behavior, refactored behind the interface):
+- `StdioAttach: true`, `Build: true`, `ExecHealth: true`
+- This is a refactor of `internal/docker/` to implement the interface
+- Supports both local socket and remote TCP (`docker -H tcp://...`)
+
+**Configuration:**
+
+```toml
+[runtime]
+type = "docker"  # only "docker" for now
+
+[runtime.docker]
+host = "unix:///var/run/docker.sock"  # or "tcp://remote-host:2376"
+api_version = ""                       # auto-detect or pin
+# TLS for remote Docker (optional)
+tls_ca = ""
+tls_cert = ""
+tls_key = ""
+```
+
+**Implementation order:**
+1. Extract `ContainerRuntime` interface from current Docker code (refactor, no behavior change)
+2. Move existing Docker logic into `internal/runtime/docker/` implementing the interface
+3. Add Docker-remote support (same API, different transport — mostly config)
+4. Update proxy manager / server store to use the interface instead of direct Docker calls
+
+**Future cloud runtimes (deferred, documented for planning):**
+
+When there's validated demand, cloud runtimes would need:
+- **Wrapper image, not sidecar:** For stdio servers, auto-build a derived image: `FROM userimage`, copy in `wrangler-bridge` binary, set entrypoint to `wrangler-bridge -- <original-cmd>`. The bridge runs as the parent process of the MCP server in the *same* container and exposes an HTTP endpoint. This ties into Phase 6's build system.
+- **Wrangler Agent:** For cloud runtimes, Wrangler likely needs an agent/controller deployed *in* the cloud network to handle addressing, port-forward/tunnel, and health checks. A single binary on a laptop can't reliably reach containers in a VPC.
+- **Require prebuilt images:** No auto-build on cloud runtimes initially. Users push images to their registry (ECR, ACR, etc.).
+- **Health checks:** Unify at the Wrangler level ("can I complete an MCP ping within N ms?") rather than relying on runtime-specific exec/health mechanisms.
+- **Cost controls:** Idle timeouts + auto-stop + per-user container quotas.
+
+---
+
+#### 9C: HTTP Proxy Mode — Agent Traffic Interception
+
+**Problem:** MCP Wrangler sees MCP tool calls but is blind to everything else an AI agent does on the network — `curl`, `npm install`, `git clone`, `pip install`, API calls from generated code. There's no unified view of agent network activity.
+
+**Opportunity:** [Claude Code's sandbox](https://code.claude.com/docs/en/sandboxing) routes all network traffic through a configurable proxy (`sandbox.network.httpProxyPort`). If that proxy is MCP Wrangler, you get a single enforcement point for both MCP and HTTP traffic.
+
+> **Hard prerequisite:** Prototype this with Claude Code's actual sandbox before committing to implementation. The sandbox may run its own internal proxy with chaining behavior that limits what an external proxy can do. If `npm install` / `git clone` can't reliably route through our proxy, this phase collapses.
+
+**Scope: localhost-only, single-user, metadata-only.** The sandbox config only accepts a port, not auth credentials. This means the proxy cannot authenticate connections via headers or tokens. The security boundary is "only processes on this machine can reach localhost:8081." Multi-user or network-exposed proxy is a non-starter without additional auth mechanisms.
+
+**Architecture:**
+
+```
+Claude Code (sandboxed, same machine)
+    │
+    ├── MCP tool calls ──► /mcp/{server-name} ──► MCP Proxy (existing)
+    │                           │
+    │                           ├─ Auth (API key)
+    │                           ├─ RBAC
+    │                           ├─ Middleware pipeline
+    │                           └─ Backend server
+    │
+    └── HTTP requests ──► localhost:8081 ──► HTTP Proxy (new)
+         (curl, npm, git, etc.)     │
+                                    ├─ Domain allowlist
+                                    ├─ Request metadata logging
+                                    ├─ Egress policy (allow/deny/log)
+                                    └─ Upstream (direct or chained proxy)
+
+Same admin UI, unified audit trail.
+```
+
+**How it works:**
+
+MCP Wrangler runs an HTTP forward proxy bound to `127.0.0.1` on a separate port (default 8081). Claude Code's sandbox configuration points at it:
+
+```json
+{
+  "sandbox": {
+    "network": {
+      "httpProxyPort": 8081
+    }
+  }
+}
+```
+
+**Proxy behaviors:**
+
+1. **HTTP CONNECT** (HTTPS traffic): Wrangler receives `CONNECT example.com:443`, checks domain against allowlist, then tunnels the TLS connection. Logs domain, port, bytes transferred, timing, and outcome. **No content inspection** — domain-level filtering and metadata only.
+
+2. **Plain HTTP**: Wrangler receives the full request, can inspect/log headers and domain, then forwards upstream. Body logging is off by default.
+
+3. **TLS MITM: Punted entirely.** The complexity (CA generation, cert distribution, per-runtime trust stores, HSTS/pinning failures, HTTP/2 handling, WebSockets, gRPC, governance) is not justified for Phase 9. If Comma Compliance needs content inspection later, it would be a separate dedicated feature.
+
+**Domain allowlist:**
+
+```toml
+[proxy]
+enabled = false  # opt-in
+listen = "127.0.0.1:8081"  # localhost only — NEVER bind to 0.0.0.0
+mode = "allowlist"  # "allowlist" (default) or "passthrough" (log-only)
+
+# Upstream proxy chaining (for corporate proxy environments)
+upstream_proxy = ""  # e.g., "http://corporate-proxy.internal:8080"
+
+# Default allowed domains for common dev workflows
+default_allowed = [
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org",
+    "github.com",
+    "api.github.com",
+    "rubygems.org",
+    "pkg.go.dev",
+    "proxy.golang.org",
+    "sum.golang.org",
+]
+
+# Blocked IP ranges (always enforced, even in passthrough mode)
+# These prevent exfiltration to internal networks and cloud metadata services
+blocked_ranges = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",     # link-local + cloud metadata (AWS/GCP/Azure)
+    "127.0.0.0/8",        # localhost
+    "fd00::/8",            # IPv6 ULA
+]
+```
+
+**Egress policy enforcement:**
+- CONNECT to **IP literals** (bypassing domain policy): deny by default, require explicit allowlist
+- Cloud metadata endpoints (`169.254.169.254`): always blocked
+- RFC1918/link-local/multicast: always blocked (prevents lateral movement)
+- DNS resolution: resolve before connecting, enforce IP policy on resolved addresses
+
+**Database schema:**
+
+```sql
+CREATE TABLE proxy_rules (
+    id          TEXT PRIMARY KEY,
+    domain      TEXT NOT NULL,              -- e.g., "*.github.com", "api.openai.com"
+    action      TEXT NOT NULL DEFAULT 'allow',  -- 'allow', 'deny', 'log'
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(domain)
+);
+
+-- Extend request_logs for HTTP proxy events
+ALTER TABLE request_logs ADD COLUMN source TEXT DEFAULT 'mcp';
+    -- 'mcp' = MCP proxy, 'http' = HTTP proxy
+ALTER TABLE request_logs ADD COLUMN domain TEXT;
+```
+
+**Logging performance (SQLite will get crushed by HTTP volume):**
+
+Package installs generate hundreds/thousands of HTTP requests. Naive per-request logging will bottleneck on SQLite locks.
+
+Mitigations:
+- **Async batched logging:** Buffer events in a channel, flush to DB in batches (e.g., every 100 events or 1 second)
+- **Aggregate mode:** Store per-domain totals (request count, bytes, last seen) + sampled exemplars, not every request
+- **Retention limits:** Auto-purge HTTP proxy logs older than N days (configurable, default 7d). MCP logs have separate, longer retention.
+- **No body buffering:** Proxy streams data through — never buffers request/response bodies in memory
+
+**Middleware: separate chains, shared event envelope:**
+
+The MCP middleware pipeline (Sanitizer, Sizer, Alerter) operates on JSON-RPC messages. HTTP proxy traffic is arbitrary binary data. Forcing them through the same pipeline creates mismatches ("sanitize an npm tarball?").
+
+Instead:
+- Define a common **audit event envelope** (identity, domain, timestamp, bytes, policy decision, source)
+- MCP middleware chain stays as-is for MCP traffic
+- HTTP proxy gets its own policy chain: domain allowlist → IP policy → rate limits → alerter (domain pattern alerts)
+- **Shared components:** Alerter (pattern matching on domains/URLs), audit logger, dashboard aggregation
+- **MCP-only components:** Sanitizer, Sizer (these inspect JSON-RPC payloads)
+
+**Protocol coverage (be honest about gaps):**
+
+The HTTP proxy catches:
+- HTTP/1.1 plain text requests
+- HTTPS via CONNECT (metadata only — domain, port, bytes, timing)
+- WebSockets *if* properly upgraded through CONNECT
+
+It will NOT catch:
+- `git+ssh`, raw SSH, TCP sockets, UDP, DNS-over-HTTPS (depending on config)
+- gRPC typically tunnels over CONNECT (metadata only)
+- Tools that ignore proxy environment variables or use custom network stacks
+- HTTP/3 (QUIC) — often bypasses HTTP proxies entirely
+
+Marketing/UI should say "HTTP(S) egress monitoring" not "all agent traffic."
+
+**Corporate proxy chaining:**
+
+Many developers are already behind a corporate proxy. The Wrangler proxy must support:
+- Static upstream proxy configuration (`upstream_proxy` in TOML)
+- Passing through upstream proxy auth if needed
+- PAC files: **not supported** initially (non-trivial to implement)
+- Document: "If you're behind a corporate proxy, set `upstream_proxy` to chain through it"
+
+**Web UI additions:**
+- Dashboard: "HTTP Proxy" card showing request counts, top domains, blocked requests
+- Settings: Proxy on/off toggle, port, mode, domain allowlist editor
+- Logs: Combined MCP + HTTP view with source filter tab
+
+**Implementation order:**
+1. **Prototype with Claude Code sandbox** — verify traffic actually routes through external proxy
+2. Basic HTTP CONNECT proxy with domain allowlist, localhost-only
+3. Blocked IP ranges enforcement (RFC1918, metadata endpoints)
+4. Async batched request metadata logging
+5. Web UI for proxy rules and log viewing
+6. Alerter integration (domain pattern alerts shared with MCP alerter)
+7. Upstream proxy chaining support
+8. mcp-sync integration for auto-configuring sandbox settings (stretch)
+
+---
+
+#### How 9A/9B/9C reinforce each other
+
+These three pieces aren't just parallel features — they compound:
+
+- **9A + 9C**: Enterprise SSO login → the HTTP proxy logs are tied to real federated identities → compliance audit trail shows "alice@company.com ran `npm install` targeting these domains" not "API key xyz"
+- **9A + 9B**: SSO users get scoped access → OIDC claims determine access levels → future cloud runtimes could route by role (dev → local Docker, prod → managed)
+- **9B + 9C**: Container runtime interface → proxy manager decoupled from Docker → when cloud backends land, the HTTP proxy provides the same network visibility regardless of where containers run
+
+The combination evolves MCP Wrangler from "Docker MCP proxy" toward "AI agent traffic gateway."
+
+#### Sequencing and risk
+
+**Ship order:** 9A (OIDC) → 9B (interface extraction) → 9C (HTTP proxy)
+
+Rationale:
+- 9A is self-contained, high value, and doesn't depend on 9B or 9C
+- 9B is a refactor (improves code quality regardless of cloud backends)
+- 9C has the highest risk (sandbox integration is unproven) — do it last so the prototype validates before heavy investment
+
+**Cross-cutting concern:** If 9C produces massive audit volume, it will stress the same DB/UI/logging systems that 9A (security audit) and 9B (runtime telemetry) rely on. Plan retention, backpressure, and async logging *before* adding the HTTP proxy firehose.
+
+**Enterprise scope creep warning:** If you target enterprises with SSO + proxy interception + cloud runtimes, you're implicitly signing up for SCIM/deprovisioning, service accounts, policy engine, and tenancy boundaries. If you don't want that, keep Phase 9 scoped to "small team / local-first" and let Comma Compliance handle the enterprise layer.
+
 ---
 
 ## Bugfixes & Small Improvements

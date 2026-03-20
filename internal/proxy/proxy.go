@@ -82,37 +82,16 @@ func (m *Manager) StartServer(ctx context.Context, srv *store.Server) error {
 }
 
 // RetryServer attempts to reconnect a stateless server (remote or external HTTP).
-// It removes any stale backend, creates a fresh connection, and pings to verify.
+// It removes any stale backend and creates a fresh connection.
+// For remote servers, we skip verification ping because enumerateAsync (which
+// establishes the MCP session) runs concurrently and the ping would race with it.
+// The next health check cycle will verify the connection is actually working.
 func (m *Manager) RetryServer(ctx context.Context, srv *store.Server) error {
 	m.mu.Lock()
 	delete(m.backends, srv.ID)
 	m.mu.Unlock()
 
-	if err := m.StartServer(ctx, srv); err != nil {
-		return err
-	}
-
-	// Verify it's actually reachable before declaring recovery
-	backend, ok := m.GetBackend(srv.ID)
-	if !ok {
-		return fmt.Errorf("backend not found after start")
-	}
-
-	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	id, _ := json.Marshal(999999)
-	req := &mcp.Request{JSONRPC: "2.0", ID: id, Method: "ping"}
-	if _, err := backend.Send(pingCtx, req); err != nil {
-		// Ping failed — clean up the backend we just created
-		m.mu.Lock()
-		delete(m.backends, srv.ID)
-		m.mu.Unlock()
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
-		return err
-	}
-
-	return nil
+	return m.StartServer(ctx, srv)
 }
 
 func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
@@ -123,16 +102,19 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 
 	m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
 
-	// Auto-build image from package if Build config is set and no image exists
-	if cfg.Build != nil && cfg.Image == "" {
+	// Auto-build image from package if Build config is set
+	if cfg.Build != nil {
 		tag := cfg.Build.BuildImageTag()
+		if cfg.Image == "" {
+			cfg.Image = tag
+		}
+		// Build (or rebuild) if the image doesn't exist locally
 		if err := m.buildImageIfNeeded(ctx, srv, &cfg, tag, false); err != nil {
 			return err
 		}
-		cfg.Image = tag
 	}
 
-	// Pull image
+	// Ensure image exists (pull from registry for non-build images, verify for build images)
 	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
 	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())

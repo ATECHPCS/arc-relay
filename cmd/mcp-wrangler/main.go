@@ -43,6 +43,7 @@ func main() {
 	serverStore := store.NewServerStore(db, crypto)
 	userStore := store.NewUserStore(db)
 	accessStore := store.NewAccessStore(db)
+	profileStore := store.NewProfileStore(db)
 	requestLogStore := store.NewRequestLogStore(db)
 	sessionStore := store.NewSessionStore(db)
 
@@ -99,12 +100,15 @@ func main() {
 		}
 	}()
 
+	// Initialize invite store
+	inviteStore := store.NewInviteStore(db)
+
 	// Start health monitor
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

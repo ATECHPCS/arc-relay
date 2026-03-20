@@ -27,16 +27,18 @@ type Server struct {
 	proxy           *proxy.Manager
 	oauthMgr        *oauth.Manager
 	accessStore     *store.AccessStore
+	profileStore    *store.ProfileStore
 	requestLogs     *store.RequestLogStore
 	sessionStore    *store.SessionStore
 	middlewareStore  *store.MiddlewareStore
 	mwRegistry      *middleware.Registry
 	healthMon       *proxy.HealthMonitor
+	inviteStore     *store.InviteStore
 	mux             *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore) *Server {
 	s := &Server{
 		cfg:             cfg,
 		servers:         servers,
@@ -44,11 +46,13 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		proxy:           proxyMgr,
 		oauthMgr:        oauthMgr,
 		accessStore:     accessStore,
+		profileStore:    profileStore,
 		requestLogs:     requestLogs,
 		sessionStore:    sessionStore,
 		middlewareStore:  middlewareStore,
 		mwRegistry:      mwRegistry,
 		healthMon:       healthMon,
+		inviteStore:     inviteStore,
 		mux:             http.NewServeMux(),
 	}
 	s.routes()
@@ -72,7 +76,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
@@ -287,6 +291,11 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Filter list responses to only include endpoints the user has permission for
+	if user != nil && user.ProfileID != nil && s.profileStore != nil {
+		resp = s.filterListResponse(resp, mcpReq.Method, user, srv.ID)
+	}
+
 	if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
 		go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "success", "")
 	}
@@ -317,15 +326,31 @@ func (s *Server) logRequest(user *store.User, serverID, method, endpointName str
 // Returns an error response if denied, nil if allowed.
 func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.Request) *mcp.Response {
 	user := UserFromContext(r.Context())
-	if user == nil {
-		return nil // no user context = no enforcement (shouldn't happen behind auth middleware)
+	if user == nil || user.Role == "admin" {
+		return nil // admin bypasses all checks
 	}
 
 	endpointType, endpointName := extractEndpointName(req.Method, req.Params)
 	if endpointType == "" || endpointName == "" {
+		return nil // non-endpoint methods (initialize, ping, list) pass through
+	}
+
+	// Profile-based enforcement (new path)
+	if user.ProfileID != nil && s.profileStore != nil {
+		allowed, err := s.profileStore.CheckPermission(*user.ProfileID, serverID, endpointType, endpointName)
+		if err != nil {
+			log.Printf("Profile permission check error: %v", err)
+			return mcp.NewErrorResponse(req.ID, mcp.ErrCodeInternal, "permission check failed")
+		}
+		if !allowed {
+			log.Printf("Access denied: user %s (profile=%s) tried %s %s on server %s",
+				user.Username, *user.ProfileID, endpointType, endpointName, serverID)
+			return mcp.NewErrorResponse(req.ID, mcp.ErrCodeInternal, "access denied: not permitted by profile")
+		}
 		return nil
 	}
 
+	// Legacy tier-based check (keys without profile assignment)
 	tier := s.accessStore.GetTier(serverID, endpointType, endpointName)
 	if !s.accessStore.CheckAccess(user.AccessLevel, tier) {
 		log.Printf("Access denied: user %s (level=%s) tried %s %s (tier=%s)",
@@ -335,6 +360,88 @@ func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.
 	}
 
 	return nil
+}
+
+// filterListResponse filters tools/list, resources/list, and prompts/list responses
+// to only include endpoints the user's profile grants access to. This reduces the
+// context window for LLM clients to only the actions they can actually perform.
+func (s *Server) filterListResponse(resp *mcp.Response, method string, user *store.User, serverID string) *mcp.Response {
+	if resp == nil || resp.Error != nil || user.ProfileID == nil {
+		return resp
+	}
+
+	var endpointType, listKey, nameField string
+	switch method {
+	case "tools/list":
+		endpointType, listKey, nameField = "tool", "tools", "name"
+	case "resources/list":
+		endpointType, listKey, nameField = "resource", "resources", "uri"
+	case "prompts/list":
+		endpointType, listKey, nameField = "prompt", "prompts", "name"
+	default:
+		return resp
+	}
+
+	// Get permitted endpoints for this user+server
+	perms, err := s.profileStore.GetPermissionsForServer(*user.ProfileID, serverID)
+	if err != nil {
+		log.Printf("Error fetching profile permissions for filtering: %v", err)
+		return resp
+	}
+	permSet := make(map[string]bool)
+	for _, p := range perms {
+		if p.EndpointType == endpointType {
+			permSet[p.EndpointName] = true
+		}
+	}
+
+	// Parse the result object
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return resp
+	}
+	listRaw, ok := result[listKey]
+	if !ok {
+		return resp
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(listRaw, &items); err != nil {
+		return resp
+	}
+
+	// Filter to only permitted items
+	var filtered []json.RawMessage
+	for _, raw := range items {
+		var item map[string]json.RawMessage
+		if json.Unmarshal(raw, &item) != nil {
+			continue
+		}
+		nameRaw, ok := item[nameField]
+		if !ok {
+			continue
+		}
+		var name string
+		if json.Unmarshal(nameRaw, &name) != nil {
+			continue
+		}
+		if permSet[name] {
+			filtered = append(filtered, raw)
+		}
+	}
+
+	log.Printf("Profile filter %s: %d → %d %s for user %s on server %s",
+		method, len(items), len(filtered), listKey, user.Username, serverID)
+
+	// Reconstruct the result with filtered list
+	if filtered == nil {
+		filtered = []json.RawMessage{} // ensure JSON array, not null
+	}
+	filteredBytes, _ := json.Marshal(filtered)
+	result[listKey] = filteredBytes
+	newResult, _ := json.Marshal(result)
+	resp.Result = newResult
+	return resp
 }
 
 // REST API handlers

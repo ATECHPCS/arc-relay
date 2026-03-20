@@ -131,6 +131,7 @@ type Handlers struct {
 	proxy           *proxy.Manager
 	oauth           *oauth.Manager
 	accessStore     *store.AccessStore
+	profileStore    *store.ProfileStore
 	requestLogs     *store.RequestLogStore
 	sessionStore    *store.SessionStore
 	middlewareStore  *store.MiddlewareStore
@@ -138,12 +139,13 @@ type Handlers struct {
 	healthMon       *proxy.HealthMonitor
 	catalogClient   *catalog.Client
 	deviceAuth      *deviceAuthStore
+	inviteStore     *store.InviteStore
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
 	loginLimiter    *loginRateLimiter
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore) *Handlers {
 	// Generate a per-process CSRF secret. Use session_secret from config if set.
 	csrfSecret := []byte(cfg.Auth.SessionSecret)
 	if len(csrfSecret) == 0 {
@@ -159,6 +161,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		proxy:          proxyMgr,
 		oauth:          oauthMgr,
 		accessStore:    accessStore,
+		profileStore:   profileStore,
 		requestLogs:    requestLogs,
 		sessionStore:   sessionStore,
 		middlewareStore: middlewareStore,
@@ -166,19 +169,30 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		healthMon:      healthMon,
 		catalogClient:  catalog.NewClient(),
 		deviceAuth:     newDeviceAuthStore(),
+		inviteStore:    inviteStore,
 		tmpls:          make(map[string]*template.Template),
 		csrfSecret:     csrfSecret,
 		loginLimiter:   newLoginRateLimiter(),
 	}
 
+	// Template helper functions
+	funcMap := template.FuncMap{
+		"deref": func(s *string) string {
+			if s == nil {
+				return ""
+			}
+			return *s
+		},
+	}
+
 	// Parse each page template together with the layout
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html"}
 	for _, page := range pages {
-		t := template.Must(template.ParseFS(templateFS, "templates/layout.html", "templates/"+page))
+		t := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/"+page))
 		h.tmpls[page] = t
 	}
 	// Login is standalone (no layout)
-	h.tmpls["login.html"] = template.Must(template.ParseFS(templateFS, "templates/login.html"))
+	h.tmpls["login.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/login.html"))
 
 	return h
 }
@@ -207,6 +221,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/", h.requireAuth(h.handleUserRoutes))
 	mux.HandleFunc("/api-keys", h.requireAuth(h.handleAPIKeys))
 	mux.HandleFunc("/api-keys/", h.requireAuth(h.handleAPIKeyRoutes))
+	mux.HandleFunc("/profiles", h.requireAuth(h.handleProfiles))
+	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
 	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
@@ -216,6 +232,9 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/device", h.handleDeviceAuthStart)       // No auth — CLI calls before having a key
 	mux.HandleFunc("/api/auth/device/token", h.handleDeviceAuthToken) // No auth — CLI polls for token
 	mux.HandleFunc("/auth/device", h.handleDeviceAuthPage)            // Session auth checked internally (redirects to login)
+
+	// Invite token exchange (no auth — CLI uses the token itself as proof)
+	mux.HandleFunc("/api/auth/invite", h.handleInviteExchange)
 
 	// Binary hosting for mcp-sync CLI
 	mux.HandleFunc("/install.sh", h.handleInstallScript)
@@ -877,12 +896,22 @@ func (h *Handlers) handleUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Admin access required", http.StatusForbidden)
 		return
 	}
+	h.renderUsersList(w, r, "")
+}
+
+func (h *Handlers) renderUsersList(w http.ResponseWriter, r *http.Request, errMsg string) {
 	users, _ := h.users.List()
-	h.render(w, r, "users.html", map[string]any{
-		"Nav":   "users",
-		"User":  user,
-		"Users": users,
-	})
+	profiles, _ := h.profileStore.List()
+	data := map[string]any{
+		"Nav":      "users",
+		"User":     getUser(r),
+		"Users":    users,
+		"Profiles": profiles,
+	}
+	if errMsg != "" {
+		data["Error"] = errMsg
+	}
+	h.render(w, r, "users.html", data)
 }
 
 func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
@@ -899,12 +928,120 @@ func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleUserCreate(w, r)
 		return
 	}
-	if len(parts) > 1 && parts[1] == "delete" && r.Method == http.MethodPost {
-		h.users.Delete(parts[0])
-		http.Redirect(w, r, "/users", http.StatusFound)
-		return
+	if len(parts) > 1 && r.Method == http.MethodPost {
+		userID := parts[0]
+		switch parts[1] {
+		case "delete":
+			h.users.Delete(userID)
+			http.Redirect(w, r, "/users", http.StatusFound)
+			return
+		case "update":
+			h.handleUserUpdate(w, r, userID)
+			return
+		case "invite":
+			h.handleUserInvite(w, r, userID)
+			return
+		}
 	}
 	http.NotFound(w, r)
+}
+
+func (h *Handlers) handleUserInvite(w http.ResponseWriter, r *http.Request, userID string) {
+	admin := getUser(r)
+	if admin == nil || admin.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	targetUser, err := h.users.Get(userID)
+	if err != nil || targetUser == nil {
+		h.renderUsersList(w, r, "User not found")
+		return
+	}
+
+	// Use the user's default profile for the invite
+	var profileID *string
+	if targetUser.DefaultProfileID != nil {
+		profileID = targetUser.DefaultProfileID
+	}
+
+	expiresAt := time.Now().Add(48 * time.Hour)
+	rawToken, _, err := h.inviteStore.Create(userID, profileID, admin.ID, expiresAt)
+	if err != nil {
+		h.renderUsersList(w, r, "Failed to create invite: "+err.Error())
+		return
+	}
+
+	baseURL := h.cfg.PublicBaseURL()
+	installCmd := fmt.Sprintf("curl -fsSL %s/install.sh | bash -s -- --token %s", baseURL, rawToken)
+
+	users, _ := h.users.List()
+	profiles, _ := h.profileStore.List()
+	h.render(w, r, "users.html", map[string]any{
+		"Nav":        "users",
+		"User":       admin,
+		"Users":      users,
+		"Profiles":   profiles,
+		"InviteCmd":  installCmd,
+		"InviteUser": targetUser.Username,
+	})
+}
+
+// handleInviteExchange handles POST /api/auth/invite - exchanges a token for an API key.
+func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Token == "" {
+		http.Error(w, `{"error":"token is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	invite, err := h.inviteStore.ValidateAndConsume(body.Token)
+	if err != nil {
+		log.Printf("Invite exchange error: %v", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	if invite == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid, expired, or already used token"})
+		return
+	}
+
+	// Create an API key for the invited user
+	rawKey, _, err := h.users.CreateAPIKey(invite.UserID, "mcp-sync invite", invite.ProfileID)
+	if err != nil {
+		log.Printf("Invite exchange: failed to create API key for user %s: %v", invite.UserID, err)
+		http.Error(w, `{"error":"failed to create API key"}`, http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Invite exchange: created API key for user %s via invite %s", invite.UserID, invite.ID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"api_key": rawKey})
+}
+
+func (h *Handlers) handleUserUpdate(w http.ResponseWriter, r *http.Request, userID string) {
+	role := r.FormValue("role")
+	if role == "admin" || role == "user" {
+		h.users.UpdateRole(userID, role)
+	}
+
+	var profileID *string
+	if pid := strings.TrimSpace(r.FormValue("default_profile_id")); pid != "" {
+		profileID = &pid
+	}
+	h.users.UpdateProfile(userID, profileID)
+
+	http.Redirect(w, r, "/users", http.StatusFound)
 }
 
 func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
@@ -918,22 +1055,18 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if accessLevel != "read" && accessLevel != "write" && accessLevel != "admin" {
 		accessLevel = "write"
 	}
+	var defaultProfileID *string
+	if pid := strings.TrimSpace(r.FormValue("default_profile_id")); pid != "" {
+		defaultProfileID = &pid
+	}
 
 	if username == "" || password == "" {
-		users, _ := h.users.List()
-		h.render(w, r, "users.html", map[string]any{
-			"Nav": "users", "User": getUser(r), "Users": users,
-			"Error": "Username and password are required",
-		})
+		h.renderUsersList(w, r, "Username and password are required")
 		return
 	}
 
-	if _, err := h.users.CreateWithAccessLevel(username, password, role, accessLevel); err != nil {
-		users, _ := h.users.List()
-		h.render(w, r, "users.html", map[string]any{
-			"Nav": "users", "User": getUser(r), "Users": users,
-			"Error": fmt.Sprintf("Failed to create user: %s", err),
-		})
+	if _, err := h.users.CreateWithAccessLevel(username, password, role, accessLevel, defaultProfileID); err != nil {
+		h.renderUsersList(w, r, fmt.Sprintf("Failed to create user: %s", err))
 		return
 	}
 	http.Redirect(w, r, "/users", http.StatusFound)
@@ -944,8 +1077,9 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
 	keys, _ := h.users.ListAPIKeys(user.ID)
+	profiles, _ := h.profileStore.List()
 	h.render(w, r, "api_keys.html", map[string]any{
-		"Nav": "apikeys", "User": user, "Keys": keys,
+		"Nav": "apikeys", "User": user, "Keys": keys, "Profiles": profiles,
 	})
 }
 
@@ -959,15 +1093,26 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			name = "unnamed"
 		}
-		rawKey, _, err := h.users.CreateAPIKey(user.ID, name)
+		var profileID *string
+		if pid := strings.TrimSpace(r.FormValue("profile_id")); pid != "" {
+			profileID = &pid
+		} else {
+			// Default to user's profile if no explicit selection
+			fullUser, _ := h.users.Get(user.ID)
+			if fullUser != nil && fullUser.DefaultProfileID != nil {
+				profileID = fullUser.DefaultProfileID
+			}
+		}
+		rawKey, _, err := h.users.CreateAPIKey(user.ID, name, profileID)
 		if err != nil {
 			log.Printf("Error creating API key: %v", err)
 			http.Redirect(w, r, "/api-keys", http.StatusFound)
 			return
 		}
 		keys, _ := h.users.ListAPIKeys(user.ID)
+		profiles, _ := h.profileStore.List()
 		h.render(w, r, "api_keys.html", map[string]any{
-			"Nav": "apikeys", "User": user, "Keys": keys, "NewKey": rawKey,
+			"Nav": "apikeys", "User": user, "Keys": keys, "NewKey": rawKey, "Profiles": profiles,
 		})
 		return
 	}
@@ -978,6 +1123,233 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.NotFound(w, r)
+}
+
+// --- Profiles ---
+
+func (h *Handlers) handleProfiles(w http.ResponseWriter, r *http.Request) {
+	user := getUser(r)
+	if user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		// Create new profile
+		name := strings.TrimSpace(r.FormValue("name"))
+		desc := strings.TrimSpace(r.FormValue("description"))
+		if name == "" {
+			h.renderProfilesList(w, r, &Flash{Type: "danger", Message: "Profile name is required"})
+			return
+		}
+		profile, err := h.profileStore.Create(name, desc)
+		if err != nil {
+			h.renderProfilesList(w, r, &Flash{Type: "danger", Message: "Failed to create profile: " + err.Error()})
+			return
+		}
+		http.Redirect(w, r, "/profiles/"+profile.ID, http.StatusFound)
+		return
+	}
+
+	h.renderProfilesList(w, r, nil)
+}
+
+func (h *Handlers) renderProfilesList(w http.ResponseWriter, r *http.Request, flash *Flash) {
+	user := getUser(r)
+	profiles, _ := h.profileStore.List()
+
+	type profileRow struct {
+		*store.AgentProfile
+		PermCount int
+		KeyCount  int
+	}
+	var rows []profileRow
+	for _, p := range profiles {
+		pc, _ := h.profileStore.PermissionCount(p.ID)
+		kc, _ := h.profileStore.APIKeyCount(p.ID)
+		rows = append(rows, profileRow{AgentProfile: p, PermCount: pc, KeyCount: kc})
+	}
+
+	data := map[string]any{
+		"Nav": "profiles", "User": user, "Profiles": rows,
+	}
+	if flash != nil {
+		data["Flash"] = flash
+	}
+	h.render(w, r, "profiles.html", data)
+}
+
+func (h *Handlers) handleProfileRoutes(w http.ResponseWriter, r *http.Request) {
+	user := getUser(r)
+	if user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/profiles/")
+	parts := strings.SplitN(path, "/", 2)
+	profileID := parts[0]
+	if profileID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	switch action {
+	case "update":
+		h.handleProfileUpdate(w, r, profileID)
+	case "delete":
+		h.handleProfileDelete(w, r, profileID)
+	case "permission":
+		h.handleProfilePermission(w, r, profileID)
+	case "seed":
+		h.handleProfileSeed(w, r, profileID)
+	default:
+		h.handleProfileDetail(w, r, profileID)
+	}
+}
+
+func (h *Handlers) handleProfileDetail(w http.ResponseWriter, r *http.Request, profileID string) {
+	profile, err := h.profileStore.Get(profileID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Get all servers with their endpoints and current permissions
+	allServers, _ := h.servers.List()
+	perms, _ := h.profileStore.GetPermissions(profileID)
+
+	// Build a set of granted permissions for quick lookup
+	permSet := make(map[string]bool) // "serverID:type:name" -> true
+	for _, p := range perms {
+		permSet[p.ServerID+":"+p.EndpointType+":"+p.EndpointName] = true
+	}
+
+	type endpointRow struct {
+		Type    string
+		Name    string
+		Tier    string
+		Allowed bool
+	}
+	type serverSection struct {
+		ID        string
+		Name      string
+		Endpoints []endpointRow
+	}
+	var sections []serverSection
+	for _, srv := range allServers {
+		tiers, err := h.accessStore.GetAllTiers(srv.ID)
+		if err != nil || len(tiers) == 0 {
+			continue
+		}
+		sec := serverSection{ID: srv.ID, Name: srv.DisplayName}
+		for _, t := range tiers {
+			key := srv.ID + ":" + t.EndpointType + ":" + t.EndpointName
+			sec.Endpoints = append(sec.Endpoints, endpointRow{
+				Type:    t.EndpointType,
+				Name:    t.EndpointName,
+				Tier:    t.AccessTier,
+				Allowed: permSet[key],
+			})
+		}
+		sections = append(sections, sec)
+	}
+
+	h.render(w, r, "profile_detail.html", map[string]any{
+		"Nav":      "profiles",
+		"User":     getUser(r),
+		"Profile":  profile,
+		"Sections": sections,
+	})
+}
+
+func (h *Handlers) handleProfileUpdate(w http.ResponseWriter, r *http.Request, profileID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	desc := strings.TrimSpace(r.FormValue("description"))
+	if name == "" {
+		http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
+		return
+	}
+	h.profileStore.Update(profileID, name, desc)
+	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
+}
+
+func (h *Handlers) handleProfileDelete(w http.ResponseWriter, r *http.Request, profileID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.profileStore.Delete(profileID)
+	http.Redirect(w, r, "/profiles", http.StatusFound)
+}
+
+func (h *Handlers) handleProfilePermission(w http.ResponseWriter, r *http.Request, profileID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	serverID := r.FormValue("server_id")
+	endpointType := r.FormValue("endpoint_type")
+	endpointName := r.FormValue("endpoint_name")
+	action := r.FormValue("action") // "grant" or "revoke"
+
+	if serverID == "" || endpointType == "" || endpointName == "" {
+		http.Error(w, "Missing parameters", http.StatusBadRequest)
+		return
+	}
+
+	if action == "grant" {
+		h.profileStore.SetPermission(profileID, serverID, endpointType, endpointName)
+	} else {
+		h.profileStore.RemovePermission(profileID, serverID, endpointType, endpointName)
+	}
+
+	// Return 200 for JS fetch calls
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true}`))
+}
+
+func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, profileID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	serverID := r.FormValue("server_id")
+	tier := r.FormValue("tier") // "read", "write", or "admin"
+
+	if serverID == "" || tier == "" {
+		http.Error(w, "Missing parameters", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.profileStore.SeedFromTier(profileID, serverID, tier); err != nil {
+		log.Printf("Error seeding profile %s: %v", profileID, err)
+		if r.Header.Get("Accept") == "application/json" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"` + err.Error() + `"}`))
+			return
+		}
+	}
+
+	// AJAX callers get JSON; form submissions get a redirect
+	if r.Header.Get("Accept") == "application/json" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true}`))
+		return
+	}
+	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
 }
 
 // --- OAuth ---

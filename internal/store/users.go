@@ -13,22 +13,27 @@ import (
 )
 
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	Role         string    `json:"role"`
-	AccessLevel  string    `json:"access_level"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	Username         string    `json:"username"`
+	PasswordHash     string    `json:"-"`
+	Role             string    `json:"role"`
+	AccessLevel      string    `json:"access_level"`
+	DefaultProfileID *string   `json:"default_profile_id,omitempty"` // user's default profile for RBAC
+	CreatedAt        time.Time `json:"created_at"`
+	ProfileID        *string   `json:"profile_id,omitempty"` // effective profile (resolved at auth time)
+	ProfileName      string    `json:"profile_name,omitempty"` // populated on read, not stored
 }
 
 type APIKey struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	KeyHash   string    `json:"-"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-	LastUsed  *time.Time `json:"last_used,omitempty"`
-	Revoked   bool      `json:"revoked"`
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
+	KeyHash     string    `json:"-"`
+	Name        string    `json:"name"`
+	ProfileID   *string   `json:"profile_id,omitempty"`
+	ProfileName string    `json:"profile_name,omitempty"` // populated on read, not stored
+	CreatedAt   time.Time `json:"created_at"`
+	LastUsed    *time.Time `json:"last_used,omitempty"`
+	Revoked     bool      `json:"revoked"`
 }
 
 type UserStore struct {
@@ -40,10 +45,10 @@ func NewUserStore(db *DB) *UserStore {
 }
 
 func (s *UserStore) Create(username, password, role string) (*User, error) {
-	return s.CreateWithAccessLevel(username, password, role, "")
+	return s.CreateWithAccessLevel(username, password, role, "", nil)
 }
 
-func (s *UserStore) CreateWithAccessLevel(username, password, role, accessLevel string) (*User, error) {
+func (s *UserStore) CreateWithAccessLevel(username, password, role, accessLevel string, defaultProfileID *string) (*User, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("hashing password: %w", err)
@@ -58,18 +63,19 @@ func (s *UserStore) CreateWithAccessLevel(username, password, role, accessLevel 
 	}
 
 	user := &User{
-		ID:           uuid.New().String(),
-		Username:     username,
-		PasswordHash: string(hash),
-		Role:         role,
-		AccessLevel:  accessLevel,
-		CreatedAt:    time.Now(),
+		ID:               uuid.New().String(),
+		Username:         username,
+		PasswordHash:     string(hash),
+		Role:             role,
+		AccessLevel:      accessLevel,
+		DefaultProfileID: defaultProfileID,
+		CreatedAt:        time.Now(),
 	}
 
 	_, err = s.db.Exec(`
-		INSERT INTO users (id, username, password_hash, role, access_level, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		user.ID, user.Username, user.PasswordHash, user.Role, user.AccessLevel, user.CreatedAt,
+		INSERT INTO users (id, username, password_hash, role, access_level, default_profile_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.ID, user.Username, user.PasswordHash, user.Role, user.AccessLevel, user.DefaultProfileID, user.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating user: %w", err)
@@ -80,9 +86,9 @@ func (s *UserStore) CreateWithAccessLevel(username, password, role, accessLevel 
 func (s *UserStore) Authenticate(username, password string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, access_level, created_at
+		SELECT id, username, password_hash, role, access_level, default_profile_id, created_at
 		FROM users WHERE username = ?`, username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -100,9 +106,9 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 func (s *UserStore) Get(id string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, access_level, created_at
+		SELECT id, username, password_hash, role, access_level, default_profile_id, created_at
 		FROM users WHERE id = ?`, id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -115,9 +121,9 @@ func (s *UserStore) Get(id string) (*User, error) {
 func (s *UserStore) GetByUsername(username string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, access_level, created_at
+		SELECT id, username, password_hash, role, access_level, default_profile_id, created_at
 		FROM users WHERE username = ?`, username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -128,7 +134,12 @@ func (s *UserStore) GetByUsername(username string) (*User, error) {
 }
 
 func (s *UserStore) List() ([]*User, error) {
-	rows, err := s.db.Query(`SELECT id, username, password_hash, role, access_level, created_at FROM users ORDER BY created_at`)
+	rows, err := s.db.Query(`
+		SELECT u.id, u.username, u.password_hash, u.role, u.access_level,
+		       u.default_profile_id, COALESCE(ap.name, ''), u.created_at
+		FROM users u
+		LEFT JOIN agent_profiles ap ON u.default_profile_id = ap.id
+		ORDER BY u.created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("listing users: %w", err)
 	}
@@ -137,12 +148,26 @@ func (s *UserStore) List() ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.AccessLevel, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.AccessLevel,
+			&u.DefaultProfileID, &u.ProfileName, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+func (s *UserStore) UpdateProfile(id string, defaultProfileID *string) error {
+	_, err := s.db.Exec(`UPDATE users SET default_profile_id = ? WHERE id = ?`, defaultProfileID, id)
+	return err
+}
+
+func (s *UserStore) UpdateRole(id, role string) error {
+	_, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
+	if role == "admin" {
+		s.db.Exec(`UPDATE users SET access_level = 'admin' WHERE id = ?`, id)
+	}
+	return err
 }
 
 func (s *UserStore) Delete(id string) error {
@@ -174,7 +199,7 @@ func hashAPIKey(key string) string {
 }
 
 // CreateAPIKey generates a new API key and returns it (plaintext shown once).
-func (s *UserStore) CreateAPIKey(userID, name string) (string, *APIKey, error) {
+func (s *UserStore) CreateAPIKey(userID, name string, profileID *string) (string, *APIKey, error) {
 	rawKey := uuid.New().String() // the plaintext key
 	keyHash := hashAPIKey(rawKey)
 
@@ -183,13 +208,14 @@ func (s *UserStore) CreateAPIKey(userID, name string) (string, *APIKey, error) {
 		UserID:    userID,
 		KeyHash:   keyHash,
 		Name:      name,
+		ProfileID: profileID,
 		CreatedAt: time.Now(),
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO api_keys (id, user_id, key_hash, name, created_at)
-		VALUES (?, ?, ?, ?, ?)`,
-		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.CreatedAt,
+		INSERT INTO api_keys (id, user_id, key_hash, name, profile_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.ProfileID, ak.CreatedAt,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("creating api key: %w", err)
@@ -198,15 +224,20 @@ func (s *UserStore) CreateAPIKey(userID, name string) (string, *APIKey, error) {
 }
 
 // ValidateAPIKey checks a raw API key and returns the associated user.
+// Resolution order for effective profile:
+//  1. Key has explicit profile_id → use that
+//  2. Owning user has default_profile_id → use that
+//  3. No profile → legacy tier-based access via access_level
 func (s *UserStore) ValidateAPIKey(rawKey string) (*User, error) {
 	keyHash := hashAPIKey(rawKey)
 
 	var userID string
 	var storedHash string
 	var revoked bool
+	var keyProfileID sql.NullString
 	err := s.db.QueryRow(`
-		SELECT user_id, key_hash, revoked FROM api_keys WHERE key_hash = ?`, keyHash,
-	).Scan(&userID, &storedHash, &revoked)
+		SELECT user_id, key_hash, revoked, profile_id FROM api_keys WHERE key_hash = ?`, keyHash,
+	).Scan(&userID, &storedHash, &revoked, &keyProfileID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -225,13 +256,27 @@ func (s *UserStore) ValidateAPIKey(rawKey string) (*User, error) {
 	// Update last_used
 	s.db.Exec("UPDATE api_keys SET last_used = ? WHERE key_hash = ?", time.Now(), keyHash)
 
-	return s.Get(userID)
+	user, err := s.Get(userID)
+	if err != nil || user == nil {
+		return nil, err
+	}
+
+	// Resolve effective profile: key-level override > user default > none
+	if keyProfileID.Valid {
+		user.ProfileID = &keyProfileID.String
+	} else if user.DefaultProfileID != nil {
+		user.ProfileID = user.DefaultProfileID
+	}
+
+	return user, nil
 }
 
 func (s *UserStore) ListAPIKeys(userID string) ([]*APIKey, error) {
 	rows, err := s.db.Query(`
-		SELECT id, user_id, name, created_at, last_used, revoked
-		FROM api_keys WHERE user_id = ? ORDER BY created_at`, userID,
+		SELECT ak.id, ak.user_id, ak.name, ak.profile_id, COALESCE(ap.name, ''), ak.created_at, ak.last_used, ak.revoked
+		FROM api_keys ak
+		LEFT JOIN agent_profiles ap ON ak.profile_id = ap.id
+		WHERE ak.user_id = ? ORDER BY ak.created_at`, userID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing api keys: %w", err)
@@ -241,8 +286,12 @@ func (s *UserStore) ListAPIKeys(userID string) ([]*APIKey, error) {
 	var keys []*APIKey
 	for rows.Next() {
 		k := &APIKey{}
-		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &k.CreatedAt, &k.LastUsed, &k.Revoked); err != nil {
+		var profileID sql.NullString
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &profileID, &k.ProfileName, &k.CreatedAt, &k.LastUsed, &k.Revoked); err != nil {
 			return nil, fmt.Errorf("scanning api key: %w", err)
+		}
+		if profileID.Valid {
+			k.ProfileID = &profileID.String
 		}
 		keys = append(keys, k)
 	}

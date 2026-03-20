@@ -4,23 +4,63 @@
   <h2>Users</h2>
 </div>
 
+{{if .InviteCmd}}
+<div class="card" style="border: 2px solid var(--success, #28a745);">
+  <h2>Invite Link for {{.InviteUser}}</h2>
+  <p style="margin-bottom: 0.75rem;">Send this command to <strong>{{.InviteUser}}</strong>. It installs mcp-sync and creates their API key automatically. Expires in 48 hours, single use.</p>
+  <div style="background: var(--bg-dark, #f8f9fa); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; font-family: monospace; font-size: 0.85rem; word-break: break-all; position: relative;">
+    <code id="invite-cmd">{{.InviteCmd}}</code>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('invite-cmd').textContent).then(function(){this.textContent='Copied!'}.bind(this))" class="btn btn-sm btn-outline" style="position: absolute; top: 0.5rem; right: 0.5rem; font-size: 0.75rem;">Copy</button>
+  </div>
+</div>
+{{end}}
+
 <div class="card">
   {{if .Users}}
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Username</th><th>Role</th><th>Access Level</th><th>Created</th><th>Actions</th></tr>
+      <tr><th>Username</th><th>Role</th><th>Profile</th><th>Created</th><th>Actions</th></tr>
     </thead>
     <tbody>
       {{range .Users}}
       <tr>
         <td>{{.Username}}</td>
         <td><span class="badge {{if eq .Role "admin"}}badge-running{{else}}badge-stopped{{end}}">{{.Role}}</span></td>
-        <td><span class="tier-select tier-{{.AccessLevel}}" style="display:inline-block;padding:0.15rem 0.5rem;border-radius:4px;">{{.AccessLevel}}</span></td>
+        <td>
+          {{if .ProfileName}}
+            <span class="badge badge-stdio">{{.ProfileName}}</span>
+          {{else}}
+            <span style="color:var(--text-muted)">None
+              {{if ne .Role "admin"}}
+              <span class="tier-select tier-{{.AccessLevel}}" style="font-size:0.7rem;padding:0.1rem 0.3rem;">(legacy: {{.AccessLevel}})</span>
+              {{end}}
+            </span>
+          {{end}}
+        </td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>
           <div class="actions">
+            <form method="POST" action="/users/{{.ID}}/update" style="display:flex; gap:0.3rem; align-items:center;">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <select name="role" style="font-size:0.8rem;padding:0.15rem 0.3rem;border:1px solid var(--border);border-radius:4px;">
+                <option value="user" {{if eq .Role "user"}}selected{{end}}>user</option>
+                <option value="admin" {{if eq .Role "admin"}}selected{{end}}>admin</option>
+              </select>
+              <select name="default_profile_id" style="font-size:0.8rem;padding:0.15rem 0.3rem;border:1px solid var(--border);border-radius:4px;">
+                <option value="">No profile</option>
+                {{$currentProfile := .DefaultProfileID}}
+                {{range $.Profiles}}
+                <option value="{{.ID}}" {{if and $currentProfile (eq (deref $currentProfile) .ID)}}selected{{end}}>{{.Name}}</option>
+                {{end}}
+              </select>
+              <button type="submit" class="btn btn-sm btn-outline">Save</button>
+            </form>
             {{if ne .Username "admin"}}
+            <form method="POST" action="/users/{{.ID}}/invite" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button type="submit" class="btn btn-sm btn-outline" title="Generate install command for this user">Invite</button>
+            </form>
             <form method="POST" action="/users/{{.ID}}/delete"
                   onsubmit="return confirm('Delete user {{.Username}}?')">
               <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
@@ -63,15 +103,28 @@
           <option value="user">User</option>
           <option value="admin">Admin</option>
         </select>
+        <div class="help">Admin role grants full UI access. Endpoint permissions are controlled by the profile.</div>
       </div>
       <div class="form-group">
-        <label for="access_level">Access Level</label>
+        <label for="default_profile_id">Default Profile</label>
+        <select id="default_profile_id" name="default_profile_id">
+          <option value="">None (legacy tier-based access)</option>
+          {{range .Profiles}}
+          <option value="{{.ID}}">{{.Name}}{{if .Description}} - {{.Description}}{{end}}</option>
+          {{end}}
+        </select>
+        <div class="help">Assigns a profile for per-endpoint permissions. API keys inherit this by default.</div>
+      </div>
+    </div>
+    <div class="form-row" id="legacy-row">
+      <div class="form-group">
+        <label for="access_level">Legacy Access Level</label>
         <select id="access_level" name="access_level">
           <option value="read">Read</option>
           <option value="write" selected>Write</option>
           <option value="admin">Admin</option>
         </select>
-        <div class="help">Admin role forces admin access level</div>
+        <div class="help">Fallback for API keys without a profile. Only used if no profile is set.</div>
       </div>
     </div>
     <button type="submit" class="btn btn-primary">Create User</button>

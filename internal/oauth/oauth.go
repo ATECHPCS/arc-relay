@@ -42,11 +42,18 @@ type PendingAuth struct {
 	CreatedAt    time.Time
 }
 
+// refreshResult holds the outcome of a token refresh so waiters can share it.
+type refreshResult struct {
+	done chan struct{}
+	err  error
+}
+
 // Manager handles OAuth flows, token storage, and refresh.
 type Manager struct {
-	mu      sync.Mutex
-	pending map[string]*PendingAuth // state -> PendingAuth
-	tokens  map[string]*TokenSet    // serverID -> TokenSet
+	mu         sync.Mutex
+	pending    map[string]*PendingAuth   // state -> PendingAuth
+	tokens     map[string]*TokenSet      // serverID -> TokenSet
+	refreshing map[string]*refreshResult // serverID -> in-flight refresh
 
 	servers *store.ServerStore
 	baseURL string
@@ -60,10 +67,11 @@ const (
 // NewManager creates a new OAuth manager.
 func NewManager(servers *store.ServerStore, baseURL string) *Manager {
 	m := &Manager{
-		pending: make(map[string]*PendingAuth),
-		tokens:  make(map[string]*TokenSet),
-		servers: servers,
-		baseURL: baseURL,
+		pending:    make(map[string]*PendingAuth),
+		tokens:     make(map[string]*TokenSet),
+		refreshing: make(map[string]*refreshResult),
+		servers:    servers,
+		baseURL:    baseURL,
 	}
 	go m.cleanupPendingLoop()
 	return m
@@ -352,11 +360,46 @@ func (m *Manager) exchangeCode(ctx context.Context, auth store.RemoteAuth, code,
 	return m.tokenRequest(ctx, auth.TokenURL, data)
 }
 
+// refreshToken coalesces concurrent refresh attempts for the same server.
+// If a refresh is already in-flight, callers wait for its result instead of
+// sending a duplicate request (which would fail with invalid_grant since
+// refresh tokens are single-use).
 func (m *Manager) refreshToken(ctx context.Context, serverID string) error {
 	m.mu.Lock()
+
+	// If another goroutine is already refreshing this server's token, wait for it.
+	if inflight, ok := m.refreshing[serverID]; ok {
+		m.mu.Unlock()
+		select {
+		case <-inflight.done:
+			return inflight.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// We're the first — register our in-flight refresh so others can wait.
+	result := &refreshResult{done: make(chan struct{})}
+	m.refreshing[serverID] = result
+
 	ts, ok := m.tokens[serverID]
 	m.mu.Unlock()
 
+	// Do the actual refresh work and capture the error.
+	err := m.doRefreshToken(ctx, serverID, ts, ok)
+	result.err = err
+
+	// Unregister and wake up waiters.
+	m.mu.Lock()
+	delete(m.refreshing, serverID)
+	m.mu.Unlock()
+	close(result.done)
+
+	return err
+}
+
+// doRefreshToken performs the actual HTTP token refresh.
+func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *TokenSet, ok bool) error {
 	if !ok || ts.RefreshToken == "" {
 		return fmt.Errorf("no refresh token available for server %s — reauthorize via the server detail page", serverID)
 	}
@@ -385,6 +428,30 @@ func (m *Manager) refreshToken(ctx context.Context, serverID string) error {
 	}
 
 	newTS, err := m.tokenRequest(ctx, cfg.Auth.TokenURL, data)
+
+	// If token endpoint returns 404, the provider may have moved their OAuth
+	// endpoints (e.g. Shortcut migrated from shortcut.com to api.app.shortcut.com).
+	// Re-discover endpoints and retry the refresh with the new token URL.
+	if err != nil && strings.Contains(err.Error(), "returned 404") {
+		log.Printf("OAuth token endpoint 404 for server %s, attempting re-discovery", serverID)
+		disc, discErr := DiscoverOAuth(ctx, cfg.URL)
+		if discErr == nil && disc != nil && disc.TokenURL != "" && disc.TokenURL != cfg.Auth.TokenURL {
+			log.Printf("OAuth re-discovered new endpoints for server %s: token=%s auth=%s", serverID, disc.TokenURL, disc.AuthURL)
+			cfg.Auth.TokenURL = disc.TokenURL
+			if disc.AuthURL != "" {
+				cfg.Auth.AuthURL = disc.AuthURL
+			}
+			if disc.RegistrationEndpoint != "" {
+				cfg.Auth.RegistrationEndpoint = disc.RegistrationEndpoint
+			}
+			configJSON, marshalErr := json.Marshal(&cfg)
+			if marshalErr == nil {
+				m.servers.UpdateConfig(serverID, configJSON)
+			}
+			newTS, err = m.tokenRequest(ctx, disc.TokenURL, data)
+		}
+	}
+
 	if err != nil {
 		// On invalid_grant (revoked/expired refresh token), clear stale tokens
 		// so the UI shows "Not Authorized" with a reauthorize button

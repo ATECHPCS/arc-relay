@@ -55,7 +55,7 @@ func TestCreateWithAccessLevel(t *testing.T) {
 	users := store.NewUserStore(db)
 
 	t.Run("admin role forces admin access level", func(t *testing.T) {
-		user, err := users.CreateWithAccessLevel("admin1", "pass", "admin", "read")
+		user, err := users.CreateWithAccessLevel("admin1", "pass", "admin", "read", nil)
 		if err != nil {
 			t.Fatalf("CreateWithAccessLevel() error = %v", err)
 		}
@@ -65,7 +65,7 @@ func TestCreateWithAccessLevel(t *testing.T) {
 	})
 
 	t.Run("explicit access level for non-admin", func(t *testing.T) {
-		user, err := users.CreateWithAccessLevel("reader", "pass", "user", "read")
+		user, err := users.CreateWithAccessLevel("reader", "pass", "user", "read", nil)
 		if err != nil {
 			t.Fatalf("CreateWithAccessLevel() error = %v", err)
 		}
@@ -192,7 +192,7 @@ func TestUserDeleteCascadesAPIKeys(t *testing.T) {
 	users := store.NewUserStore(db)
 
 	user, _ := users.Create("deleteme", "pass", "user")
-	users.CreateAPIKey(user.ID, "my-key")
+	users.CreateAPIKey(user.ID, "my-key", nil)
 
 	// Verify key exists
 	keys, _ := users.ListAPIKeys(user.ID)
@@ -266,7 +266,7 @@ func TestAPIKeyRoundTrip(t *testing.T) {
 
 	user, _ := users.Create("apiuser", "pass", "user")
 
-	rawKey, ak, err := users.CreateAPIKey(user.ID, "test-key")
+	rawKey, ak, err := users.CreateAPIKey(user.ID, "test-key", nil)
 	if err != nil {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
@@ -311,7 +311,7 @@ func TestValidateAPIKeyRevoked(t *testing.T) {
 	users := store.NewUserStore(db)
 
 	user, _ := users.Create("revokeuser", "pass", "user")
-	rawKey, ak, _ := users.CreateAPIKey(user.ID, "to-revoke")
+	rawKey, ak, _ := users.CreateAPIKey(user.ID, "to-revoke", nil)
 
 	if err := users.RevokeAPIKey(ak.ID); err != nil {
 		t.Fatalf("RevokeAPIKey() error = %v", err)

@@ -5,10 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+)
+
+const (
+	// failThreshold is the number of consecutive probe failures before marking a server as Error.
+	failThreshold = 3
+	// recoveryCooldown is the minimum time between recovery attempts for a server.
+	recoveryCooldown = 5 * time.Minute
 )
 
 // HealthMonitor periodically checks running servers and updates their status.
@@ -17,14 +25,20 @@ type HealthMonitor struct {
 	servers  *store.ServerStore
 	interval time.Duration
 	cancel   context.CancelFunc
+
+	mu           sync.Mutex
+	failCounts   map[string]int       // server ID -> consecutive probe failures
+	lastRecover  map[string]time.Time // server ID -> last recovery attempt
 }
 
 // NewHealthMonitor creates a health monitor that checks servers at the given interval.
 func NewHealthMonitor(proxyMgr *Manager, servers *store.ServerStore, interval time.Duration) *HealthMonitor {
 	return &HealthMonitor{
-		proxyMgr: proxyMgr,
-		servers:  servers,
-		interval: interval,
+		proxyMgr:    proxyMgr,
+		servers:     servers,
+		interval:    interval,
+		failCounts:  make(map[string]int),
+		lastRecover: make(map[string]time.Time),
 	}
 }
 
@@ -98,15 +112,27 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 	if !ok {
 		hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
 		hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
+		hm.resetFailCount(srv.ID)
 		log.Printf("Health monitor: server %s has no backend, marking stopped", srv.Name)
 		return
 	}
 
 	if err := hm.pingServer(ctx, backend); err != nil {
-		log.Printf("Health monitor: server %s probe failed: %v", srv.Name, err)
+		hm.mu.Lock()
+		hm.failCounts[srv.ID]++
+		count := hm.failCounts[srv.ID]
+		hm.mu.Unlock()
+
 		hm.servers.UpdateHealth(srv.ID, store.HealthUnhealthy, err.Error())
-		hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+
+		if count >= failThreshold {
+			log.Printf("Health monitor: server %s failed %d consecutive probes, marking error: %v", srv.Name, count, err)
+			hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		} else {
+			log.Printf("Health monitor: server %s probe failed (%d/%d): %v", srv.Name, count, failThreshold, err)
+		}
 	} else {
+		hm.resetFailCount(srv.ID)
 		if srv.Health != store.HealthHealthy {
 			log.Printf("Health monitor: server %s is healthy", srv.Name)
 		}
@@ -116,16 +142,33 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 
 // tryRecover attempts to reconnect errored remote and external HTTP servers.
 // Docker-managed servers require explicit restart (container lifecycle).
+// Applies a cooldown to prevent rapid reconnect storms.
 func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
 	if !hm.isStatelessServer(srv) {
 		return
 	}
 
+	hm.mu.Lock()
+	lastAttempt, exists := hm.lastRecover[srv.ID]
+	if exists && time.Since(lastAttempt) < recoveryCooldown {
+		hm.mu.Unlock()
+		return // too soon, skip this cycle
+	}
+	hm.lastRecover[srv.ID] = time.Now()
+	hm.mu.Unlock()
+
 	if err := hm.proxyMgr.RetryServer(ctx, srv); err != nil {
 		return // still down, stay in error state silently
 	}
 
+	hm.resetFailCount(srv.ID)
 	log.Printf("Health monitor: auto-recovered server %s", srv.Name)
+}
+
+func (hm *HealthMonitor) resetFailCount(serverID string) {
+	hm.mu.Lock()
+	delete(hm.failCounts, serverID)
+	hm.mu.Unlock()
 }
 
 // isStatelessServer returns true for server types that can be reconnected

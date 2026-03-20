@@ -16,12 +16,13 @@ import (
 
 // RemoteProxy forwards MCP requests to a remote MCP server with auth.
 type RemoteProxy struct {
-	serverID     string
-	config       store.RemoteConfig
-	mu           sync.Mutex
-	sessionID    string
-	httpClient   *http.Client
-	oauthManager *oauth.Manager
+	serverID       string
+	config         store.RemoteConfig
+	mu             sync.Mutex
+	sessionID      string
+	lastOAuthToken string // tracks token to detect proactive refreshes
+	httpClient     *http.Client
+	oauthManager   *oauth.Manager
 }
 
 // NewRemoteProxy creates a proxy to a remote MCP server.
@@ -35,7 +36,10 @@ func NewRemoteProxy(serverID string, config store.RemoteConfig, oauthMgr *oauth.
 }
 
 // applyAuth sets the appropriate auth header on the request.
-func (p *RemoteProxy) applyAuth(ctx context.Context, req *http.Request) error {
+// Returns true if an OAuth token was proactively refreshed (i.e., the token
+// changed since the last request), which signals that the MCP session may
+// have been invalidated by the remote server.
+func (p *RemoteProxy) applyAuth(ctx context.Context, req *http.Request) (tokenRefreshed bool, err error) {
 	switch p.config.Auth.Type {
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+p.config.Auth.Token)
@@ -49,15 +53,23 @@ func (p *RemoteProxy) applyAuth(ctx context.Context, req *http.Request) error {
 		// No header needed
 	case "oauth":
 		if p.oauthManager == nil {
-			return fmt.Errorf("OAuth manager not configured")
+			return false, fmt.Errorf("OAuth manager not configured")
 		}
 		token, err := p.oauthManager.GetAccessToken(ctx, p.serverID)
 		if err != nil {
-			return fmt.Errorf("getting OAuth token: %w", err)
+			return false, fmt.Errorf("getting OAuth token: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
+
+		// Detect proactive token refresh by comparing with last-used token
+		p.mu.Lock()
+		if p.lastOAuthToken != "" && p.lastOAuthToken != token {
+			tokenRefreshed = true
+		}
+		p.lastOAuthToken = token
+		p.mu.Unlock()
 	}
-	return nil
+	return tokenRefreshed, nil
 }
 
 // SendNotification sends a fire-and-forget notification to the remote server.
@@ -74,7 +86,7 @@ func (p *RemoteProxy) SendNotification(n *mcp.Notification) error {
 	if sid != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
-	if err := p.applyAuth(context.Background(), httpReq); err != nil {
+	if _, err := p.applyAuth(context.Background(), httpReq); err != nil {
 		return err
 	}
 	resp, err := p.httpClient.Do(httpReq)
@@ -89,12 +101,24 @@ func (p *RemoteProxy) SendNotification(n *mcp.Notification) error {
 func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, error) {
 	resp, statusCode, err := p.doSend(ctx, req)
 
-	// If 401 and OAuth, try refreshing token and retry once
+	// If 401 and OAuth, refresh the token, re-establish the MCP session,
+	// and retry. Some servers (e.g. Shortcut) invalidate the MCP session
+	// when the OAuth token changes, so we must re-initialize after refresh.
 	if statusCode == http.StatusUnauthorized && p.config.Auth.Type == "oauth" && p.oauthManager != nil {
-		log.Printf("OAuth 401 for server %s, attempting token refresh", p.serverID)
+		log.Printf("OAuth 401 for server %s, refreshing token and re-initializing session", p.serverID)
 		if refreshErr := p.oauthManager.ForceRefresh(ctx, p.serverID); refreshErr != nil {
 			return nil, fmt.Errorf("token refresh after 401 failed: %w", refreshErr)
 		}
+		p.mu.Lock()
+		p.sessionID = ""
+		p.lastOAuthToken = "" // reset so retry doSend doesn't trigger redundant reinitialize
+		p.mu.Unlock()
+
+		// Re-initialize to establish a fresh session with the new token
+		if initErr := p.reinitialize(ctx); initErr != nil {
+			log.Printf("Session re-initialize failed for server %s after token refresh: %v", p.serverID, initErr)
+		}
+
 		resp, _, err = p.doSend(ctx, req)
 	}
 
@@ -102,6 +126,24 @@ func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 		return nil, err
 	}
 	return resp, nil
+}
+
+// reinitialize sends an MCP initialize request to establish a fresh session.
+func (p *RemoteProxy) reinitialize(ctx context.Context) error {
+	id, _ := json.Marshal(0)
+	params, _ := json.Marshal(map[string]any{
+		"protocolVersion": "2024-11-05",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]string{"name": "mcp-wrangler", "version": "0.1.0"},
+	})
+	req := &mcp.Request{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  "initialize",
+		Params:  params,
+	}
+	_, _, err := p.doSend(ctx, req)
+	return err
 }
 
 func (p *RemoteProxy) doSend(ctx context.Context, req *mcp.Request) (*mcp.Response, int, error) {
@@ -116,15 +158,44 @@ func (p *RemoteProxy) doSend(ctx context.Context, req *mcp.Request) (*mcp.Respon
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+
+	// Apply auth first — may trigger proactive OAuth token refresh
+	tokenRefreshed, err := p.applyAuth(ctx, httpReq)
+	if err != nil {
+		return nil, 0, fmt.Errorf("applying auth: %w", err)
+	}
+
+	// If OAuth token was proactively refreshed, re-establish the MCP session
+	// before sending. Some servers (e.g. Shortcut) invalidate the MCP session
+	// when the OAuth token changes, so sending with the old session ID fails.
+	if tokenRefreshed {
+		p.mu.Lock()
+		hadSession := p.sessionID != ""
+		p.sessionID = ""
+		p.mu.Unlock()
+		if hadSession {
+			log.Printf("OAuth token proactively refreshed for server %s, re-establishing session", p.serverID)
+			if initErr := p.reinitialize(ctx); initErr != nil {
+				log.Printf("Session re-initialize after proactive refresh failed for %s: %v", p.serverID, initErr)
+			}
+		}
+	}
+
+	// initialize always starts a fresh session — never send a stale session ID.
+	// This ensures Enumerate, reinitialize, and any other caller that sends
+	// initialize work correctly without needing to clear the session first.
+	if req.Method == "initialize" {
+		p.mu.Lock()
+		p.sessionID = ""
+		p.mu.Unlock()
+	}
+
+	// Set session ID (may have been updated by reinitialize above)
 	p.mu.Lock()
 	sid := p.sessionID
 	p.mu.Unlock()
 	if sid != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sid)
-	}
-
-	if err := p.applyAuth(ctx, httpReq); err != nil {
-		return nil, 0, fmt.Errorf("applying auth: %w", err)
 	}
 
 	httpResp, err := p.httpClient.Do(httpReq)

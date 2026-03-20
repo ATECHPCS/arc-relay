@@ -31,7 +31,7 @@ func setupUserStore(t *testing.T) (*store.UserStore, string) {
 	if err != nil {
 		t.Fatalf("creating test user: %v", err)
 	}
-	rawKey, _, err := users.CreateAPIKey(user.ID, "test-key")
+	rawKey, _, err := users.CreateAPIKey(user.ID, "test-key", nil)
 	if err != nil {
 		t.Fatalf("creating API key: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestAdminOnly(t *testing.T) {
 		admin, _ := users.Create("admin", "pass", "admin")
 
 		// Use APIKeyAuth to set user in context, then chain AdminOnly
-		rawKey, _, _ := users.CreateAPIKey(admin.ID, "admin-key")
+		rawKey, _, _ := users.CreateAPIKey(admin.ID, "admin-key", nil)
 		fullHandler := server.APIKeyAuth(users)(handler)
 
 		req := httptest.NewRequest("GET", "/admin", nil)
@@ -128,7 +128,7 @@ func TestAdminOnly(t *testing.T) {
 		users := store.NewUserStore(db)
 		user, _ := users.Create("regular", "pass", "user")
 
-		rawKey, _, _ := users.CreateAPIKey(user.ID, "user-key")
+		rawKey, _, _ := users.CreateAPIKey(user.ID, "user-key", nil)
 		fullHandler := server.APIKeyAuth(users)(handler)
 
 		req := httptest.NewRequest("GET", "/admin", nil)

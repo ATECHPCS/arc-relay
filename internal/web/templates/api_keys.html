@@ -16,12 +16,13 @@
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Name</th><th>Created</th><th>Last Used</th><th>Status</th><th>Actions</th></tr>
+      <tr><th>Name</th><th>Profile</th><th>Created</th><th>Last Used</th><th>Status</th><th>Actions</th></tr>
     </thead>
     <tbody>
       {{range .Keys}}
       <tr>
         <td>{{.Name}}</td>
+        <td>{{if .ProfileName}}<span class="badge badge-stdio">{{.ProfileName}}</span>{{else}}<span style="color:var(--text-muted)">None (legacy)</span>{{end}}</td>
         <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
         <td>{{if .LastUsed}}{{.LastUsed.Format "2006-01-02 15:04"}}{{else}}<span style="color:var(--text-muted)">Never</span>{{end}}</td>
         <td>
@@ -53,10 +54,22 @@
   <h2>Generate New API Key</h2>
   <form method="POST" action="/api-keys/new">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-    <div class="form-group">
-      <label for="key_name">Key Name</label>
-      <input type="text" id="key_name" name="key_name" required placeholder="e.g. claude-desktop, dev-testing">
-      <div class="help">A label to help you remember what this key is used for.</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label for="key_name">Key Name</label>
+        <input type="text" id="key_name" name="key_name" required placeholder="e.g. claude-desktop, dev-testing">
+        <div class="help">A label to help you remember what this key is used for.</div>
+      </div>
+      <div class="form-group">
+        <label for="profile_id">Agent Profile</label>
+        <select id="profile_id" name="profile_id">
+          <option value="">Use default from user profile</option>
+          {{range .Profiles}}
+          <option value="{{.ID}}">{{.Name}}{{if .Description}} — {{.Description}}{{end}}</option>
+          {{end}}
+        </select>
+        <div class="help">Override the profile for this key. Leave blank to inherit from your user profile.</div>
+      </div>
     </div>
     <button type="submit" class="btn btn-primary">Generate Key</button>
   </form>
