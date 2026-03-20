@@ -166,6 +166,90 @@ func (s *RequestLogStore) EndpointCounts(serverID string) ([]EndpointCallCount, 
 	return counts, nil
 }
 
+// LogFilter holds optional filters and pagination for querying logs.
+type LogFilter struct {
+	ServerID string
+	UserID   string
+	Status   string // "success", "error", "denied", or "" for all
+	Limit    int
+	Offset   int
+}
+
+// FilteredLogs returns logs matching the given filters with pagination.
+func (s *RequestLogStore) FilteredLogs(f LogFilter) ([]*RequestLog, int, error) {
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+
+	where := "1=1"
+	args := []any{}
+
+	if f.ServerID != "" {
+		where += " AND rl.server_id = ?"
+		args = append(args, f.ServerID)
+	}
+	if f.UserID != "" {
+		where += " AND rl.user_id = ?"
+		args = append(args, f.UserID)
+	}
+	if f.Status != "" {
+		where += " AND rl.status = ?"
+		args = append(args, f.Status)
+	}
+
+	// Count total matching rows
+	var total int
+	countQuery := "SELECT COUNT(*) FROM request_logs rl WHERE " + where
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting logs: %w", err)
+	}
+
+	// Fetch page
+	query := `
+		SELECT rl.id, rl.timestamp, rl.user_id, COALESCE(u.username, ''), rl.server_id, COALESCE(sv.name, ''),
+		       rl.method, COALESCE(rl.endpoint_name, ''), COALESCE(rl.duration_ms, 0), COALESCE(rl.status, ''), COALESCE(rl.error_msg, '')
+		FROM request_logs rl
+		LEFT JOIN users u ON rl.user_id = u.id
+		LEFT JOIN servers sv ON rl.server_id = sv.id
+		WHERE ` + where + `
+		ORDER BY rl.timestamp DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, f.Limit, f.Offset)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying filtered logs: %w", err)
+	}
+	defer rows.Close()
+
+	logs, err := scanLogs(rows)
+	return logs, total, err
+}
+
+// DistinctUsers returns usernames that appear in the logs (for filter dropdown).
+func (s *RequestLogStore) DistinctUsers() ([]struct{ ID, Username string }, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT rl.user_id, COALESCE(u.username, '')
+		FROM request_logs rl
+		LEFT JOIN users u ON rl.user_id = u.id
+		WHERE rl.user_id != ''
+		ORDER BY u.username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []struct{ ID, Username string }
+	for rows.Next() {
+		var u struct{ ID, Username string }
+		if err := rows.Scan(&u.ID, &u.Username); err != nil {
+			continue
+		}
+		users = append(users, u)
+	}
+	return users, nil
+}
+
 func (s *RequestLogStore) ServerTotalCounts() (map[string]int, error) {
 	rows, err := s.db.Query(`SELECT server_id, COUNT(*) FROM request_logs GROUP BY server_id`)
 	if err != nil {

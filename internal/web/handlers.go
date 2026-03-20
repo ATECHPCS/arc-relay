@@ -183,6 +183,33 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 			}
 			return *s
 		},
+		"add": func(a, b int) int { return a + b },
+		"subtract": func(a, b int) int { return a - b },
+		"pages": func(current, total int) []int {
+			// Returns page numbers to display, with -1 for ellipsis
+			if total <= 7 {
+				r := make([]int, total)
+				for i := range r {
+					r[i] = i + 1
+				}
+				return r
+			}
+			var r []int
+			r = append(r, 1)
+			if current > 3 {
+				r = append(r, -1)
+			}
+			for i := current - 1; i <= current+1; i++ {
+				if i > 1 && i < total {
+					r = append(r, i)
+				}
+			}
+			if current < total-2 {
+				r = append(r, -1)
+			}
+			r = append(r, total)
+			return r
+		},
 	}
 
 	// Parse each page template together with the layout
@@ -413,14 +440,39 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 	servers, _ := h.servers.List()
 
-	serverFilter := r.URL.Query().Get("server")
-	var logs []*store.RequestLog
-	if h.requestLogs != nil {
-		if serverFilter != "" {
-			logs, _ = h.requestLogs.ByServer(serverFilter, 100)
-		} else {
-			logs, _ = h.requestLogs.Recent(100)
+	q := r.URL.Query()
+	serverFilter := q.Get("server")
+	userFilter := q.Get("user")
+	statusFilter := q.Get("status")
+	pageStr := q.Get("page")
+
+	const perPage = 50
+	page := 1
+	if pageStr != "" {
+		fmt.Sscanf(pageStr, "%d", &page)
+		if page < 1 {
+			page = 1
 		}
+	}
+
+	var logs []*store.RequestLog
+	var total int
+	var logUsers []struct{ ID, Username string }
+
+	if h.requestLogs != nil {
+		logs, total, _ = h.requestLogs.FilteredLogs(store.LogFilter{
+			ServerID: serverFilter,
+			UserID:   userFilter,
+			Status:   statusFilter,
+			Limit:    perPage,
+			Offset:   (page - 1) * perPage,
+		})
+		logUsers, _ = h.requestLogs.DistinctUsers()
+	}
+
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages < 1 {
+		totalPages = 1
 	}
 
 	h.render(w, r, "logs.html", map[string]any{
@@ -428,7 +480,13 @@ func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 		"User":         getUser(r),
 		"Logs":         logs,
 		"Servers":      servers,
+		"LogUsers":     logUsers,
 		"ServerFilter": serverFilter,
+		"UserFilter":   userFilter,
+		"StatusFilter": statusFilter,
+		"Page":         page,
+		"TotalPages":   totalPages,
+		"Total":        total,
 	})
 }
 
