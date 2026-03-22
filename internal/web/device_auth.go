@@ -9,6 +9,8 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -417,7 +419,9 @@ fi
 `, baseURL)
 }
 
-// handleDownload serves GET /download/mcp-sync-{os}-{arch} — redirects to GitHub releases.
+// handleDownload serves GET /download/mcp-sync-{os}-{arch}.
+// Serves from local /data/downloads/ directory if the file exists,
+// otherwise falls back to GitHub releases redirect.
 func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -443,6 +447,17 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	githubURL := fmt.Sprintf("https://github.com/JeremiahChurch/mcp-sync/releases/latest/download/%s", binary)
+	// Serve from local downloads directory if available (co-located with DB)
+	dbDir := filepath.Dir(h.cfg.Database.Path)
+	localPath := filepath.Join(dbDir, "downloads", binary)
+	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", binary))
+		http.ServeFile(w, r, localPath)
+		return
+	}
+
+	// Fall back to GitHub releases
+	githubURL := fmt.Sprintf("https://github.com/JeremiahChurch/mcp-wrangler/releases/latest/download/%s", binary)
 	http.Redirect(w, r, githubURL, http.StatusFound)
 }
