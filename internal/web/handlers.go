@@ -1470,8 +1470,18 @@ func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-re-register if redirect URI has changed (e.g. base URL update)
-	if reregistered, err := h.oauth.ReRegisterIfNeeded(r.Context(), serverID, srv, &cfg); err != nil {
+	// Auto-re-register if redirect URI has changed (e.g. base URL update),
+	// or force re-register if requested (e.g. provider state out of sync after DB recovery).
+	// Force re-registration is admin-only since it rotates shared client credentials.
+	force := r.URL.Query().Get("force") == "1"
+	if force {
+		user := getUser(r)
+		if user == nil || user.Role != "admin" {
+			http.Error(w, "Admin access required for force re-registration", http.StatusForbidden)
+			return
+		}
+	}
+	if reregistered, err := h.oauth.ReRegisterIfNeeded(r.Context(), serverID, srv, &cfg, force); err != nil {
 		log.Printf("OAuth re-registration failed for %s: %v", srv.Name, err) // #nosec G706
 		http.Error(w, fmt.Sprintf("OAuth re-registration failed: %s", err), http.StatusInternalServerError)
 		return

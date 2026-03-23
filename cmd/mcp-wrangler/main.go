@@ -107,6 +107,9 @@ func main() {
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
 
+	// Start periodic database backup (every 6 hours, keeps 2 copies)
+	db.StartBackup(6 * time.Hour)
+
 	// Start HTTP server
 	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore)
 
@@ -121,9 +124,14 @@ func main() {
 		<-sigCh
 		log.Println("Shutting down...")
 		healthMon.Stop()
+		db.StopBackup()
 		proxyMgr.StopAll(ctx)
 		if dockerMgr != nil {
 			dockerMgr.Close()
+		}
+		// Close DB explicitly before exiting so WAL is checkpointed cleanly.
+		if err := db.Close(); err != nil {
+			log.Printf("Warning: error closing database: %v", err)
 		}
 		os.Exit(0)
 	}()

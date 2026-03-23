@@ -100,23 +100,27 @@ func (m *Manager) CallbackURL() string {
 
 // ReRegisterIfNeeded checks if the current callback URL matches the registered
 // redirect URI. If not, it re-discovers OAuth endpoints and performs DCR to get
-// new credentials with the correct redirect URI. Returns updated auth config.
-func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *store.Server, cfg *store.RemoteConfig) (bool, error) {
+// new credentials with the correct redirect URI. When force is true, always
+// re-registers (useful when the remote provider's state is out of sync with
+// local state, e.g. after DB recovery). Returns whether re-registration occurred.
+func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *store.Server, cfg *store.RemoteConfig, force bool) (bool, error) {
 	callbackURL := m.CallbackURL()
 	auth := cfg.Auth
 
-	// If redirect URI matches the current callback, nothing to do
-	if auth.RegisteredRedirectURI == callbackURL {
+	// If redirect URI matches the current callback and not forced, nothing to do
+	if !force && auth.RegisteredRedirectURI == callbackURL {
 		return false, nil
 	}
 
 	// If we've never tracked the redirect URI, try to discover a registration
 	// endpoint and re-register proactively. This handles the case where existing
 	// servers were registered before tracking was added.
-	if auth.RegisteredRedirectURI == "" {
+	if force {
+		log.Printf("OAuth forced re-registration for server %s", serverID)
+	} else if auth.RegisteredRedirectURI == "" {
 		log.Printf("OAuth redirect URI not tracked for server %s, attempting discovery + re-registration", serverID)
 	} else {
-		log.Printf("OAuth redirect URI changed for server %s: %q → %q, re-registering", serverID, auth.RegisteredRedirectURI, callbackURL)
+		log.Printf("OAuth redirect URI changed for server %s: %q -> %q, re-registering", serverID, auth.RegisteredRedirectURI, callbackURL)
 	}
 
 	// Try using stored registration endpoint first, fall back to re-discovery
@@ -172,7 +176,9 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 	if err != nil {
 		return false, fmt.Errorf("marshaling updated config: %w", err)
 	}
-	m.servers.UpdateConfig(serverID, configJSON)
+	if err := m.servers.UpdateConfig(serverID, configJSON); err != nil {
+		return false, fmt.Errorf("persisting re-registration: %w", err)
+	}
 
 	// Clear cached tokens
 	m.mu.Lock()
@@ -446,7 +452,9 @@ func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *Token
 			}
 			configJSON, marshalErr := json.Marshal(&cfg)
 			if marshalErr == nil {
-				m.servers.UpdateConfig(serverID, configJSON)
+				if updateErr := m.servers.UpdateConfig(serverID, configJSON); updateErr != nil {
+					log.Printf("OAuth: failed to persist re-discovered endpoints for %s: %v", serverID, updateErr)
+				}
 			}
 			newTS, err = m.tokenRequest(ctx, disc.TokenURL, data)
 		}

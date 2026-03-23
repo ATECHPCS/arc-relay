@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -36,6 +37,7 @@ func APIKeyAuth(users *store.UserStore) func(http.Handler) http.Handler {
 			token := strings.TrimPrefix(auth, "Bearer ")
 			user, err := users.ValidateAPIKey(token)
 			if err != nil {
+				log.Printf("auth: validate api key failed: path=%s remote=%s err=%v", r.URL.Path, r.RemoteAddr, err)
 				http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}

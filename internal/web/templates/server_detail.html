@@ -158,11 +158,16 @@
     {{end}}
   </div>
   {{if eq .ConfigDisplay.AuthType "oauth"}}
-  <div style="margin-top: 1rem;">
+  <div style="margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
     <a href="/oauth/start/{{.Server.ID}}" class="btn {{if .ConfigDisplay.OAuthAuthorized}}btn-outline{{else}}btn-primary{{end}}">
       {{if .ConfigDisplay.OAuthAuthorized}}Reauthorize{{else}}Authorize{{end}}
     </a>
+    <a href="/oauth/start/{{.Server.ID}}?force=1" class="btn btn-outline">Re-register</a>
   </div>
+  <p style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem;">
+    <strong>{{if .ConfigDisplay.OAuthAuthorized}}Reauthorize{{else}}Authorize{{end}}</strong> signs in with the OAuth provider using existing credentials.
+    <strong>Re-register</strong> creates a fresh client registration first - use this if authorization fails with redirect URI errors.
+  </p>
   {{end}}
   {{end}}
 
