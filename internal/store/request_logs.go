@@ -34,9 +34,9 @@ type ServerRequestCount struct {
 }
 
 type EndpointCallCount struct {
-	EndpointName string
-	CallCount    int
-	ErrorCount   int
+	EndpointName  string
+	CallCount     int
+	ErrorCount    int
 	AvgDurationMs int
 }
 

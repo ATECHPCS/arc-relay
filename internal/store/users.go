@@ -20,20 +20,20 @@ type User struct {
 	AccessLevel      string    `json:"access_level"`
 	DefaultProfileID *string   `json:"default_profile_id,omitempty"` // user's default profile for RBAC
 	CreatedAt        time.Time `json:"created_at"`
-	ProfileID        *string   `json:"profile_id,omitempty"` // effective profile (resolved at auth time)
+	ProfileID        *string   `json:"profile_id,omitempty"`   // effective profile (resolved at auth time)
 	ProfileName      string    `json:"profile_name,omitempty"` // populated on read, not stored
 }
 
 type APIKey struct {
-	ID          string    `json:"id"`
-	UserID      string    `json:"user_id"`
-	KeyHash     string    `json:"-"`
-	Name        string    `json:"name"`
-	ProfileID   *string   `json:"profile_id,omitempty"`
-	ProfileName string    `json:"profile_name,omitempty"` // populated on read, not stored
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string     `json:"id"`
+	UserID      string     `json:"user_id"`
+	KeyHash     string     `json:"-"`
+	Name        string     `json:"name"`
+	ProfileID   *string    `json:"profile_id,omitempty"`
+	ProfileName string     `json:"profile_name,omitempty"` // populated on read, not stored
+	CreatedAt   time.Time  `json:"created_at"`
 	LastUsed    *time.Time `json:"last_used,omitempty"`
-	Revoked     bool      `json:"revoked"`
+	Revoked     bool       `json:"revoked"`
 }
 
 type UserStore struct {

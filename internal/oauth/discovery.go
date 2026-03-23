@@ -14,13 +14,13 @@ import (
 
 // OAuthDiscovery holds the results of .well-known OAuth discovery.
 type OAuthDiscovery struct {
-	AuthURL              string   `json:"auth_url"`
-	TokenURL             string   `json:"token_url"`
-	RegistrationEndpoint string   `json:"registration_endpoint,omitempty"`
-	ScopesSupported      []string `json:"scopes_supported,omitempty"`
-	ClientID             string   `json:"client_id,omitempty"`
-	ClientSecret         string   `json:"client_secret,omitempty"`
-	RegisteredRedirectURI string  `json:"registered_redirect_uri,omitempty"`
+	AuthURL               string   `json:"auth_url"`
+	TokenURL              string   `json:"token_url"`
+	RegistrationEndpoint  string   `json:"registration_endpoint,omitempty"`
+	ScopesSupported       []string `json:"scopes_supported,omitempty"`
+	ClientID              string   `json:"client_id,omitempty"`
+	ClientSecret          string   `json:"client_secret,omitempty"`
+	RegisteredRedirectURI string   `json:"registered_redirect_uri,omitempty"`
 }
 
 // ClientRegistration holds the result of dynamic client registration.
@@ -64,9 +64,9 @@ func DiscoverOAuth(ctx context.Context, serverURL string) (*OAuthDiscovery, erro
 func RegisterClient(ctx context.Context, registrationEndpoint, callbackURL string) (*ClientRegistration, error) {
 	body := map[string]any{
 		"client_name":                "MCP Wrangler",
-		"redirect_uris":             []string{callbackURL},
-		"grant_types":               []string{"authorization_code", "refresh_token"},
-		"response_types":            []string{"code"},
+		"redirect_uris":              []string{callbackURL},
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
 		"token_endpoint_auth_method": "client_secret_post",
 	}
 

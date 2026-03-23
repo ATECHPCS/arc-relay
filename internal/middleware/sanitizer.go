@@ -127,8 +127,8 @@ func (s *Sanitizer) logEvent(meta *RequestMeta, eventType, summary string) {
 	}
 	s.eventLogger(&store.MiddlewareEvent{
 		Middleware:    "sanitizer",
-		EventType:    eventType,
-		Summary:      summary,
+		EventType:     eventType,
+		Summary:       summary,
 		RequestMethod: meta.Method,
 		EndpointName:  meta.ToolName,
 		UserID:        meta.UserID,

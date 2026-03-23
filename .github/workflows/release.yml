@@ -55,7 +55,15 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Only tag as latest for stable releases (no hyphens like -rc1, -beta)
+          if [[ "$VERSION" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -65,7 +73,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/jeremiahchurch/mcp-wrangler:${{ steps.version.outputs.version }}
-            ghcr.io/jeremiahchurch/mcp-wrangler:latest
+            ${{ steps.version.outputs.is_prerelease == 'false' && 'ghcr.io/jeremiahchurch/mcp-wrangler:latest' || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/JeremiahChurch/mcp-wrangler
             org.opencontainers.image.version=${{ steps.version.outputs.version }}

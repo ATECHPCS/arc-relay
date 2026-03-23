@@ -113,7 +113,7 @@ func (s *Sizer) logEvent(meta *RequestMeta, eventType, summary string) {
 		return
 	}
 	s.eventLogger(&store.MiddlewareEvent{
-		Middleware:     "sizer",
+		Middleware:    "sizer",
 		EventType:     eventType,
 		Summary:       summary,
 		RequestMethod: meta.Method,

@@ -1,0 +1,341 @@
+package sync
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/config"
+)
+
+type testServer struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	ServerType  string `json:"server_type"`
+	Status      string `json:"status"`
+}
+
+func setupWranglerMock(t *testing.T, servers []testServer, token string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/servers" {
+			http.NotFound(w, r)
+			return
+		}
+		if token != "" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer "+token {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(servers)
+	}))
+}
+
+func setupTest(t *testing.T, servers []testServer, mcpJSON string) (configDir, projectDir string, wranglerURL string) {
+	t.Helper()
+
+	token := "test-key"
+	ts := setupWranglerMock(t, servers, token)
+	t.Cleanup(ts.Close)
+
+	configDir = t.TempDir()
+	cfg := &config.Config{WranglerURL: ts.URL, APIKey: token}
+	if err := config.SaveConfig(configDir, cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	projectDir = t.TempDir()
+	if mcpJSON != "" {
+		os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(mcpJSON), 0644)
+	}
+
+	return configDir, projectDir, ts.URL
+}
+
+func TestSyncNonInteractiveAddsAll(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", DisplayName: "Sentry", Status: "running"},
+		{ID: "2", Name: "pfsense", DisplayName: "pfSense", Status: "running"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, "")
+
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Added) != 2 {
+		t.Errorf("expected 2 added, got %d", len(result.Added))
+	}
+
+	// Verify .mcp.json was written
+	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading .mcp.json: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	json.Unmarshal(data, &raw)
+	var mcpServers map[string]json.RawMessage
+	json.Unmarshal(raw["mcpServers"], &mcpServers)
+
+	if len(mcpServers) != 2 {
+		t.Errorf("expected 2 servers in .mcp.json, got %d", len(mcpServers))
+	}
+}
+
+func TestSyncSkipsAlreadyConfigured(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+		{ID: "2", Name: "pfsense", Status: "running"},
+	}
+
+	// Pre-configure sentry
+	configDir, projectDir, wranglerURL := setupTest(t, servers, "")
+	existing := fmt.Sprintf(`{"mcpServers":{"sentry":{"type":"http","url":"%s/mcp/sentry","headers":{"Authorization":"Bearer test-key"}}}}`, wranglerURL)
+	os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(existing), 0644)
+
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Added) != 1 {
+		t.Errorf("expected 1 added (pfsense only), got %d: %v", len(result.Added), result.Added)
+	}
+	if len(result.Existed) != 1 {
+		t.Errorf("expected 1 existing, got %d", len(result.Existed))
+	}
+}
+
+func TestSyncSkipsStoppedServers(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+		{ID: "2", Name: "broken", Status: "stopped"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, "")
+
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Added) != 1 {
+		t.Errorf("expected 1 added (only running), got %d", len(result.Added))
+	}
+}
+
+func TestSyncInteractiveYesNo(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+		{ID: "2", Name: "pfsense", Status: "running"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, "")
+
+	// User says yes to sentry, no to pfsense
+	input := "y\nn\n"
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:  configDir,
+		ProjectDir: projectDir,
+		Output:     &output,
+		Input:      strings.NewReader(input),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Added) != 1 {
+		t.Errorf("expected 1 added, got %d", len(result.Added))
+	}
+	// "n" now skips permanently
+	if len(result.Skipped) != 1 {
+		t.Errorf("expected 1 skipped, got %d", len(result.Skipped))
+	}
+
+	// Verify pfsense is in skip list and won't be prompted again
+	state, _ := config.LoadState(configDir)
+	if !state.IsSkipped(projectDir, "pfsense") {
+		t.Error("expected pfsense to be in skip list after saying no")
+	}
+}
+
+func TestSyncInteractiveSkip(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, "")
+
+	input := "s\n"
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:  configDir,
+		ProjectDir: projectDir,
+		Output:     &output,
+		Input:      strings.NewReader(input),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Skipped) != 1 {
+		t.Errorf("expected 1 skipped, got %d", len(result.Skipped))
+	}
+
+	// Verify state was saved
+	state, _ := config.LoadState(configDir)
+	if !state.IsSkipped(projectDir, "sentry") {
+		t.Error("expected sentry to be in skip list")
+	}
+
+	// Run again — should not prompt for sentry
+	var output2 bytes.Buffer
+	result2, err := Run(Options{
+		ConfigDir:  configDir,
+		ProjectDir: projectDir,
+		Output:     &output2,
+		Input:      strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run (2nd): %v", err)
+	}
+
+	if len(result2.Added) != 0 {
+		t.Errorf("expected 0 added on second run, got %d", len(result2.Added))
+	}
+}
+
+func TestSyncDryRun(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, "")
+
+	var output bytes.Buffer
+	_, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		DryRun:         true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(output.String(), "DRY RUN") {
+		t.Error("expected DRY RUN in output")
+	}
+
+	// Verify no .mcp.json was written
+	if _, err := os.Stat(filepath.Join(projectDir, ".mcp.json")); !os.IsNotExist(err) {
+		t.Error("expected .mcp.json to NOT be created during dry run")
+	}
+}
+
+func TestSyncPreservesManualEntries(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+	}
+
+	existing := `{
+  "mcpServers": {
+    "my-local-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["server.js"]
+    }
+  }
+}`
+
+	configDir, projectDir, _ := setupTest(t, servers, existing)
+
+	var output bytes.Buffer
+	_, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+	var raw map[string]json.RawMessage
+	json.Unmarshal(data, &raw)
+	var mcpServers map[string]json.RawMessage
+	json.Unmarshal(raw["mcpServers"], &mcpServers)
+
+	if _, ok := mcpServers["my-local-server"]; !ok {
+		t.Error("expected my-local-server to be preserved")
+	}
+	if _, ok := mcpServers["sentry"]; !ok {
+		t.Error("expected sentry to be added")
+	}
+}
+
+func TestSyncNoRunningServers(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "broken", Status: "stopped"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, "")
+
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Added) != 0 {
+		t.Errorf("expected 0 added, got %d", len(result.Added))
+	}
+	if !strings.Contains(output.String(), "No running servers") {
+		t.Error("expected 'No running servers' message")
+	}
+}

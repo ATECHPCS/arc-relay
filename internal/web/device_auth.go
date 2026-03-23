@@ -441,6 +441,7 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 		"mcp-sync-darwin-arm64":      true,
 		"mcp-sync-darwin-amd64":      true,
 		"mcp-sync-windows-amd64.exe": true,
+		"mcp-sync-windows-arm64.exe": true,
 	}
 	if !validBinaries[binary] {
 		http.Error(w, "Unknown binary", http.StatusNotFound)

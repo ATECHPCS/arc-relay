@@ -83,9 +83,9 @@ type StdioBuildConfig struct {
 	Runtime    string `json:"runtime"`              // "python" or "node"
 	Package    string `json:"package"`              // pip/npm package name
 	Version    string `json:"version,omitempty"`    // package version (empty = latest)
-	GitURL     string `json:"git_url,omitempty"`     // alternative: build from git repo
-	GitRef     string `json:"git_ref,omitempty"`     // branch, tag, or commit hash
-	Dockerfile string `json:"dockerfile,omitempty"`  // alternative: custom Dockerfile text
+	GitURL     string `json:"git_url,omitempty"`    // alternative: build from git repo
+	GitRef     string `json:"git_ref,omitempty"`    // branch, tag, or commit hash
+	Dockerfile string `json:"dockerfile,omitempty"` // alternative: custom Dockerfile text
 }
 
 // BuildImageTag returns the Docker image tag for an auto-built image.

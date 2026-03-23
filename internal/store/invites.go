@@ -13,15 +13,15 @@ import (
 
 // InviteToken represents a one-time token for CLI onboarding.
 type InviteToken struct {
-	ID         string    `json:"id"`
-	TokenHash  string    `json:"-"`
-	UserID     string    `json:"user_id"`
-	Username   string    `json:"username,omitempty"` // populated on read, not stored
-	ProfileID  *string   `json:"profile_id,omitempty"`
-	CreatedBy  string    `json:"created_by"`
-	ExpiresAt  time.Time `json:"expires_at"`
-	UsedAt     *time.Time `json:"used_at,omitempty"`
-	Status     string    `json:"status"`
+	ID        string     `json:"id"`
+	TokenHash string     `json:"-"`
+	UserID    string     `json:"user_id"`
+	Username  string     `json:"username,omitempty"` // populated on read, not stored
+	ProfileID *string    `json:"profile_id,omitempty"`
+	CreatedBy string     `json:"created_by"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at,omitempty"`
+	Status    string     `json:"status"`
 }
 
 // InviteStore manages invite tokens.

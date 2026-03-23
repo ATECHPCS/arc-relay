@@ -4,9 +4,9 @@ import "testing"
 
 func TestDeriveSlug(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
-		want string
+		want  string
 	}{
 		{"strips prefix", "io.github.getsentry/sentry-mcp", "sentry-mcp"},
 		{"simple name", "simple-server", "simple-server"},

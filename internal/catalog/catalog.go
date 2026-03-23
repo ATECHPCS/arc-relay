@@ -32,13 +32,13 @@ type RegistryEntry struct {
 
 // ServerInfo is the server metadata from the registry.
 type ServerInfo struct {
-	Name        string       `json:"name"`
-	Title       string       `json:"title,omitempty"`
-	Description string       `json:"description"`
-	Version     string       `json:"version"`
-	Repository  Repository   `json:"repository"`
-	Packages    []Package    `json:"packages,omitempty"`
-	Remotes     []Remote     `json:"remotes,omitempty"`
+	Name        string     `json:"name"`
+	Title       string     `json:"title,omitempty"`
+	Description string     `json:"description"`
+	Version     string     `json:"version"`
+	Repository  Repository `json:"repository"`
+	Packages    []Package  `json:"packages,omitempty"`
+	Remotes     []Remote   `json:"remotes,omitempty"`
 }
 
 // Repository holds source repository info.
@@ -94,8 +94,8 @@ type ResolvedServer struct {
 	RepoURL          string                `json:"repo_url"`
 	SuggestedSlug    string                `json:"suggested_slug"`
 	SuggestedDisplay string                `json:"suggested_display"`
-	ServerType       string                `json:"server_type"`  // "stdio" or "remote"
-	DockerImage      string                `json:"docker_image"` // for OCI packages
+	ServerType       string                `json:"server_type"`            // "stdio" or "remote"
+	DockerImage      string                `json:"docker_image"`           // for OCI packages
 	PackageType      string                `json:"package_type,omitempty"` // "npm", "pypi" — for auto-build
 	PackageName      string                `json:"package_name,omitempty"` // package identifier — for auto-build
 	EnvVars          []EnvironmentVariable `json:"env_vars,omitempty"`

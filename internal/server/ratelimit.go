@@ -13,10 +13,10 @@ type rateBucket struct {
 
 // RateLimiter implements per-user token bucket rate limiting.
 type RateLimiter struct {
-	mu       sync.Mutex
-	buckets  map[string]*rateBucket
-	rate     float64 // tokens per second
-	burst    int     // max bucket size
+	mu      sync.Mutex
+	buckets map[string]*rateBucket
+	rate    float64 // tokens per second
+	burst   int     // max bucket size
 }
 
 // NewRateLimiter creates a rate limiter with the given rate (req/sec) and burst size.

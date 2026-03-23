@@ -18,10 +18,10 @@ type StdioBridge struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 
-	mu       sync.Mutex
-	pending  map[string]chan *mcp.Response
-	scanner  *bufio.Scanner
-	closed   bool
+	mu        sync.Mutex
+	pending   map[string]chan *mcp.Response
+	scanner   *bufio.Scanner
+	closed    bool
 	closeOnce sync.Once
 }
 

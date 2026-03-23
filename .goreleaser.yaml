@@ -1,7 +1,8 @@
 project_name: mcp-wrangler
 
 builds:
-  - id: linux-amd64
+  # Server builds (CGO required for SQLite)
+  - id: server-linux-amd64
     main: ./cmd/mcp-wrangler
     binary: mcp-wrangler
     env:
@@ -14,7 +15,7 @@ builds:
     ldflags:
       - -s -w
 
-  - id: linux-arm64
+  - id: server-linux-arm64
     main: ./cmd/mcp-wrangler
     binary: mcp-wrangler
     env:
@@ -27,9 +28,37 @@ builds:
     ldflags:
       - -s -w
 
+  # CLI builds (pure Go, no CGO)
+  - id: cli
+    main: ./cmd/mcp-sync
+    binary: mcp-sync
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
 archives:
-  - format: tar.gz
+  # Server archives (tar.gz)
+  - id: server
+    builds:
+      - server-linux-amd64
+      - server-linux-arm64
+    format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  # CLI archives (bare binaries - matches what install script expects)
+  - id: cli
+    builds:
+      - cli
+    format: binary
+    name_template: "mcp-sync-{{ .Os }}-{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt

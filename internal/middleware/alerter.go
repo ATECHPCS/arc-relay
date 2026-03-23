@@ -161,7 +161,7 @@ func (a *Alerter) fireAlert(rule compiledRule, meta *RequestMeta, summary string
 	// Always log the event
 	if a.eventLogger != nil {
 		a.eventLogger(&store.MiddlewareEvent{
-			Middleware:     "alerter",
+			Middleware:    "alerter",
 			EventType:     "alert",
 			Summary:       summary,
 			RequestMethod: meta.Method,

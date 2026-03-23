@@ -178,10 +178,10 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	}
 
 	containerID, err := m.docker.StartContainer(ctx, dockermgr.ContainerConfig{
-		Name:    srv.Name,
-		Image:   cfg.Image,
-		Env:     cfg.Env,
-		Port:    cfg.Port,
+		Name:  srv.Name,
+		Image: cfg.Image,
+		Env:   cfg.Env,
+		Port:  cfg.Port,
 	})
 	if err != nil {
 		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())

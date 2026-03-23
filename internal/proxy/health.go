@@ -26,9 +26,9 @@ type HealthMonitor struct {
 	interval time.Duration
 	cancel   context.CancelFunc
 
-	mu           sync.Mutex
-	failCounts   map[string]int       // server ID -> consecutive probe failures
-	lastRecover  map[string]time.Time // server ID -> last recovery attempt
+	mu          sync.Mutex
+	failCounts  map[string]int       // server ID -> consecutive probe failures
+	lastRecover map[string]time.Time // server ID -> last recovery attempt
 }
 
 // NewHealthMonitor creates a health monitor that checks servers at the given interval.

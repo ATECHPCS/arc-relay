@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build:
+  build-server:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,11 +19,45 @@ jobs:
       - name: Install SQLite dev headers
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      - name: Build
+      - name: Build server
         run: CGO_ENABLED=1 go build ./cmd/mcp-wrangler
 
-      - name: Test
-        run: CGO_ENABLED=1 go test ./...
+      - name: Test server packages
+        run: CGO_ENABLED=1 go test -race -count=1 ./internal/auth/... ./internal/catalog/... ./internal/config/... ./internal/docker/... ./internal/mcp/... ./internal/middleware/... ./internal/oauth/... ./internal/proxy/... ./internal/server/... ./internal/store/... ./internal/testutil/... ./internal/web/...
+
+  build-cli:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build CLI
+        run: go build ./cmd/mcp-sync
+        env:
+          CGO_ENABLED: "0"
+
+      - name: Test CLI packages
+        run: go test -count=1 ./internal/cli/... ./cmd/mcp-sync/...
+        env:
+          CGO_ENABLED: "0"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install SQLite dev headers
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
       - name: Vet
         run: go vet ./...
@@ -33,6 +67,9 @@ jobs:
 
       - name: Staticcheck
         run: staticcheck ./...
+
+      - name: Gofmt check
+        run: test -z "$(gofmt -l .)"
 
   security:
     runs-on: ubuntu-latest

@@ -9,12 +9,12 @@ import (
 
 // ServerEndpoints holds the cached enumeration results for an MCP server.
 type ServerEndpoints struct {
-	ServerInfo  ServerInfo  `json:"server_info"`
-	Tools       []Tool      `json:"tools"`
-	Resources   []Resource  `json:"resources"`
-	Prompts     []Prompt    `json:"prompts"`
-	Initialized bool        `json:"initialized"`
-	Error       string      `json:"error,omitempty"`
+	ServerInfo  ServerInfo `json:"server_info"`
+	Tools       []Tool     `json:"tools"`
+	Resources   []Resource `json:"resources"`
+	Prompts     []Prompt   `json:"prompts"`
+	Initialized bool       `json:"initialized"`
+	Error       string     `json:"error,omitempty"`
 }
 
 // Sender is the interface for sending MCP requests (matches proxy.Backend).

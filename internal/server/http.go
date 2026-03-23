@@ -31,7 +31,7 @@ type Server struct {
 	profileStore    *store.ProfileStore
 	requestLogs     *store.RequestLogStore
 	sessionStore    *store.SessionStore
-	middlewareStore  *store.MiddlewareStore
+	middlewareStore *store.MiddlewareStore
 	mwRegistry      *middleware.Registry
 	healthMon       *proxy.HealthMonitor
 	inviteStore     *store.InviteStore
@@ -50,7 +50,7 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		profileStore:    profileStore,
 		requestLogs:     requestLogs,
 		sessionStore:    sessionStore,
-		middlewareStore:  middlewareStore,
+		middlewareStore: middlewareStore,
 		mwRegistry:      mwRegistry,
 		healthMon:       healthMon,
 		inviteStore:     inviteStore,

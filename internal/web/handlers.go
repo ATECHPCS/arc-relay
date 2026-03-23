@@ -50,13 +50,13 @@ type ConfigDisplay struct {
 	OAuthScopes      string
 	OAuthTokenExpiry string
 	// Build fields
-	HasBuild       bool
-	BuildRuntime   string
-	BuildPackage   string
-	BuildVersion   string
-	BuildGitURL    string
-	BuildGitRef    string
-	BuildCustom    bool
+	HasBuild     bool
+	BuildRuntime string
+	BuildPackage string
+	BuildVersion string
+	BuildGitURL  string
+	BuildGitRef  string
+	BuildCustom  bool
 	// Image staleness fields
 	ImageID          string // sha256 ID of the current image tag
 	ImageCreated     string // human-readable image creation time
@@ -135,7 +135,7 @@ type Handlers struct {
 	profileStore    *store.ProfileStore
 	requestLogs     *store.RequestLogStore
 	sessionStore    *store.SessionStore
-	middlewareStore  *store.MiddlewareStore
+	middlewareStore *store.MiddlewareStore
 	mwRegistry      *middleware.Registry
 	healthMon       *proxy.HealthMonitor
 	catalogClient   *catalog.Client
@@ -156,24 +156,24 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		}
 	}
 	h := &Handlers{
-		cfg:            cfg,
-		servers:        servers,
-		users:          users,
-		proxy:          proxyMgr,
-		oauth:          oauthMgr,
-		accessStore:    accessStore,
-		profileStore:   profileStore,
-		requestLogs:    requestLogs,
-		sessionStore:   sessionStore,
+		cfg:             cfg,
+		servers:         servers,
+		users:           users,
+		proxy:           proxyMgr,
+		oauth:           oauthMgr,
+		accessStore:     accessStore,
+		profileStore:    profileStore,
+		requestLogs:     requestLogs,
+		sessionStore:    sessionStore,
 		middlewareStore: middlewareStore,
-		mwRegistry:     mwRegistry,
-		healthMon:      healthMon,
-		catalogClient:  catalog.NewClient(),
-		deviceAuth:     newDeviceAuthStore(),
-		inviteStore:    inviteStore,
-		tmpls:          make(map[string]*template.Template),
-		csrfSecret:     csrfSecret,
-		loginLimiter:   newLoginRateLimiter(),
+		mwRegistry:      mwRegistry,
+		healthMon:       healthMon,
+		catalogClient:   catalog.NewClient(),
+		deviceAuth:      newDeviceAuthStore(),
+		inviteStore:     inviteStore,
+		tmpls:           make(map[string]*template.Template),
+		csrfSecret:      csrfSecret,
+		loginLimiter:    newLoginRateLimiter(),
 	}
 
 	// Template helper functions
@@ -184,7 +184,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 			}
 			return *s
 		},
-		"add": func(a, b int) int { return a + b },
+		"add":      func(a, b int) int { return a + b },
 		"subtract": func(a, b int) int { return a - b },
 		"pages": func(current, total int) []int {
 			// Returns page numbers to display, with -1 for ellipsis
@@ -630,15 +630,15 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 	}
 
 	h.render(w, r, "server_detail.html", map[string]any{
-		"Nav":              "servers",
-		"User":             getUser(r),
-		"Server":           srv,
-		"ConfigDisplay":    cd,
-		"BaseURL":          h.cfg.PublicBaseURL(),
-		"Endpoints":        h.proxy.Endpoints.Get(srv.ID),
-		"TierMap":          tierMap,
-		"EndpointUsage":    endpointUsage,
-		"RecentLogs":       serverLogs,
+		"Nav":               "servers",
+		"User":              getUser(r),
+		"Server":            srv,
+		"ConfigDisplay":     cd,
+		"BaseURL":           h.cfg.PublicBaseURL(),
+		"Endpoints":         h.proxy.Endpoints.Get(srv.ID),
+		"TierMap":           tierMap,
+		"EndpointUsage":     endpointUsage,
+		"RecentLogs":        serverLogs,
 		"MiddlewareConfigs": mwConfigs,
 		"MiddlewareEvents":  mwEvents,
 	})
@@ -1646,36 +1646,36 @@ func (h *Handlers) serverFormData(r *http.Request, srv *store.Server, errMsg str
 		srv = &store.Server{Name: r.FormValue("name"), DisplayName: r.FormValue("display_name")}
 	}
 	return map[string]any{
-		"Nav":            "servers",
-		"User":           getUser(r),
-		"IsEdit":         false,
-		"Server":         srv,
-		"ServerType":     r.FormValue("server_type"),
-		"RemoteAuthType": r.FormValue("remote_auth_type"),
-		"StdioImage":      r.FormValue("stdio_image"),
-		"StdioEntrypoint": r.FormValue("stdio_entrypoint"),
-		"StdioCommand":    r.FormValue("stdio_command"),
-		"StdioEnv":        r.FormValue("stdio_env"),
-		"StdioMode":       r.FormValue("stdio_mode"),
-		"BuildRuntime":    r.FormValue("build_runtime"),
-		"BuildPackage":    r.FormValue("build_package"),
-		"BuildVersion":    r.FormValue("build_version"),
-		"BuildGitURL":     r.FormValue("build_git_url"),
-		"BuildDockerfile": r.FormValue("build_dockerfile"),
-		"HTTPImage":      r.FormValue("http_image"),
-		"HTTPPort":       r.FormValue("http_port"),
-		"HTTPURL":        r.FormValue("http_url"),
-		"HTTPHealth":     r.FormValue("http_health"),
-		"HTTPEnv":        r.FormValue("http_env"),
-		"RemoteURL":          r.FormValue("remote_url"),
-		"RemoteToken":        r.FormValue("remote_token"),
-		"RemoteHeaderName":   r.FormValue("remote_header_name"),
-		"OAuthClientID":      r.FormValue("oauth_client_id"),
-		"OAuthClientSecret":  r.FormValue("oauth_client_secret"),
-		"OAuthAuthURL":       r.FormValue("oauth_auth_url"),
-		"OAuthTokenURL":      r.FormValue("oauth_token_url"),
-		"OAuthScopes":        r.FormValue("oauth_scopes"),
-		"Error":              errMsg,
+		"Nav":               "servers",
+		"User":              getUser(r),
+		"IsEdit":            false,
+		"Server":            srv,
+		"ServerType":        r.FormValue("server_type"),
+		"RemoteAuthType":    r.FormValue("remote_auth_type"),
+		"StdioImage":        r.FormValue("stdio_image"),
+		"StdioEntrypoint":   r.FormValue("stdio_entrypoint"),
+		"StdioCommand":      r.FormValue("stdio_command"),
+		"StdioEnv":          r.FormValue("stdio_env"),
+		"StdioMode":         r.FormValue("stdio_mode"),
+		"BuildRuntime":      r.FormValue("build_runtime"),
+		"BuildPackage":      r.FormValue("build_package"),
+		"BuildVersion":      r.FormValue("build_version"),
+		"BuildGitURL":       r.FormValue("build_git_url"),
+		"BuildDockerfile":   r.FormValue("build_dockerfile"),
+		"HTTPImage":         r.FormValue("http_image"),
+		"HTTPPort":          r.FormValue("http_port"),
+		"HTTPURL":           r.FormValue("http_url"),
+		"HTTPHealth":        r.FormValue("http_health"),
+		"HTTPEnv":           r.FormValue("http_env"),
+		"RemoteURL":         r.FormValue("remote_url"),
+		"RemoteToken":       r.FormValue("remote_token"),
+		"RemoteHeaderName":  r.FormValue("remote_header_name"),
+		"OAuthClientID":     r.FormValue("oauth_client_id"),
+		"OAuthClientSecret": r.FormValue("oauth_client_secret"),
+		"OAuthAuthURL":      r.FormValue("oauth_auth_url"),
+		"OAuthTokenURL":     r.FormValue("oauth_token_url"),
+		"OAuthScopes":       r.FormValue("oauth_scopes"),
+		"Error":             errMsg,
 	}
 }
 
