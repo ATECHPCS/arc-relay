@@ -447,10 +447,11 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve from local downloads directory if available (co-located with DB)
-	dbDir := filepath.Dir(h.cfg.Database.Path)
-	localPath := filepath.Join(dbDir, "downloads", binary)
-	if info, err := os.Stat(localPath); err == nil && !info.IsDir() {
+	// Serve from local downloads directory if available.
+	// Use /data/downloads inside the container (matches the volume mount).
+	dataDir := filepath.Dir(h.cfg.Database.Path)
+	localPath := filepath.Join(dataDir, "downloads", binary)
+	if info, err := os.Lstat(localPath); err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", binary))
 		http.ServeFile(w, r, localPath)
