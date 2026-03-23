@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -93,7 +94,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ListenAndServe() error {
 	addr := s.cfg.Addr()
 	log.Printf("MCP Wrangler listening on %s", addr)
-	return http.ListenAndServe(addr, s)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           s,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return srv.ListenAndServe()
 }
 
 // methodShouldLog returns true for methods that represent meaningful user actions.
@@ -572,9 +578,23 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string)
 	}
 	srv.ID = id
 
+	if err := store.ValidateSlug(srv.Name); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	oldName := existing.Name
 	if err := s.servers.Update(&srv); err != nil {
+		if errors.Is(err, store.ErrSlugConflict) {
+			http.Error(w, `{"error":"server slug already exists"}`, http.StatusConflict)
+			return
+		}
 		http.Error(w, `{"error":"failed to update server"}`, http.StatusInternalServerError)
 		return
+	}
+
+	if oldName != srv.Name {
+		log.Printf("Server %s slug renamed via API: %s -> %s", id, oldName, srv.Name)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

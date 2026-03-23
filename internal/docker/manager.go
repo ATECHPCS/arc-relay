@@ -541,7 +541,7 @@ func tarDirectory(tw *tar.Writer, root string, ignorePatterns []string) error {
 			return nil
 		}
 
-		f, err := os.Open(path)
+		f, err := os.Open(path) // #nosec G122 G304 - symlinks handled above (line 515), path is from local git repo context
 		if err != nil {
 			return fmt.Errorf("opening %s: %w", relPath, err)
 		}
@@ -553,7 +553,7 @@ func tarDirectory(tw *tar.Writer, root string, ignorePatterns []string) error {
 
 // parseDockerignore reads a .dockerignore file and returns the patterns.
 func parseDockerignore(contextDir string) []string {
-	f, err := os.Open(filepath.Join(contextDir, ".dockerignore"))
+	f, err := os.Open(filepath.Join(contextDir, ".dockerignore")) // #nosec G304 - contextDir is server-controlled build context
 	if err != nil {
 		return nil
 	}
@@ -591,10 +591,7 @@ func shouldIgnore(relPath string, isDir bool, patterns []string) bool {
 			matched, _ = filepath.Match(strings.TrimSuffix(p, "/"), relPath)
 		}
 		if matched {
-			if negate {
-				return false
-			}
-			return true
+			return !negate
 		}
 	}
 	return false

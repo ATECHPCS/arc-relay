@@ -451,7 +451,7 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Use /data/downloads inside the container (matches the volume mount).
 	dataDir := filepath.Dir(h.cfg.Database.Path)
 	localPath := filepath.Join(dataDir, "downloads", binary)
-	if info, err := os.Lstat(localPath); err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+	if info, err := os.Lstat(localPath); err == nil && !info.IsDir() && info.Mode()&os.ModeSymlink == 0 { // #nosec G703 - path is validated via allowlist above
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", binary))
 		http.ServeFile(w, r, localPath)

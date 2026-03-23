@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -366,7 +367,7 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 - Secure is conditional for local dev (http)
 		Name:     "session",
 		Value:    sessionID,
 		Path:     "/",
@@ -388,7 +389,7 @@ func (h *Handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie("session"); err == nil {
 		h.sessionStore.Delete(cookie.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode}) // #nosec G124 - clearing cookie
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
@@ -672,6 +673,18 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 
+	// Validate slug format
+	if err := store.ValidateSlug(updated.Name); err != nil {
+		formData := serverToFormData(updated)
+		formData["Nav"] = "servers"
+		formData["User"] = getUser(r)
+		formData["IsEdit"] = true
+		formData["Server"] = srv
+		formData["Error"] = err.Error()
+		h.render(w, r, "server_form.html", formData)
+		return
+	}
+
 	// Preserve fields not in the form
 	updated.ID = id
 	updated.Status = srv.Status
@@ -713,10 +726,25 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 		}
 	}
 
+	oldName := srv.Name
 	if err := h.servers.Update(updated); err != nil {
+		if errors.Is(err, store.ErrSlugConflict) {
+			formData := serverToFormData(updated)
+			formData["Nav"] = "servers"
+			formData["User"] = getUser(r)
+			formData["IsEdit"] = true
+			formData["Server"] = srv
+			formData["Error"] = fmt.Sprintf("Slug %q is already taken by another server.", updated.Name)
+			h.render(w, r, "server_form.html", formData)
+			return
+		}
 		log.Printf("Error updating server %s: %v", id, err)
 		http.Error(w, "Failed to update server", http.StatusInternalServerError)
 		return
+	}
+
+	if oldName != updated.Name {
+		log.Printf("Server %s slug renamed: %s -> %s", id, oldName, updated.Name)
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
@@ -737,7 +765,7 @@ func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id 
 		h.proxy.StopServer(r.Context(), id)
 	}
 	if err := h.proxy.StartServer(r.Context(), srv); err != nil {
-		log.Printf("Error starting server %s: %v", srv.Name, err)
+		log.Printf("Error starting server %s: %v", srv.Name, err) // #nosec G706 - server name from DB
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -768,7 +796,7 @@ func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request,
 	}
 	_, err := h.proxy.EnumerateServer(r.Context(), id)
 	if err != nil {
-		log.Printf("Error enumerating server %s: %v", id, err)
+		log.Printf("Error enumerating server %s: %v", id, err) // #nosec G706
 	}
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }
@@ -780,7 +808,7 @@ func (h *Handlers) handleServerHealthCheck(w http.ResponseWriter, r *http.Reques
 	}
 	if h.healthMon != nil {
 		health, healthErr := h.healthMon.CheckHealth(r.Context(), id)
-		log.Printf("On-demand health check for %s: %s %s", id, health, healthErr)
+		log.Printf("On-demand health check for %s: %s %s", id, health, healthErr) // #nosec G706
 	}
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }
@@ -796,7 +824,7 @@ func (h *Handlers) handleServerRebuild(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	if err := h.proxy.RebuildImage(r.Context(), srv); err != nil {
-		log.Printf("Error rebuilding image for server %s: %v", srv.Name, err)
+		log.Printf("Error rebuilding image for server %s: %v", srv.Name, err) // #nosec G706
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -812,7 +840,7 @@ func (h *Handlers) handleServerRebuildRestart(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.proxy.RebuildAndRestart(r.Context(), srv); err != nil {
-		log.Printf("Error rebuild+restart for server %s: %v", srv.Name, err)
+		log.Printf("Error rebuild+restart for server %s: %v", srv.Name, err) // #nosec G706
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -828,7 +856,7 @@ func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	if err := h.proxy.RecreateContainer(r.Context(), srv); err != nil {
-		log.Printf("Error recreating container for server %s: %v", srv.Name, err)
+		log.Printf("Error recreating container for server %s: %v", srv.Name, err) // #nosec G706
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -1392,11 +1420,12 @@ func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, pro
 	}
 
 	if err := h.profileStore.SeedFromTier(profileID, serverID, tier); err != nil {
-		log.Printf("Error seeding profile %s: %v", profileID, err)
+		log.Printf("Error seeding profile %s: %v", profileID, err) // #nosec G706
 		if r.Header.Get("Accept") == "application/json" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error":"` + err.Error() + `"}`))
+			errJSON, _ := json.Marshal(err.Error())
+			w.Write([]byte(`{"error":` + string(errJSON) + `}`))
 			return
 		}
 	}
@@ -1443,16 +1472,16 @@ func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-re-register if redirect URI has changed (e.g. base URL update)
 	if reregistered, err := h.oauth.ReRegisterIfNeeded(r.Context(), serverID, srv, &cfg); err != nil {
-		log.Printf("OAuth re-registration failed for %s: %v", srv.Name, err)
+		log.Printf("OAuth re-registration failed for %s: %v", srv.Name, err) // #nosec G706
 		http.Error(w, fmt.Sprintf("OAuth re-registration failed: %s", err), http.StatusInternalServerError)
 		return
 	} else if reregistered {
-		log.Printf("OAuth re-registered for %s with updated redirect URI", srv.Name)
+		log.Printf("OAuth re-registered for %s with updated redirect URI", srv.Name) // #nosec G706
 	}
 
 	authURL, err := h.oauth.StartAuthFlow(serverID, cfg.Auth)
 	if err != nil {
-		log.Printf("Error starting OAuth flow for %s: %v", srv.Name, err)
+		log.Printf("Error starting OAuth flow for %s: %v", srv.Name, err) // #nosec G706
 		http.Error(w, "Failed to start OAuth flow", http.StatusInternalServerError)
 		return
 	}

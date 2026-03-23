@@ -3,12 +3,31 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrSlugConflict is returned when a slug name is already taken by another server.
+var ErrSlugConflict = errors.New("server slug already exists")
+
+// slugPattern matches valid slug names: lowercase alphanumeric with hyphens, min 2 chars.
+var slugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*[a-z0-9]$`)
+
+// ValidateSlug checks that a slug name meets the required format.
+func ValidateSlug(name string) error {
+	if name == "" {
+		return fmt.Errorf("slug name is required")
+	}
+	if !slugPattern.MatchString(name) {
+		return fmt.Errorf("slug must be lowercase alphanumeric with hyphens, at least 2 characters (got %q)", name)
+	}
+	return nil
+}
 
 type ServerType string
 
@@ -157,6 +176,9 @@ func NewServerStore(db *DB, crypto *ConfigEncryptor) *ServerStore {
 }
 
 func (s *ServerStore) Create(srv *Server) error {
+	if err := ValidateSlug(srv.Name); err != nil {
+		return err
+	}
 	if srv.ID == "" {
 		srv.ID = uuid.New().String()
 	}
@@ -175,6 +197,9 @@ func (s *ServerStore) Create(srv *Server) error {
 		srv.ID, srv.Name, srv.DisplayName, srv.ServerType, storedConfig, srv.Status, srv.CreatedAt, srv.UpdatedAt,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return ErrSlugConflict
+		}
 		return fmt.Errorf("creating server: %w", err)
 	}
 	return nil
@@ -269,6 +294,9 @@ func (s *ServerStore) Update(srv *Server) error {
 		srv.Name, srv.DisplayName, srv.ServerType, storedConfig, srv.Status, srv.ErrorMsg, srv.UpdatedAt, srv.ID,
 	)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return ErrSlugConflict
+		}
 		return fmt.Errorf("updating server: %w", err)
 	}
 	return nil

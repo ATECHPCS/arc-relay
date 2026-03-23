@@ -29,8 +29,12 @@
       <div class="form-group">
         <label for="name">Slug Name</label>
         <input type="text" id="name" name="name" value="{{.Server.Name}}" required
-               pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" {{if .IsEdit}}readonly{{end}}>
+               pattern="[a-z0-9][a-z0-9-]*[a-z0-9]">
+        {{if .IsEdit}}<input type="hidden" id="original_name" value="{{.Server.Name}}">{{end}}
         <div class="help">URL-safe identifier used in proxy path: /mcp/{name}. Lowercase, hyphens only.</div>
+        {{if .IsEdit}}<div id="slug-rename-warning" class="alert alert-danger" style="display:none; margin-top:0.5rem;">
+          Changing the slug will break existing client configurations. All connected clients will need to run <code>mcp-sync</code> to update.
+        </div>{{end}}
       </div>
       <div class="form-group">
         <label for="display_name">Display Name</label>
@@ -274,6 +278,18 @@ function toggleAuthFields() {
 }
 
 toggleTypeFields();
+
+// --- Slug rename warning ---
+(function() {
+  var origEl = document.getElementById('original_name');
+  if (!origEl) return;
+  var origName = origEl.value;
+  var nameInput = document.getElementById('name');
+  var warning = document.getElementById('slug-rename-warning');
+  nameInput.addEventListener('input', function() {
+    warning.style.display = (nameInput.value !== origName) ? 'block' : 'none';
+  });
+})();
 
 // --- Catalog ---
 
