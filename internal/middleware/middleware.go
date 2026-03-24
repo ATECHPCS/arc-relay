@@ -105,6 +105,7 @@ func NewRegistry(mwStore *store.MiddlewareStore) *Registry {
 	r.Register("sanitizer", NewSanitizerFromConfig)
 	r.Register("sizer", NewSizerFromConfig)
 	r.Register("alerter", NewAlerterFromConfig)
+	r.Register("archive", NewArchiveFromConfig)
 	return r
 }
 
