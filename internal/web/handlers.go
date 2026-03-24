@@ -216,7 +216,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	}
 
 	// Parse each page template together with the layout
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html", "connect_desktop.html"}
 	for _, page := range pages {
 		t := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/"+page))
 		h.tmpls[page] = t
@@ -250,6 +250,9 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/token", h.handleOAuthToken)               // Alias
 	mux.HandleFunc("/oauth/register", h.handleOAuthRegister)   // No auth - DCR
 	mux.HandleFunc("/register", h.handleOAuthRegister)         // Alias
+
+	// Desktop onboarding
+	mux.HandleFunc("/connect/desktop", h.requireAuth(h.handleConnectDesktop))
 
 	mux.HandleFunc("/login", h.handleLogin)
 	mux.HandleFunc("/logout", h.handleLogout)
@@ -1611,6 +1614,27 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 	}
 
 	writeJSON(w, http.StatusOK, discovery)
+}
+
+// handleConnectDesktop shows the Desktop onboarding page with all servers.
+func (h *Handlers) handleConnectDesktop(w http.ResponseWriter, r *http.Request) {
+	user := getUser(r)
+	servers, _ := h.servers.List()
+
+	// Filter to running servers only
+	var running []*store.Server
+	for _, s := range servers {
+		if s.Status == "running" {
+			running = append(running, s)
+		}
+	}
+
+	h.render(w, r, "connect_desktop.html", map[string]any{
+		"Nav":     "",
+		"User":    user,
+		"Servers": running,
+		"BaseURL": h.cfg.PublicBaseURL(),
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

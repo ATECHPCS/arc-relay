@@ -522,21 +522,30 @@ mcp-sync init {{.BaseURL}}</code></pre>
 }</code></pre>
   </details>
 
-  <details>
-    <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">Claude Desktop (claude_desktop_config.json) — manual setup</summary>
-    <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0.3rem;">Config file: macOS <code>~/Library/Application Support/Claude/</code> · Windows <code>%APPDATA%\Claude\</code> · Linux <code>~/.config/Claude/</code></p>
-    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto;"><code>{
-  "mcpServers": {
-    "{{.Server.Name}}": {
-      "type": "http",
-      "url": "{{.BaseURL}}/mcp/{{.Server.Name}}",
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY"
-      }
-    }
-  }
-}</code></pre>
-  </details>
+  <div style="background: var(--bg-dark, #f8f9fa); border: 1px solid var(--border, #dee2e6); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">
+    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.95rem;">Claude Desktop</strong>
+      <span style="font-size: 0.7rem; background: #198754; color: #fff; padding: 0.15rem 0.5rem; border-radius: 10px;">OAuth</span>
+    </div>
+    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0 0 0.75rem;">Add this server to Claude Desktop as a custom connector. Authentication is handled automatically via OAuth.</p>
+    <div style="margin-bottom: 0.75rem;">
+      <label style="font-size: 0.8rem; font-weight: 500; display: block; margin-bottom: 0.25rem;">Connector URL</label>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <code id="desktop-url" style="flex: 1; background: #fff; border: 1px solid var(--border, #dee2e6); padding: 0.4rem 0.6rem; border-radius: 4px; font-size: 0.8rem; word-break: break-all;">{{.BaseURL}}/mcp/{{.Server.Name}}</code>
+        <button onclick="copyDesktopURL()" id="copy-desktop-btn" class="btn btn-sm" style="white-space: nowrap; padding: 0.3rem 0.75rem; font-size: 0.8rem;">Copy URL</button>
+      </div>
+    </div>
+    <details style="margin-bottom: 0;">
+      <summary style="font-size: 0.8rem; color: var(--text-muted); cursor: pointer;">Setup steps</summary>
+      <ol style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0; padding-left: 1.5rem;">
+        <li>In Claude Desktop, click your profile icon > <strong>Settings</strong></li>
+        <li>Go to <strong>Connectors</strong> > <strong>Add custom connector</strong></li>
+        <li>Paste the URL above and click <strong>Add</strong></li>
+        <li>A browser window will open - log in and click <strong>Approve</strong></li>
+        <li>Return to Claude Desktop - the server should show as connected</li>
+      </ol>
+    </details>
+  </div>
 
   <script>
   function copyText(id) {
@@ -545,6 +554,14 @@ mcp-sync init {{.BaseURL}}</code></pre>
       var btn = document.getElementById(id).closest('div').querySelector('button');
       btn.textContent = 'Copied!';
       setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+    });
+  }
+  function copyDesktopURL() {
+    var text = document.getElementById('desktop-url').textContent;
+    navigator.clipboard.writeText(text).then(function() {
+      var btn = document.getElementById('copy-desktop-btn');
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Copy URL'; }, 1500);
     });
   }
   </script>

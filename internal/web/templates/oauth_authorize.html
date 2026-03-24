@@ -23,6 +23,7 @@
   <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
     Approving will grant <strong>{{.ClientName}}</strong> access to MCP proxy endpoints as <strong>{{.User.Username}}</strong>.
     This does not grant access to server management.
+    After you approve, Claude will finish connecting your account and this window will close.
   </p>
 
   <form method="POST" action="/oauth/authorize">
