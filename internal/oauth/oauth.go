@@ -196,7 +196,7 @@ func (m *Manager) StartAuthFlow(serverID string, auth store.RemoteAuth) (string,
 	if err != nil {
 		return "", fmt.Errorf("generating code verifier: %w", err)
 	}
-	challenge := computeCodeChallenge(verifier)
+	challenge := ComputeCodeChallenge(verifier)
 
 	state, err := generateState()
 	if err != nil {
@@ -608,8 +608,8 @@ func generateCodeVerifier() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// computeCodeChallenge computes the S256 PKCE challenge from a verifier.
-func computeCodeChallenge(verifier string) string {
+// ComputeCodeChallenge computes the S256 PKCE challenge from a verifier.
+func ComputeCodeChallenge(verifier string) string {
 	h := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(h[:])
 }

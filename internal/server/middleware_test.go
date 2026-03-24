@@ -52,7 +52,7 @@ func TestAPIKeyAuth(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := server.APIKeyAuth(users)(inner)
+	handler := server.APIKeyAuth(users, "http://localhost:8080")(inner)
 
 	t.Run("valid key", func(t *testing.T) {
 		req := httptest.NewRequest("GET", "/mcp/test", nil)
@@ -111,7 +111,7 @@ func TestAdminOnly(t *testing.T) {
 
 		// Use APIKeyAuth to set user in context, then chain AdminOnly
 		rawKey, _, _ := users.CreateAPIKey(admin.ID, "admin-key", nil)
-		fullHandler := server.APIKeyAuth(users)(handler)
+		fullHandler := server.APIKeyAuth(users, "http://localhost:8080")(handler)
 
 		req := httptest.NewRequest("GET", "/admin", nil)
 		req.Header.Set("Authorization", "Bearer "+rawKey)
@@ -129,7 +129,7 @@ func TestAdminOnly(t *testing.T) {
 		user, _ := users.Create("regular", "pass", "user")
 
 		rawKey, _, _ := users.CreateAPIKey(user.ID, "user-key", nil)
-		fullHandler := server.APIKeyAuth(users)(handler)
+		fullHandler := server.APIKeyAuth(users, "http://localhost:8080")(handler)
 
 		req := httptest.NewRequest("GET", "/admin", nil)
 		req.Header.Set("Authorization", "Bearer "+rawKey)

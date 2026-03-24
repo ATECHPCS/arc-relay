@@ -103,6 +103,9 @@ func main() {
 	// Initialize invite store
 	inviteStore := store.NewInviteStore(db)
 
+	// Initialize OAuth token store (for Claude Desktop and other OAuth clients)
+	oauthTokenStore := store.NewOAuthTokenStore(db)
+
 	// Start health monitor
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
@@ -110,8 +113,19 @@ func main() {
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)
 
+	// Periodic cleanup of expired OAuth tokens and refresh tokens
+	oauthRefreshStore := store.NewOAuthRefreshTokenStore(db)
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			oauthTokenStore.Cleanup()
+			oauthRefreshStore.Cleanup()
+		}
+	}()
+
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

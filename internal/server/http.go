@@ -35,11 +35,12 @@ type Server struct {
 	mwRegistry      *middleware.Registry
 	healthMon       *proxy.HealthMonitor
 	inviteStore     *store.InviteStore
+	oauthTokenStore *store.OAuthTokenStore
 	mux             *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore) *Server {
 	s := &Server{
 		cfg:             cfg,
 		servers:         servers,
@@ -54,6 +55,7 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		mwRegistry:      mwRegistry,
 		healthMon:       healthMon,
 		inviteStore:     inviteStore,
+		oauthTokenStore: oauthTokenStore,
 		mux:             http.NewServeMux(),
 	}
 	s.routes()
@@ -61,12 +63,14 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 }
 
 func (s *Server) routes() {
-	// MCP proxy endpoints (API key auth + rate limiting)
-	limiter := NewRateLimiter(100, 200) // 100 req/sec sustained, 200 burst
-	s.mux.Handle("/mcp/", APIKeyAuth(s.users)(limiter.Middleware(http.HandlerFunc(s.handleMCPProxy))))
+	baseURL := s.cfg.PublicBaseURL()
 
-	// REST API for server management (API key auth required)
-	apiAuth := APIKeyAuth(s.users)
+	// MCP proxy endpoints (API key + OAuth token auth + rate limiting)
+	limiter := NewRateLimiter(100, 200) // 100 req/sec sustained, 200 burst
+	s.mux.Handle("/mcp/", MCPAuth(s.users, s.oauthTokenStore, baseURL)(limiter.Middleware(http.HandlerFunc(s.handleMCPProxy))))
+
+	// REST API for server management (API key auth only - no OAuth tokens)
+	apiAuth := APIKeyAuth(s.users, baseURL)
 	s.mux.Handle("/api/servers", apiAuth(http.HandlerFunc(s.handleServers)))
 	s.mux.Handle("/api/servers/", apiAuth(http.HandlerFunc(s.handleServerByID)))
 
@@ -77,7 +81,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }

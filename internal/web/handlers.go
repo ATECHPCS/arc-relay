@@ -141,12 +141,13 @@ type Handlers struct {
 	catalogClient   *catalog.Client
 	deviceAuth      *deviceAuthStore
 	inviteStore     *store.InviteStore
+	oauthProv       *oauthProvider
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
 	loginLimiter    *loginRateLimiter
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore) *Handlers {
 	// Generate a per-process CSRF secret. Use session_secret from config if set.
 	csrfSecret := []byte(cfg.Auth.SessionSecret)
 	if len(csrfSecret) == 0 {
@@ -171,6 +172,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		catalogClient:   catalog.NewClient(),
 		deviceAuth:      newDeviceAuthStore(),
 		inviteStore:     inviteStore,
+		oauthProv:       newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
 		tmpls:           make(map[string]*template.Template),
 		csrfSecret:      csrfSecret,
 		loginLimiter:    newLoginRateLimiter(),
@@ -214,7 +216,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	}
 
 	// Parse each page template together with the layout
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html"}
 	for _, page := range pages {
 		t := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/"+page))
 		h.tmpls[page] = t
@@ -238,6 +240,17 @@ func (h *Handlers) StartSessionCleanup(interval time.Duration) {
 
 // RegisterRoutes adds web UI routes to the given mux.
 func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
+	// OAuth 2.1 Authorization Server (provider) - discovery + endpoints
+	mux.HandleFunc("/.well-known/oauth-protected-resource", h.handleProtectedResourceMetadata)
+	mux.HandleFunc("/.well-known/oauth-protected-resource/", h.handleProtectedResourceMetadata)
+	mux.HandleFunc("/.well-known/oauth-authorization-server", h.handleAuthorizationServerMetadata)
+	mux.HandleFunc("/oauth/authorize", h.handleOAuthAuthorize) // Session auth checked internally
+	mux.HandleFunc("/authorize", h.handleOAuthAuthorize)       // Alias - some clients use /authorize directly
+	mux.HandleFunc("/oauth/token", h.handleOAuthToken)         // No auth - code/PKCE is proof
+	mux.HandleFunc("/token", h.handleOAuthToken)               // Alias
+	mux.HandleFunc("/oauth/register", h.handleOAuthRegister)   // No auth - DCR
+	mux.HandleFunc("/register", h.handleOAuthRegister)         // Alias
+
 	mux.HandleFunc("/login", h.handleLogin)
 	mux.HandleFunc("/logout", h.handleLogout)
 	mux.HandleFunc("/", h.requireAuth(h.handleDashboard))
@@ -309,6 +322,18 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie("session")
 		if err != nil {
+			// For non-browser clients hitting the root, return 401 with OAuth
+			// discovery instead of redirecting to a login page they can't use.
+			accept := r.Header.Get("Accept")
+			if !strings.Contains(accept, "text/html") && r.URL.Path == "/" {
+				baseURL := h.cfg.PublicBaseURL()
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(
+					`Bearer resource_metadata="%s/.well-known/oauth-protected-resource%s"`, baseURL, r.URL.Path))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"error":"authentication required"}`)
+				return
+			}
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
