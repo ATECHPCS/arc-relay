@@ -1616,23 +1616,38 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, discovery)
 }
 
-// handleConnectDesktop shows the Desktop onboarding page with all servers.
+// handleConnectDesktop shows the Desktop onboarding page with accessible servers.
 func (h *Handlers) handleConnectDesktop(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
 	servers, _ := h.servers.List()
 
-	// Filter to running servers only
-	var running []*store.Server
+	// Filter to running servers the user has access to
+	var accessible []*store.Server
 	for _, s := range servers {
-		if s.Status == "running" {
-			running = append(running, s)
+		if s.Status != "running" {
+			continue
 		}
+		// Admins see everything
+		if user.Role == "admin" {
+			accessible = append(accessible, s)
+			continue
+		}
+		// Profile-based: check if user has any permissions on this server
+		if user.ProfileID != nil && h.profileStore != nil {
+			perms, err := h.profileStore.GetPermissionsForServer(*user.ProfileID, s.ID)
+			if err == nil && len(perms) > 0 {
+				accessible = append(accessible, s)
+			}
+			continue
+		}
+		// Legacy tier-based: all running servers are accessible
+		accessible = append(accessible, s)
 	}
 
 	h.render(w, r, "connect_desktop.html", map[string]any{
-		"Nav":     "",
+		"Nav":     "connect",
 		"User":    user,
-		"Servers": running,
+		"Servers": accessible,
 		"BaseURL": h.cfg.PublicBaseURL(),
 	})
 }

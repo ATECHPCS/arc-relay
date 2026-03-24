@@ -240,6 +240,7 @@
       <a href="/users" {{if eq .Nav "users"}}class="active"{{end}}>Users</a>
       <a href="/api-keys" {{if eq .Nav "apikeys"}}class="active"{{end}}>API Keys</a>
       {{if and .User (eq .User.Role "admin")}}<a href="/profiles" {{if eq .Nav "profiles"}}class="active"{{end}}>Profiles</a>{{end}}
+      <a href="/connect/desktop" {{if eq .Nav "connect"}}class="active"{{end}}>Connect</a>
     </nav>
     <div class="spacer"></div>
     {{if .User}}
