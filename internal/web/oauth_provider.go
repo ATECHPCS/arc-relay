@@ -179,8 +179,8 @@ func (h *Handlers) handleProtectedResourceMetadata(w http.ResponseWriter, r *htt
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"resource":                resource,
-		"authorization_servers":   []string{baseURL},
+		"resource":                 resource,
+		"authorization_servers":    []string{baseURL},
 		"bearer_methods_supported": []string{"header"},
 	})
 }
@@ -200,8 +200,8 @@ func (h *Handlers) handleAuthorizationServerMetadata(w http.ResponseWriter, r *h
 		"registration_endpoint":                 baseURL + "/register",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":       []string{"S256"},
-		"token_endpoint_auth_methods_supported":  []string{"none", "client_secret_post"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
 	})
 }
 

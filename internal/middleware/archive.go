@@ -15,11 +15,11 @@ import (
 
 // ArchiveConfig configures the archive middleware.
 type ArchiveConfig struct {
-	URL           string `json:"url"`                      // Target URL to POST archived data
-	AuthType      string `json:"auth_type"`                // "none", "bearer", "api_key"
-	AuthValue     string `json:"auth_value"`               // Token/key value
-	APIKeyHeader  string `json:"api_key_header,omitempty"` // Header name for api_key auth (default: X-API-Key)
-	Include       string `json:"include"`                  // "request", "response", "both"
+	URL          string `json:"url"`                      // Target URL to POST archived data
+	AuthType     string `json:"auth_type"`                // "none", "bearer", "api_key"
+	AuthValue    string `json:"auth_value"`               // Token/key value
+	APIKeyHeader string `json:"api_key_header,omitempty"` // Header name for api_key auth (default: X-API-Key)
+	Include      string `json:"include"`                  // "request", "response", "both"
 }
 
 // DefaultArchiveConfig returns sensible defaults.
@@ -34,11 +34,11 @@ func DefaultArchiveConfig() ArchiveConfig {
 type archivePayload struct {
 	Version   string          `json:"version"`
 	Source    string          `json:"source"`
-	Phase    string           `json:"phase"`
+	Phase     string          `json:"phase"`
 	Timestamp string          `json:"timestamp"`
-	Meta     archiveMeta      `json:"meta"`
-	Request  json.RawMessage  `json:"request,omitempty"`
-	Response json.RawMessage  `json:"response,omitempty"`
+	Meta      archiveMeta     `json:"meta"`
+	Request   json.RawMessage `json:"request,omitempty"`
+	Response  json.RawMessage `json:"response,omitempty"`
 }
 
 type archiveMeta struct {
@@ -130,7 +130,7 @@ func (a *Archive) buildPayload(phase string, meta *RequestMeta, reqJSON, respJSO
 	p := archivePayload{
 		Version:   "v1",
 		Source:    "mcp_wrangler",
-		Phase:    phase,
+		Phase:     phase,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Meta: archiveMeta{
 			ServerID:   meta.ServerID,
