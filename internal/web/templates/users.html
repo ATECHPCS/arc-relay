@@ -56,6 +56,12 @@
               </select>
               <button type="submit" class="btn btn-sm btn-outline">Save</button>
             </form>
+            <form method="POST" action="/users/{{.ID}}/reset-password" style="display:inline;"
+                  onsubmit="var pw=prompt('Enter new password for {{.Username}} (min 8 chars):'); if(!pw||pw.length<8){alert('Password must be at least 8 characters');return false;} this.querySelector('[name=new_password]').value=pw;">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <input type="hidden" name="new_password" value="">
+              <button type="submit" class="btn btn-sm btn-outline" title="Reset password for this user">Reset PW</button>
+            </form>
             {{if ne .Username "admin"}}
             <form method="POST" action="/users/{{.ID}}/invite" style="display:inline;">
               <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">

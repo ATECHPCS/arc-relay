@@ -468,17 +468,44 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listServers(w http.ResponseWriter, r *http.Request) {
-	servers, err := s.servers.List()
+	allServers, err := s.servers.List()
 	if err != nil {
 		http.Error(w, `{"error":"failed to list servers"}`, http.StatusInternalServerError)
 		return
 	}
+
+	// Filter servers by user's profile permissions (admins see all)
+	user := UserFromContext(r.Context())
+	servers := allServers
+	if user != nil && user.Role != "admin" {
+		if user.ProfileID != nil && s.profileStore != nil {
+			allowed, err := s.profileStore.ServerIDsForProfile(*user.ProfileID)
+			if err != nil {
+				log.Printf("Error getting server IDs for profile: %v", err)
+				allowed = nil
+			}
+			var filtered []*store.Server
+			for _, srv := range allServers {
+				if allowed[srv.ID] {
+					filtered = append(filtered, srv)
+				}
+			}
+			servers = filtered
+		} else {
+			// No profile = no server visibility (deny-by-default)
+			servers = nil
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
+	if servers == nil {
+		servers = []*store.Server{}
+	}
 	json.NewEncoder(w).Encode(servers)
 }
 
 func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
-	if !requireWriteAccess(w, r) {
+	if !requireAdminAccess(w, r) {
 		return
 	}
 
@@ -510,6 +537,26 @@ func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(srv)
 }
 
+// canAccessServerAPI checks if the API user has access to the given server.
+// Admins can access all servers. Non-admins need profile permissions.
+func (s *Server) canAccessServerAPI(r *http.Request, serverID string) bool {
+	user := UserFromContext(r.Context())
+	if user == nil {
+		return false
+	}
+	if user.Role == "admin" {
+		return true
+	}
+	if user.ProfileID == nil || s.profileStore == nil {
+		return false
+	}
+	allowed, err := s.profileStore.ServerIDsForProfile(*user.ProfileID)
+	if err != nil {
+		return false
+	}
+	return allowed[serverID]
+}
+
 func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/servers/")
 	parts := strings.Split(path, "/")
@@ -520,7 +567,20 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Management actions are admin-only
 	if len(parts) > 1 {
+		switch parts[1] {
+		case "start", "stop", "enumerate":
+			if !requireAdminAccess(w, r) {
+				return
+			}
+		}
+		// Read-only actions (endpoints, health) only require server access
+		if !s.canAccessServerAPI(r, id) {
+			jsonError(w, `{"error":"server not found"}`, http.StatusNotFound)
+			return
+		}
+
 		switch parts[1] {
 		case "start":
 			s.startServer(w, r, id)
@@ -538,12 +598,23 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Object-level access check for GET; admin-only for PUT/DELETE
 	switch r.Method {
 	case http.MethodGet:
+		if !s.canAccessServerAPI(r, id) {
+			jsonError(w, `{"error":"server not found"}`, http.StatusNotFound)
+			return
+		}
 		s.getServer(w, r, id)
 	case http.MethodPut:
+		if !requireAdminAccess(w, r) {
+			return
+		}
 		s.updateServer(w, r, id)
 	case http.MethodDelete:
+		if !requireAdminAccess(w, r) {
+			return
+		}
 		s.deleteServer(w, r, id)
 	default:
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)

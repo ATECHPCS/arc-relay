@@ -23,25 +23,33 @@ func (s *SessionStore) Create(id, userID string, expiresAt time.Time) error {
 }
 
 // Get returns the user for a valid (non-expired) session, or nil.
+// Loads full user data including access_level and default_profile_id for authorization.
 func (s *SessionStore) Get(id string) (*User, time.Time, bool) {
 	var user User
 	var expiresAt time.Time
 	err := s.db.QueryRow(`
-		SELECT u.id, u.username, u.role, s.expires_at
+		SELECT u.id, u.username, u.role, u.access_level, u.default_profile_id, s.expires_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.id = ? AND s.expires_at > ?`,
 		id, time.Now(),
-	).Scan(&user.ID, &user.Username, &user.Role, &expiresAt)
+	).Scan(&user.ID, &user.Username, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &expiresAt)
 	if err != nil {
 		return nil, time.Time{}, false
 	}
+	// For web sessions, the effective profile is the user's default profile
+	user.ProfileID = user.DefaultProfileID
 	return &user, expiresAt, true
 }
 
 // Delete removes a session (logout).
 func (s *SessionStore) Delete(id string) {
 	s.db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
+}
+
+// DeleteByUser removes all sessions for a specific user (e.g., after password reset).
+func (s *SessionStore) DeleteByUser(userID string) {
+	s.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, userID)
 }
 
 // Cleanup removes all expired sessions.

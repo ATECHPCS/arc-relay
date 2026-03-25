@@ -421,6 +421,56 @@ func (h *Handlers) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
+// --- Authorization Helpers ---
+
+// accessibleServers filters a server list based on the user's profile permissions.
+// Admins see all servers. Profile users see only servers their profile grants access to.
+// Users with no profile see nothing (deny-by-default).
+func (h *Handlers) accessibleServers(user *store.User, servers []*store.Server) []*store.Server {
+	if user.Role == "admin" {
+		return servers
+	}
+	if user.ProfileID == nil {
+		return nil
+	}
+	allowed, err := h.profileStore.ServerIDsForProfile(*user.ProfileID)
+	if err != nil || len(allowed) == 0 {
+		return nil
+	}
+	var result []*store.Server
+	for _, s := range servers {
+		if allowed[s.ID] {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// canAccessServer returns true if the user has profile permissions for the given server.
+func (h *Handlers) canAccessServer(user *store.User, serverID string) bool {
+	if user.Role == "admin" {
+		return true
+	}
+	if user.ProfileID == nil {
+		return false
+	}
+	allowed, err := h.profileStore.ServerIDsForProfile(*user.ProfileID)
+	if err != nil {
+		return false
+	}
+	return allowed[serverID]
+}
+
+// requireAdmin returns true if the user is an admin. If not, writes a 403 response and returns false.
+func (h *Handlers) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 // --- Dashboard ---
 
 func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -429,8 +479,12 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, _ := h.servers.List()
-	users, _ := h.users.List()
+	user := getUser(r)
+	isAdmin := user.Role == "admin"
+
+	allServers, _ := h.servers.List()
+	servers := h.accessibleServers(user, allServers)
+
 	runningCount := 0
 	endpointCounts := make(map[string]int) // server ID -> tool count
 	for _, s := range servers {
@@ -442,31 +496,38 @@ func (h *Handlers) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var stats *store.LogStats
-	var recentLogs []*store.RequestLog
-	var serverCallCounts map[string]int
-	if h.requestLogs != nil {
-		stats, _ = h.requestLogs.Stats()
-		recentLogs, _ = h.requestLogs.Recent(10)
-		serverCallCounts, _ = h.requestLogs.ServerTotalCounts()
+	data := map[string]any{
+		"Nav":            "dashboard",
+		"User":           user,
+		"Servers":        servers,
+		"RunningCount":   runningCount,
+		"EndpointCounts": endpointCounts,
+		"IsAdmin":        isAdmin,
 	}
 
-	h.render(w, r, "dashboard.html", map[string]any{
-		"Nav":              "dashboard",
-		"User":             getUser(r),
-		"Servers":          servers,
-		"RunningCount":     runningCount,
-		"UserCount":        len(users),
-		"EndpointCounts":   endpointCounts,
-		"Stats":            stats,
-		"RecentLogs":       recentLogs,
-		"ServerCallCounts": serverCallCounts,
-	})
+	// Admin-only data: stats, logs, user count
+	if isAdmin {
+		users, _ := h.users.List()
+		data["UserCount"] = len(users)
+		if h.requestLogs != nil {
+			stats, _ := h.requestLogs.Stats()
+			recentLogs, _ := h.requestLogs.Recent(10)
+			serverCallCounts, _ := h.requestLogs.ServerTotalCounts()
+			data["Stats"] = stats
+			data["RecentLogs"] = recentLogs
+			data["ServerCallCounts"] = serverCallCounts
+		}
+	}
+
+	h.render(w, r, "dashboard.html", data)
 }
 
 // --- Logs ---
 
 func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
 	servers, _ := h.servers.List()
 
 	q := r.URL.Query()
@@ -526,6 +587,9 @@ func (h *Handlers) handleServersList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) handleServerNew(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
 	if r.Method == http.MethodGet {
 		h.render(w, r, "server_form.html", map[string]any{
 			"Nav":             "servers",
@@ -572,104 +636,130 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 		action = parts[1]
 	}
 
+	// Server detail is accessible to users with profile permissions; all other actions are admin-only
 	switch action {
 	case "":
 		h.handleServerDetail(w, r, id)
-	case "edit":
-		h.handleServerEdit(w, r, id)
-	case "start":
-		h.handleServerStart(w, r, id)
-	case "stop":
-		h.handleServerStop(w, r, id)
-	case "delete":
-		h.handleServerDelete(w, r, id)
-	case "enumerate":
-		h.handleServerEnumerate(w, r, id)
-	case "rebuild":
-		h.handleServerRebuild(w, r, id)
-	case "rebuild-restart":
-		h.handleServerRebuildRestart(w, r, id)
-	case "recreate":
-		h.handleServerRecreate(w, r, id)
-	case "access-tier":
-		h.handleAccessTier(w, r, id)
-	case "middleware":
-		h.handleServerMiddleware(w, r, id)
-	case "health-check":
-		h.handleServerHealthCheck(w, r, id)
+	case "edit", "start", "stop", "delete", "enumerate", "rebuild",
+		"rebuild-restart", "recreate", "access-tier", "middleware", "health-check":
+		if !h.requireAdmin(w, r) {
+			return
+		}
+		switch action {
+		case "edit":
+			h.handleServerEdit(w, r, id)
+		case "start":
+			h.handleServerStart(w, r, id)
+		case "stop":
+			h.handleServerStop(w, r, id)
+		case "delete":
+			h.handleServerDelete(w, r, id)
+		case "enumerate":
+			h.handleServerEnumerate(w, r, id)
+		case "rebuild":
+			h.handleServerRebuild(w, r, id)
+		case "rebuild-restart":
+			h.handleServerRebuildRestart(w, r, id)
+		case "recreate":
+			h.handleServerRecreate(w, r, id)
+		case "access-tier":
+			h.handleAccessTier(w, r, id)
+		case "middleware":
+			h.handleServerMiddleware(w, r, id)
+		case "health-check":
+			h.handleServerHealthCheck(w, r, id)
+		}
 	default:
 		http.NotFound(w, r)
 	}
 }
 
 func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id string) {
+	user := getUser(r)
 	srv, err := h.servers.Get(id)
 	if err != nil || srv == nil {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Build access tier lookup map: "type:name" -> tier
-	tierMap := make(map[string]string)
-	if tiers, err := h.accessStore.GetAllTiers(srv.ID); err == nil {
-		for _, t := range tiers {
-			tierMap[t.EndpointType+":"+t.EndpointName] = t.AccessTier
-		}
+	// Non-admins can only view servers they have profile permissions for
+	if !h.canAccessServer(user, id) {
+		http.NotFound(w, r)
+		return
 	}
 
-	// Endpoint usage counts and recent logs
-	endpointUsage := make(map[string]store.EndpointCallCount)
-	var serverLogs []*store.RequestLog
-	if h.requestLogs != nil {
-		if counts, err := h.requestLogs.EndpointCounts(srv.ID); err == nil {
-			for _, ec := range counts {
-				endpointUsage[ec.EndpointName] = ec
+	isAdmin := user.Role == "admin"
+
+	data := map[string]any{
+		"Nav":     "servers",
+		"User":    user,
+		"Server":  srv,
+		"BaseURL": h.cfg.PublicBaseURL(),
+		"IsAdmin": isAdmin,
+	}
+
+	// Non-admins see basic server info and their permitted endpoints only
+	if isAdmin {
+		// Build access tier lookup map: "type:name" -> tier
+		tierMap := make(map[string]string)
+		if tiers, err := h.accessStore.GetAllTiers(srv.ID); err == nil {
+			for _, t := range tiers {
+				tierMap[t.EndpointType+":"+t.EndpointName] = t.AccessTier
 			}
 		}
-		serverLogs, _ = h.requestLogs.ByServer(srv.ID, 20)
-	}
 
-	// Middleware configs and events
-	var mwConfigs []*store.MiddlewareConfig
-	var mwEvents []*store.MiddlewareEvent
-	if h.middlewareStore != nil {
-		mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
-		mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
-	}
+		// Endpoint usage counts and recent logs
+		endpointUsage := make(map[string]store.EndpointCallCount)
+		var serverLogs []*store.RequestLog
+		if h.requestLogs != nil {
+			if counts, err := h.requestLogs.EndpointCounts(srv.ID); err == nil {
+				for _, ec := range counts {
+					endpointUsage[ec.EndpointName] = ec
+				}
+			}
+			serverLogs, _ = h.requestLogs.ByServer(srv.ID, 20)
+		}
 
-	cd := buildConfigDisplay(srv)
+		// Middleware configs and events
+		var mwConfigs []*store.MiddlewareConfig
+		var mwEvents []*store.MiddlewareEvent
+		if h.middlewareStore != nil {
+			mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
+			mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
+		}
 
-	// Populate image staleness info for Docker-managed servers
-	if cd.Image != "" && h.proxy.Docker() != nil {
-		ctx := r.Context()
-		if imgInfo, err := h.proxy.Docker().InspectImage(ctx, cd.Image); err == nil {
-			cd.ImageID = imgInfo.ID
-			if !imgInfo.Created.IsZero() {
-				cd.ImageCreated = imgInfo.Created.Format("2006-01-02 15:04:05")
-				cd.ImageAge = humanizeAge(imgInfo.Created)
+		cd := buildConfigDisplay(srv)
+
+		// Populate image staleness info for Docker-managed servers
+		if cd.Image != "" && h.proxy.Docker() != nil {
+			ctx := r.Context()
+			if imgInfo, err := h.proxy.Docker().InspectImage(ctx, cd.Image); err == nil {
+				cd.ImageID = imgInfo.ID
+				if !imgInfo.Created.IsZero() {
+					cd.ImageCreated = imgInfo.Created.Format("2006-01-02 15:04:05")
+					cd.ImageAge = humanizeAge(imgInfo.Created)
+				}
+			}
+			if containerID, ok := h.proxy.GetContainerID(srv.ID); ok {
+				if cImgID, err := h.proxy.Docker().GetContainerImageID(ctx, containerID); err == nil {
+					cd.ContainerImageID = cImgID
+					cd.ImageStale = cd.ImageID != "" && cd.ImageID != cImgID
+				}
 			}
 		}
-		if containerID, ok := h.proxy.GetContainerID(srv.ID); ok {
-			if cImgID, err := h.proxy.Docker().GetContainerImageID(ctx, containerID); err == nil {
-				cd.ContainerImageID = cImgID
-				cd.ImageStale = cd.ImageID != "" && cd.ImageID != cImgID
-			}
-		}
+
+		data["ConfigDisplay"] = cd
+		data["TierMap"] = tierMap
+		data["EndpointUsage"] = endpointUsage
+		data["RecentLogs"] = serverLogs
+		data["MiddlewareConfigs"] = mwConfigs
+		data["MiddlewareEvents"] = mwEvents
 	}
 
-	h.render(w, r, "server_detail.html", map[string]any{
-		"Nav":               "servers",
-		"User":              getUser(r),
-		"Server":            srv,
-		"ConfigDisplay":     cd,
-		"BaseURL":           h.cfg.PublicBaseURL(),
-		"Endpoints":         h.proxy.Endpoints.Get(srv.ID),
-		"TierMap":           tierMap,
-		"EndpointUsage":     endpointUsage,
-		"RecentLogs":        serverLogs,
-		"MiddlewareConfigs": mwConfigs,
-		"MiddlewareEvents":  mwEvents,
-	})
+	// All users see their permitted endpoints
+	data["Endpoints"] = h.proxy.Endpoints.Get(srv.ID)
+
+	h.render(w, r, "server_detail.html", data)
 }
 
 func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id string) {
@@ -1055,6 +1145,9 @@ func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		case "invite":
 			h.handleUserInvite(w, r, userID)
 			return
+		case "reset-password":
+			h.handleUserResetPassword(w, r, userID)
+			return
 		}
 	}
 	http.NotFound(w, r)
@@ -1158,6 +1251,44 @@ func (h *Handlers) handleUserUpdate(w http.ResponseWriter, r *http.Request, user
 	http.Redirect(w, r, "/users", http.StatusFound)
 }
 
+func (h *Handlers) handleUserResetPassword(w http.ResponseWriter, r *http.Request, userID string) {
+	newPassword := r.FormValue("new_password")
+	if newPassword == "" {
+		h.renderUsersList(w, r, "New password is required")
+		return
+	}
+	if len(newPassword) < 8 {
+		h.renderUsersList(w, r, "Password must be at least 8 characters")
+		return
+	}
+
+	targetUser, err := h.users.Get(userID)
+	if err != nil || targetUser == nil {
+		h.renderUsersList(w, r, "User not found")
+		return
+	}
+
+	if err := h.users.SetPassword(userID, newPassword); err != nil {
+		h.renderUsersList(w, r, "Failed to reset password: "+err.Error())
+		return
+	}
+
+	// Invalidate all sessions for the target user
+	h.sessionStore.DeleteByUser(userID)
+
+	log.Printf("Admin %s reset password for user %s", getUser(r).Username, targetUser.Username)
+
+	users, _ := h.users.List()
+	profiles, _ := h.profileStore.List()
+	h.render(w, r, "users.html", map[string]any{
+		"Nav":      "users",
+		"User":     getUser(r),
+		"Users":    users,
+		"Profiles": profiles,
+		"Flash":    &Flash{Type: "success", Message: fmt.Sprintf("Password reset for %s. Their active sessions have been invalidated.", targetUser.Username)},
+	})
+}
+
 func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.FormValue("username"))
 	password := r.FormValue("password")
@@ -1191,7 +1322,17 @@ func (h *Handlers) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
 	keys, _ := h.users.ListAPIKeys(user.ID)
-	profiles, _ := h.profileStore.List()
+
+	// Admins can see all profiles; non-admins see only their own (if assigned)
+	var profiles []*store.AgentProfile
+	if user.Role == "admin" {
+		profiles, _ = h.profileStore.List()
+	} else if user.DefaultProfileID != nil {
+		if p, err := h.profileStore.Get(*user.DefaultProfileID); err == nil {
+			profiles = []*store.AgentProfile{p}
+		}
+	}
+
 	h.render(w, r, "api_keys.html", map[string]any{
 		"Nav": "apikeys", "User": user, "Keys": keys, "Profiles": profiles,
 	})
@@ -1209,6 +1350,11 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		var profileID *string
 		if pid := strings.TrimSpace(r.FormValue("profile_id")); pid != "" {
+			// Non-admins can only use their own profile
+			if user.Role != "admin" && (user.DefaultProfileID == nil || *user.DefaultProfileID != pid) {
+				http.Error(w, "You can only create keys with your assigned profile", http.StatusForbidden)
+				return
+			}
 			profileID = &pid
 		} else {
 			// Default to user's profile if no explicit selection
@@ -1224,7 +1370,15 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		keys, _ := h.users.ListAPIKeys(user.ID)
-		profiles, _ := h.profileStore.List()
+		// Use same profile filtering as the list view
+		var profiles []*store.AgentProfile
+		if user.Role == "admin" {
+			profiles, _ = h.profileStore.List()
+		} else if user.DefaultProfileID != nil {
+			if p, err := h.profileStore.Get(*user.DefaultProfileID); err == nil {
+				profiles = []*store.AgentProfile{p}
+			}
+		}
 		h.render(w, r, "api_keys.html", map[string]any{
 			"Nav": "apikeys", "User": user, "Keys": keys, "NewKey": rawKey, "Profiles": profiles,
 		})
@@ -1232,7 +1386,21 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(parts) > 1 && parts[1] == "revoke" && r.Method == http.MethodPost {
-		h.users.RevokeAPIKey(parts[0])
+		// Verify the key belongs to the current user (or user is admin)
+		keyID := parts[0]
+		ownerKeys, _ := h.users.ListAPIKeys(user.ID)
+		ownsKey := false
+		for _, k := range ownerKeys {
+			if k.ID == keyID {
+				ownsKey = true
+				break
+			}
+		}
+		if !ownsKey && user.Role != "admin" {
+			http.Error(w, "You can only revoke your own API keys", http.StatusForbidden)
+			return
+		}
+		h.users.RevokeAPIKey(keyID)
 		http.Redirect(w, r, "/api-keys", http.StatusFound)
 		return
 	}
@@ -1470,6 +1638,9 @@ func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, pro
 // --- OAuth ---
 
 func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
+	if !h.requireAdmin(w, r) {
+		return
+	}
 	serverID := strings.TrimPrefix(r.URL.Path, "/oauth/start/")
 	if serverID == "" {
 		http.NotFound(w, r)
@@ -1619,35 +1790,21 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 // handleConnectDesktop shows the Desktop onboarding page with accessible servers.
 func (h *Handlers) handleConnectDesktop(w http.ResponseWriter, r *http.Request) {
 	user := getUser(r)
-	servers, _ := h.servers.List()
+	allServers, _ := h.servers.List()
 
 	// Filter to running servers the user has access to
-	var accessible []*store.Server
-	for _, s := range servers {
-		if s.Status != "running" {
-			continue
+	permitted := h.accessibleServers(user, allServers)
+	var running []*store.Server
+	for _, s := range permitted {
+		if s.Status == "running" {
+			running = append(running, s)
 		}
-		// Admins see everything
-		if user.Role == "admin" {
-			accessible = append(accessible, s)
-			continue
-		}
-		// Profile-based: check if user has any permissions on this server
-		if user.ProfileID != nil && h.profileStore != nil {
-			perms, err := h.profileStore.GetPermissionsForServer(*user.ProfileID, s.ID)
-			if err == nil && len(perms) > 0 {
-				accessible = append(accessible, s)
-			}
-			continue
-		}
-		// Legacy tier-based: all running servers are accessible
-		accessible = append(accessible, s)
 	}
 
 	h.render(w, r, "connect_desktop.html", map[string]any{
 		"Nav":     "connect",
 		"User":    user,
-		"Servers": accessible,
+		"Servers": running,
 		"BaseURL": h.cfg.PublicBaseURL(),
 	})
 }

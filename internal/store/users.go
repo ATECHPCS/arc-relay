@@ -170,6 +170,16 @@ func (s *UserStore) UpdateRole(id, role string) error {
 	return err
 }
 
+// SetPassword updates a user's password hash. Used for admin password resets.
+func (s *UserStore) SetPassword(id, newPassword string) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("hashing password: %w", err)
+	}
+	_, err = s.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id)
+	return err
+}
+
 func (s *UserStore) Delete(id string) error {
 	_, err := s.db.Exec("DELETE FROM users WHERE id = ?", id)
 	return err

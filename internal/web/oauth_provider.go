@@ -410,6 +410,23 @@ func (h *Handlers) handleOAuthAuthorizePost(w http.ResponseWriter, r *http.Reque
 		scope = "mcp"
 	}
 
+	// Re-validate client_id and redirect_uri server-side (don't just trust hidden form inputs)
+	client := h.oauthProv.clientStore.Get(clientID)
+	if client == nil {
+		h.render(w, r, "oauth_authorize.html", map[string]any{
+			"Nav": "", "User": user,
+			"Error": "Unknown application. It may need to re-register.",
+		})
+		return
+	}
+	if redirectURI == "" || !client.HasRedirectURI(redirectURI) {
+		h.render(w, r, "oauth_authorize.html", map[string]any{
+			"Nav": "", "User": user,
+			"Error": "Invalid redirect_uri.",
+		})
+		return
+	}
+
 	redirect, err := url.Parse(redirectURI)
 	if err != nil {
 		http.Error(w, "Invalid redirect_uri", http.StatusBadRequest)
@@ -441,8 +458,19 @@ func (h *Handlers) handleOAuthAuthorizePost(w http.ResponseWriter, r *http.Reque
 		params.Set("state", state)
 	}
 	redirect.RawQuery = params.Encode()
-	// 303 See Other - proper redirect after POST per HTTP spec
-	http.Redirect(w, r, redirect.String(), http.StatusSeeOther)
+	redirectURL := redirect.String()
+
+	// Render a success page with JS redirect instead of HTTP redirect.
+	// The redirect URL typically goes to localhost where the MCP client catches it,
+	// which means the browser tab would stay on the consent page if we used HTTP redirect.
+	// By rendering a success page first and redirecting via JS, the user sees confirmation.
+	h.render(w, r, "oauth_authorize.html", map[string]any{
+		"Nav":         "",
+		"User":        user,
+		"ShowSuccess": true,
+		"RedirectURL": redirectURL,
+		"ClientName":  client.ClientName,
+	})
 }
 
 // handleOAuthToken handles POST /token.

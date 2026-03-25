@@ -2,6 +2,7 @@
 {{define "content"}}
 <div class="page-header">
   <h2>{{.Server.DisplayName}}</h2>
+  {{if .IsAdmin}}
   <div class="actions">
     {{if eq (printf "%s" .Server.Status) "stopped"}}
     <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
@@ -43,6 +44,7 @@
       <button type="submit" class="btn btn-danger">Delete</button>
     </form>
   </div>
+  {{end}}
 </div>
 
 <div class="card">
@@ -61,7 +63,7 @@
       {{if .Server.HealthCheckAt}}
         <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">checked {{.Server.HealthCheckAt.Format "15:04:05"}}</span>
       {{end}}
-      {{if eq (printf "%s" .Server.Status) "running"}}
+      {{if and .IsAdmin (eq (printf "%s" .Server.Status) "running")}}
       <form method="POST" action="/servers/{{.Server.ID}}/health-check" style="display:inline;margin-left:0.5rem">
         <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
         <button type="submit" class="btn btn-outline btn-sm">Check Now</button>
@@ -72,12 +74,14 @@
     <dt>Health Error</dt><dd style="color:var(--danger);font-size:0.85rem">{{.Server.HealthError}}</dd>
     {{end}}
     <dt>Proxy URL</dt><dd><code>/mcp/{{.Server.Name}}</code></dd>
+    {{if .IsAdmin}}
     <dt>Created</dt><dd>{{.Server.CreatedAt.Format "2006-01-02 15:04:05"}}</dd>
     <dt>Updated</dt><dd>{{.Server.UpdatedAt.Format "2006-01-02 15:04:05"}}</dd>
+    {{end}}
   </div>
 </div>
 
-{{if .ConfigDisplay}}
+{{if and .IsAdmin .ConfigDisplay}}
 <div class="card">
   <h2>Configuration</h2>
   {{if .ConfigDisplay.HasBuild}}
@@ -201,7 +205,8 @@
 </div>
 {{end}}
 
-{{/* Middleware Pipeline */}}
+{{/* Middleware Pipeline - Admin only */}}
+{{if .IsAdmin}}
 <div class="card">
   <h2>Middleware Pipeline</h2>
   <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem">
@@ -312,6 +317,7 @@
   </div>
 </div>
 {{end}}
+{{end}}
 
 {{if .Endpoints}}
 <div class="card">
@@ -330,16 +336,17 @@
   <div class="table-wrap">
   <table class="table">
     <thead>
-      <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
+      <tr><th>Name</th><th>Description</th>{{if $.IsAdmin}}<th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th>{{end}}</tr>
     </thead>
     <tbody>
       {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
       {{range .Endpoints.Tools}}
-      {{$tier := index $tierMap (printf "tool:%s" .Name)}}
-      {{$eu := index $usage .Name}}
+      {{$tier := ""}}{{if $tierMap}}{{$tier = index $tierMap (printf "tool:%s" .Name)}}{{end}}
+      {{$eu := ""}}{{if $usage}}{{$eu = index $usage .Name}}{{end}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        {{if $.IsAdmin}}
         <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
         <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
         <td>
@@ -350,6 +357,7 @@
             <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
           </select>
         </td>
+        {{end}}
       </tr>
       {{end}}
     </tbody>
@@ -364,17 +372,18 @@
   <div class="table-wrap">
   <table class="table">
     <thead>
-      <tr><th>URI</th><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
+      <tr><th>URI</th><th>Name</th><th>Description</th>{{if $.IsAdmin}}<th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th>{{end}}</tr>
     </thead>
     <tbody>
       {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
       {{range .Endpoints.Resources}}
-      {{$tier := index $tierMap (printf "resource:%s" .URI)}}
-      {{$eu := index $usage .URI}}
+      {{$tier := ""}}{{if $tierMap}}{{$tier = index $tierMap (printf "resource:%s" .URI)}}{{end}}
+      {{$eu := ""}}{{if $usage}}{{$eu = index $usage .URI}}{{end}}
       <tr>
         <td><code>{{.URI}}</code></td>
         <td>{{.Name}}</td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        {{if $.IsAdmin}}
         <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
         <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
         <td>
@@ -385,6 +394,7 @@
             <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
           </select>
         </td>
+        {{end}}
       </tr>
       {{end}}
     </tbody>
@@ -399,16 +409,17 @@
   <div class="table-wrap">
   <table class="table">
     <thead>
-      <tr><th>Name</th><th>Description</th><th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th></tr>
+      <tr><th>Name</th><th>Description</th>{{if $.IsAdmin}}<th>Calls</th><th>Errors</th><th style="width:120px">Access Tier</th>{{end}}</tr>
     </thead>
     <tbody>
       {{$serverID := .Server.ID}}{{$tierMap := .TierMap}}{{$usage := .EndpointUsage}}
       {{range .Endpoints.Prompts}}
-      {{$tier := index $tierMap (printf "prompt:%s" .Name)}}
-      {{$eu := index $usage .Name}}
+      {{$tier := ""}}{{if $tierMap}}{{$tier = index $tierMap (printf "prompt:%s" .Name)}}{{end}}
+      {{$eu := ""}}{{if $usage}}{{$eu = index $usage .Name}}{{end}}
       <tr>
         <td><code>{{.Name}}</code></td>
         <td style="font-size:0.85rem;color:var(--text-muted)">{{.Description}}</td>
+        {{if $.IsAdmin}}
         <td>{{if $eu}}{{$eu.CallCount}}{{else}}0{{end}}</td>
         <td>{{if $eu}}{{$eu.ErrorCount}}{{else}}0{{end}}</td>
         <td>
@@ -419,6 +430,7 @@
             <option value="admin" {{if eq $tier "admin"}}selected{{end}}>admin</option>
           </select>
         </td>
+        {{end}}
       </tr>
       {{end}}
     </tbody>
@@ -427,6 +439,7 @@
 </div>
 {{end}}
 
+{{if .IsAdmin}}
 <script>
 function updateTier(el) {
   const serverID = el.dataset.server;
@@ -450,8 +463,9 @@ function updateTier(el) {
 }
 </script>
 {{end}}
+{{end}}
 
-{{if .RecentLogs}}
+{{if and .IsAdmin .RecentLogs}}
 <div class="card">
   <h2>Recent Activity</h2>
   <div class="table-wrap">
@@ -507,7 +521,7 @@ mcp-sync init {{.BaseURL}}</code></pre>
   </details>
 
   <details style="margin-bottom: 0.75rem;">
-    <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">Claude Code (.mcp.json) — manual setup</summary>
+    <summary style="font-size: 0.85rem; color: var(--text-muted); cursor: pointer;">Claude Code (.mcp.json) - manual setup</summary>
     <p style="font-size: 0.8rem; color: var(--text-muted); margin: 0.5rem 0 0.3rem;">Add to <code>.mcp.json</code> in your project root:</p>
     <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.75rem; overflow-x: auto;"><code>{
   "mcpServers": {

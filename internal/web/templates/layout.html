@@ -235,9 +235,9 @@
     <h1>MCP Wrangler</h1>
     <nav>
       <a href="/" {{if eq .Nav "dashboard"}}class="active"{{end}}>Dashboard</a>
-      <a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>Servers</a>
-      <a href="/logs" {{if eq .Nav "logs"}}class="active"{{end}}>Logs</a>
-      <a href="/users" {{if eq .Nav "users"}}class="active"{{end}}>Users</a>
+      {{if and .User (eq .User.Role "admin")}}<a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>Servers</a>{{end}}
+      {{if and .User (eq .User.Role "admin")}}<a href="/logs" {{if eq .Nav "logs"}}class="active"{{end}}>Logs</a>{{end}}
+      {{if and .User (eq .User.Role "admin")}}<a href="/users" {{if eq .Nav "users"}}class="active"{{end}}>Users</a>{{end}}
       <a href="/api-keys" {{if eq .Nav "apikeys"}}class="active"{{end}}>API Keys</a>
       {{if and .User (eq .User.Role "admin")}}<a href="/profiles" {{if eq .Nav "profiles"}}class="active"{{end}}>Profiles</a>{{end}}
       <a href="/connect/desktop" {{if eq .Nav "connect"}}class="active"{{end}}>Connect</a>

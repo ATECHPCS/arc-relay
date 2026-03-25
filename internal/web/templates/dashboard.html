@@ -2,7 +2,7 @@
 {{define "content"}}
 <div class="page-header">
   <h2>Dashboard</h2>
-  <a href="/servers/new" class="btn btn-primary">Add Server</a>
+  {{if .IsAdmin}}<a href="/servers/new" class="btn btn-primary">Add Server</a>{{end}}
 </div>
 
 <div class="card">
@@ -16,9 +16,9 @@
         <th>Type</th>
         <th>Status</th>
         <th>Endpoints</th>
-        <th>Total Calls</th>
+        {{if $.IsAdmin}}<th>Total Calls</th>{{end}}
         <th>Proxy URL</th>
-        <th>Actions</th>
+        {{if $.IsAdmin}}<th>Actions</th>{{end}}
       </tr>
     </thead>
     <tbody>
@@ -28,11 +28,12 @@
         <td><span class="badge badge-{{.ServerType}}">{{.ServerType}}</span></td>
         <td>
           <span class="badge badge-{{.Status}}">{{.Status}}</span>
-          {{if eq (printf "%s" .Status) "running"}}<span class="health-dot health-dot-{{.Health}}" title="MCP health: {{.Health}}{{if .HealthError}} — {{.HealthError}}{{end}}"></span>{{end}}
+          {{if eq (printf "%s" .Status) "running"}}<span class="health-dot health-dot-{{.Health}}" title="MCP health: {{.Health}}{{if .HealthError}} - {{.HealthError}}{{end}}"></span>{{end}}
         </td>
         <td>{{with index $.EndpointCounts .ID}}{{.}}{{else}}-{{end}}</td>
-        <td>{{with index $.ServerCallCounts .ID}}{{.}}{{else}}0{{end}}</td>
+        {{if $.IsAdmin}}<td>{{with index $.ServerCallCounts .ID}}{{.}}{{else}}0{{end}}</td>{{end}}
         <td><code>/mcp/{{.Name}}</code></td>
+        {{if $.IsAdmin}}
         <td>
           <div class="actions">
             {{if eq (printf "%s" .Status) "stopped"}}
@@ -54,6 +55,7 @@
             <a href="/servers/{{.ID}}" class="btn btn-outline btn-sm">Details</a>
           </div>
         </td>
+        {{end}}
       </tr>
       {{end}}
     </tbody>
@@ -61,8 +63,12 @@
   </div>
   {{else}}
   <div class="empty-state">
+    {{if .IsAdmin}}
     <p>No MCP servers configured yet.</p>
     <a href="/servers/new" class="btn btn-primary">Add Your First Server</a>
+    {{else}}
+    <p>No MCP servers available for your profile.</p>
+    {{end}}
   </div>
   {{end}}
 </div>
@@ -72,16 +78,18 @@
   <div class="detail-grid">
     <dt>Total Servers</dt><dd>{{len .Servers}}</dd>
     <dt>Running</dt><dd>{{.RunningCount}}</dd>
+    {{if .IsAdmin}}
     <dt>Users</dt><dd>{{.UserCount}}</dd>
     {{if .Stats}}
     <dt>Requests (24h)</dt><dd>{{.Stats.TotalRequests24h}}</dd>
     <dt>Errors (24h)</dt><dd>{{.Stats.Errors24h}}</dd>
     <dt>Avg Response</dt><dd>{{.Stats.AvgDurationMs}} ms</dd>
     {{end}}
+    {{end}}
   </div>
 </div>
 
-{{if .RecentLogs}}
+{{if and .IsAdmin .RecentLogs}}
 <div class="card">
   <h2>Recent Activity</h2>
   <div class="table-wrap">
