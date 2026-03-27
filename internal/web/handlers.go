@@ -903,7 +903,11 @@ func (h *Handlers) handleServerDelete(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	h.proxy.StopServer(r.Context(), id)
-	h.servers.Delete(id)
+	if err := h.servers.Delete(id); err != nil {
+		log.Printf("Error deleting server %s: %v", id, err)
+		http.Error(w, "Failed to delete server: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
