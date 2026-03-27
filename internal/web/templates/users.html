@@ -57,9 +57,8 @@
               <button type="submit" class="btn btn-sm btn-outline">Save</button>
             </form>
             <form method="POST" action="/users/{{.ID}}/reset-password" style="display:inline;"
-                  onsubmit="var pw=prompt('Enter new password for {{.Username}} (min 8 chars):'); if(!pw||pw.length<8){alert('Password must be at least 8 characters');return false;} this.querySelector('[name=new_password]').value=pw;">
+                  onsubmit="var pw=prompt('Enter new password for {{.Username}} (min 8 chars):'); if(!pw||pw.length<8){alert('Password must be at least 8 characters');return false;} var inp=document.createElement('input'); inp.type='hidden'; inp.name='new_password'; inp.value=pw; this.appendChild(inp);">
               <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-              <input type="hidden" name="new_password" value="">
               <button type="submit" class="btn btn-sm btn-outline" title="Reset password for this user">Reset PW</button>
             </form>
             {{if ne .Username "admin"}}

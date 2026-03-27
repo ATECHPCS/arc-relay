@@ -567,14 +567,25 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Management actions are admin-only
+	// Management actions are admin-only (no further access check needed since admin bypasses)
 	if len(parts) > 1 {
 		switch parts[1] {
 		case "start", "stop", "enumerate":
 			if !requireAdminAccess(w, r) {
 				return
 			}
+			// Admin already verified - dispatch directly
+			switch parts[1] {
+			case "start":
+				s.startServer(w, r, id)
+			case "stop":
+				s.stopServer(w, r, id)
+			case "enumerate":
+				s.enumerateServer(w, r, id)
+			}
+			return
 		}
+
 		// Read-only actions (endpoints, health) only require server access
 		if !s.canAccessServerAPI(r, id) {
 			jsonError(w, `{"error":"server not found"}`, http.StatusNotFound)
@@ -582,12 +593,6 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch parts[1] {
-		case "start":
-			s.startServer(w, r, id)
-		case "stop":
-			s.stopServer(w, r, id)
-		case "enumerate":
-			s.enumerateServer(w, r, id)
 		case "endpoints":
 			s.getEndpoints(w, r, id)
 		case "health":

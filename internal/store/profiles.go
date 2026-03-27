@@ -286,5 +286,5 @@ func (s *ProfileStore) ServerIDsForProfile(profileID string) (map[string]bool, e
 		}
 		ids[id] = true
 	}
-	return ids, nil
+	return ids, rows.Err()
 }
