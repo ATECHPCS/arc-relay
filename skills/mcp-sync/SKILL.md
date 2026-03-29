@@ -53,6 +53,21 @@ Before running any mcp-sync command, check if mcp-sync is configured:
 
 Use `--non-interactive` or `-y` for automation. Use `--dry-run` for preview.
 
+## Session sync behavior
+
+`mcp-sync` manages `.mcp.json`, which is Claude Code's project MCP config. However, Claude Code loads MCP connections at session start - changes to `.mcp.json` do not take effect in the current conversation.
+
+**After `mcp-sync remove <name>`:**
+- Stop using that server's tools for the rest of this conversation. Treat it as disconnected.
+- Tell the user to start a new conversation if they need to confirm it's fully gone.
+
+**After `mcp-sync add <name>` or interactive sync that adds servers:**
+- The new server's tools will NOT be available in this conversation.
+- Tell the user to start a new conversation to pick up the new tools.
+
+**After `mcp-sync server stop <name>`:**
+- Stop using that server's tools. The proxy will reject requests to a stopped server.
+
 ## When to use this skill
 
 Use this skill whenever the conversation involves:
