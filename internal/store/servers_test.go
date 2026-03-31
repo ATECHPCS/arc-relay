@@ -221,3 +221,26 @@ func TestServerDeleteCascadesAccessTiers(t *testing.T) {
 		t.Errorf("access tiers should be cascade-deleted, got %d remaining", len(tiers))
 	}
 }
+
+func TestServerDeleteWithRequestLogs(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
+	logs := store.NewRequestLogStore(db)
+
+	srv := &store.Server{Name: "has-logs", DisplayName: "Has Logs", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
+	servers.Create(srv)
+
+	// Add a request log referencing this server
+	logs.Create(&store.RequestLog{ServerID: srv.ID, Method: "tools/call", Status: "ok"})
+
+	// Delete server should succeed (was blocked before migration 011)
+	if err := servers.Delete(srv.ID); err != nil {
+		t.Fatalf("Delete() error = %v; request_logs FK should not block server deletion", err)
+	}
+
+	// Verify server is gone
+	found, _ := servers.Get(srv.ID)
+	if found != nil {
+		t.Error("server should be deleted")
+	}
+}

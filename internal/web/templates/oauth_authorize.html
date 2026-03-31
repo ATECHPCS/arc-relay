@@ -8,6 +8,26 @@
   <div class="alert alert-danger">{{.Error}}</div>
 </div>
 
+{{else if .ShowSuccess}}
+<div class="card">
+  <h2>Authorization Successful</h2>
+  <div class="alert alert-success" style="margin-bottom: 1rem;">
+    You have authorized <strong>{{.ClientName}}</strong> to access your MCP servers.
+  </div>
+  <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
+    Completing connection - you can close this tab.
+  </p>
+  <p style="font-size: 0.85rem; color: var(--text-muted);">
+    If you are not redirected automatically, <a href="{{.RedirectURL}}">click here</a>.
+  </p>
+</div>
+<script>
+  // Short delay so the success message paints before redirect is intercepted
+  setTimeout(function() {
+    window.location.replace({{.RedirectURL}});
+  }, 500);
+</script>
+
 {{else if .ShowConsent}}
 <div class="card">
   <h2>Authorize Application</h2>

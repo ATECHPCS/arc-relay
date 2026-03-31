@@ -263,3 +263,28 @@ func (s *ProfileStore) APIKeyCount(profileID string) (int, error) {
 	).Scan(&count)
 	return count, err
 }
+
+// ServerIDsForProfile returns distinct server IDs that the profile has any permissions for,
+// filtered to only servers that still exist.
+func (s *ProfileStore) ServerIDsForProfile(profileID string) (map[string]bool, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT pp.server_id
+		FROM profile_permissions pp
+		JOIN servers s ON s.id = pp.server_id
+		WHERE pp.profile_id = ?`, profileID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("getting server IDs for profile: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning server ID: %w", err)
+		}
+		ids[id] = true
+	}
+	return ids, rows.Err()
+}

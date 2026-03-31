@@ -65,9 +65,11 @@ func (s *MiddlewareStore) GetForServer(serverID string) ([]*MiddlewareConfig, er
 	for rows.Next() {
 		mc := &MiddlewareConfig{}
 		var serverIDVal sql.NullString
-		if err := rows.Scan(&mc.ID, &serverIDVal, &mc.Middleware, &mc.Enabled, &mc.Config, &mc.Priority, &mc.CreatedAt, &mc.UpdatedAt); err != nil {
+		var configStr string
+		if err := rows.Scan(&mc.ID, &serverIDVal, &mc.Middleware, &mc.Enabled, &configStr, &mc.Priority, &mc.CreatedAt, &mc.UpdatedAt); err != nil {
 			return nil, err
 		}
+		mc.Config = json.RawMessage(configStr)
 		if serverIDVal.Valid {
 			mc.ServerID = &serverIDVal.String
 			serverConfigs[mc.Middleware] = mc
@@ -76,12 +78,23 @@ func (s *MiddlewareStore) GetForServer(serverID string) ([]*MiddlewareConfig, er
 		}
 	}
 
-	// Merge: server-specific overrides global
+	// Merge: server-specific overrides global, but inherit global config
+	// when server row has empty config (e.g. toggle-only rows).
+	// Disabled global rows are config-only containers and don't appear
+	// unless a server-specific row references them.
 	merged := make(map[string]*MiddlewareConfig)
 	for name, gc := range globals {
-		merged[name] = gc
+		if gc.Enabled {
+			merged[name] = gc
+		}
 	}
 	for name, sc := range serverConfigs {
+		// If server row has empty config, inherit config from global
+		if string(sc.Config) == "{}" || string(sc.Config) == "" {
+			if gc, ok := globals[name]; ok {
+				sc.Config = gc.Config
+			}
+		}
 		merged[name] = sc
 	}
 
@@ -104,16 +117,18 @@ func (s *MiddlewareStore) GetForServer(serverID string) ([]*MiddlewareConfig, er
 func (s *MiddlewareStore) Get(id string) (*MiddlewareConfig, error) {
 	mc := &MiddlewareConfig{}
 	var serverIDVal sql.NullString
+	var configStr string
 	err := s.db.QueryRow(`
 		SELECT id, server_id, middleware, enabled, config, priority, created_at, updated_at
 		FROM middleware_configs WHERE id = ?
-	`, id).Scan(&mc.ID, &serverIDVal, &mc.Middleware, &mc.Enabled, &mc.Config, &mc.Priority, &mc.CreatedAt, &mc.UpdatedAt)
+	`, id).Scan(&mc.ID, &serverIDVal, &mc.Middleware, &mc.Enabled, &configStr, &mc.Priority, &mc.CreatedAt, &mc.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	mc.Config = json.RawMessage(configStr)
 	if serverIDVal.Valid {
 		mc.ServerID = &serverIDVal.String
 	}
@@ -123,9 +138,7 @@ func (s *MiddlewareStore) Get(id string) (*MiddlewareConfig, error) {
 // Upsert creates or updates a middleware config for a server (or global if serverID is nil).
 func (s *MiddlewareStore) Upsert(mc *MiddlewareConfig) error {
 	if mc.ID == "" {
-		b := make([]byte, 16)
-		rand.Read(b)
-		mc.ID = hex.EncodeToString(b)
+		mc.ID = generateID()
 	}
 	now := time.Now()
 	mc.UpdatedAt = now
@@ -147,6 +160,69 @@ func (s *MiddlewareStore) Upsert(mc *MiddlewareConfig) error {
 	return err
 }
 
+// UpsertEnabled creates or updates a middleware config's enabled state for a server
+// without overwriting the config field. If the row doesn't exist, it's created with empty config.
+func (s *MiddlewareStore) UpsertEnabled(serverID, middleware string, enabled bool, priority int) error {
+	id := generateID()
+	now := time.Now()
+	_, err := s.db.Exec(`
+		INSERT INTO middleware_configs (id, server_id, middleware, enabled, config, priority, created_at, updated_at)
+		VALUES (?, ?, ?, ?, '{}', ?, ?, ?)
+		ON CONFLICT(server_id, middleware) DO UPDATE SET
+			enabled = excluded.enabled,
+			updated_at = excluded.updated_at
+	`, id, serverID, middleware, enabled, priority, now, now)
+	return err
+}
+
+// GetGlobal returns the global (server_id IS NULL) config for a middleware.
+func (s *MiddlewareStore) GetGlobal(middleware string) (*MiddlewareConfig, error) {
+	mc := &MiddlewareConfig{}
+	var configStr string
+	err := s.db.QueryRow(`
+		SELECT id, server_id, middleware, enabled, config, priority, created_at, updated_at
+		FROM middleware_configs WHERE server_id IS NULL AND middleware = ?
+		LIMIT 1
+	`, middleware).Scan(&mc.ID, &sql.NullString{}, &mc.Middleware, &mc.Enabled, &configStr, &mc.Priority, &mc.CreatedAt, &mc.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	mc.Config = json.RawMessage(configStr)
+	return mc, nil
+}
+
+// UpsertGlobal creates or updates a global middleware config (server_id IS NULL).
+// Uses SELECT+INSERT/UPDATE since SQLite NULL values don't trigger UNIQUE conflicts.
+func (s *MiddlewareStore) UpsertGlobal(mc *MiddlewareConfig) error {
+	existing, err := s.GetGlobal(mc.Middleware)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	if existing != nil {
+		_, err = s.db.Exec(`
+			UPDATE middleware_configs SET enabled = ?, config = ?, priority = ?, updated_at = ?
+			WHERE id = ?
+		`, mc.Enabled, string(mc.Config), mc.Priority, now, existing.ID)
+	} else {
+		id := generateID()
+		_, err = s.db.Exec(`
+			INSERT INTO middleware_configs (id, server_id, middleware, enabled, config, priority, created_at, updated_at)
+			VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
+		`, id, mc.Middleware, mc.Enabled, string(mc.Config), mc.Priority, now, now)
+	}
+	return err
+}
+
+func generateID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // Delete removes a middleware config.
 func (s *MiddlewareStore) Delete(id string) error {
 	_, err := s.db.Exec("DELETE FROM middleware_configs WHERE id = ?", id)
@@ -156,9 +232,7 @@ func (s *MiddlewareStore) Delete(id string) error {
 // LogEvent records a middleware event.
 func (s *MiddlewareStore) LogEvent(evt *MiddlewareEvent) error {
 	if evt.ID == "" {
-		b := make([]byte, 16)
-		rand.Read(b)
-		evt.ID = hex.EncodeToString(b)
+		evt.ID = generateID()
 	}
 	_, err := s.db.Exec(`
 		INSERT INTO middleware_events (id, timestamp, server_id, middleware, event_type, summary, request_method, endpoint_name, user_id)

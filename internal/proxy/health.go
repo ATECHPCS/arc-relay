@@ -17,6 +17,11 @@ const (
 	failThreshold = 3
 	// recoveryCooldown is the minimum time between recovery attempts for a server.
 	recoveryCooldown = 5 * time.Minute
+	// maxRecoverAttempts is the max consecutive recovery attempts before giving up.
+	// After this many failures, the server stays in error until manually restarted.
+	maxRecoverAttempts = 3
+	// dockerRecoverTimeout is the context timeout for Docker container recovery operations.
+	dockerRecoverTimeout = 3 * time.Minute
 )
 
 // HealthMonitor periodically checks running servers and updates their status.
@@ -26,19 +31,23 @@ type HealthMonitor struct {
 	interval time.Duration
 	cancel   context.CancelFunc
 
-	mu          sync.Mutex
-	failCounts  map[string]int       // server ID -> consecutive probe failures
-	lastRecover map[string]time.Time // server ID -> last recovery attempt
+	mu              sync.Mutex
+	failCounts      map[string]int       // server ID -> consecutive probe failures
+	lastRecover     map[string]time.Time // server ID -> last recovery attempt
+	recoverAttempts map[string]int       // server ID -> consecutive recovery attempts
+	recovering      map[string]bool      // server ID -> recovery goroutine in progress
 }
 
 // NewHealthMonitor creates a health monitor that checks servers at the given interval.
 func NewHealthMonitor(proxyMgr *Manager, servers *store.ServerStore, interval time.Duration) *HealthMonitor {
 	return &HealthMonitor{
-		proxyMgr:    proxyMgr,
-		servers:     servers,
-		interval:    interval,
-		failCounts:  make(map[string]int),
-		lastRecover: make(map[string]time.Time),
+		proxyMgr:        proxyMgr,
+		servers:         servers,
+		interval:        interval,
+		failCounts:      make(map[string]int),
+		lastRecover:     make(map[string]time.Time),
+		recoverAttempts: make(map[string]int),
+		recovering:      make(map[string]bool),
 	}
 }
 
@@ -140,29 +149,84 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 	}
 }
 
-// tryRecover attempts to reconnect errored remote and external HTTP servers.
-// Docker-managed servers require explicit restart (container lifecycle).
-// Applies a cooldown to prevent rapid reconnect storms.
+// tryRecover attempts to auto-recover errored servers.
+// Stateless servers (remote, external HTTP) use RetryServer inline.
+// Docker-managed servers (stdio, Docker HTTP) use RecreateContainer in a
+// background goroutine to avoid blocking the health monitor loop.
+// Applies a cooldown and max attempt limit to prevent restart storms.
 func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
-	if !hm.isStatelessServer(srv) {
+	hm.mu.Lock()
+
+	// Skip if a recovery goroutine is already running for this server
+	if hm.recovering[srv.ID] {
+		hm.mu.Unlock()
 		return
 	}
 
-	hm.mu.Lock()
-	lastAttempt, exists := hm.lastRecover[srv.ID]
-	if exists && time.Since(lastAttempt) < recoveryCooldown {
+	// Cooldown: skip if last attempt was too recent
+	if last, ok := hm.lastRecover[srv.ID]; ok && time.Since(last) < recoveryCooldown {
 		hm.mu.Unlock()
-		return // too soon, skip this cycle
+		return
 	}
+
+	// Max attempts: give up after repeated failures
+	attempts := hm.recoverAttempts[srv.ID]
+	if attempts >= maxRecoverAttempts {
+		hm.mu.Unlock()
+		return
+	}
+
 	hm.lastRecover[srv.ID] = time.Now()
+	hm.recoverAttempts[srv.ID] = attempts + 1
+	attempt := attempts + 1
+
+	if hm.isStatelessServer(srv) {
+		// Stateless: recover inline (fast, no Docker ops)
+		hm.mu.Unlock()
+		if err := hm.proxyMgr.RetryServer(ctx, srv); err != nil {
+			log.Printf("Health monitor: recovery %d/%d failed for %s: %v",
+				attempt, maxRecoverAttempts, srv.Name, err)
+			if attempt >= maxRecoverAttempts {
+				log.Printf("Health monitor: giving up on %s after %d attempts - manual restart required",
+					srv.Name, maxRecoverAttempts)
+			}
+			return
+		}
+		hm.ResetRecoveryState(srv.ID)
+		log.Printf("Health monitor: auto-recovered server %s", srv.Name)
+		return
+	}
+
+	// Docker-managed: recover async to avoid blocking health loop
+	hm.recovering[srv.ID] = true
 	hm.mu.Unlock()
 
-	if err := hm.proxyMgr.RetryServer(ctx, srv); err != nil {
-		return // still down, stay in error state silently
-	}
+	go func() {
+		defer func() {
+			hm.mu.Lock()
+			delete(hm.recovering, srv.ID)
+			hm.mu.Unlock()
+		}()
 
-	hm.resetFailCount(srv.ID)
-	log.Printf("Health monitor: auto-recovered server %s", srv.Name)
+		recoverCtx, cancel := context.WithTimeout(ctx, dockerRecoverTimeout)
+		defer cancel()
+
+		log.Printf("Health monitor: attempting recovery %d/%d for server %s (type: %s)",
+			attempt, maxRecoverAttempts, srv.Name, srv.ServerType)
+
+		if err := hm.proxyMgr.RecreateContainer(recoverCtx, srv); err != nil {
+			log.Printf("Health monitor: recovery %d/%d failed for %s: %v",
+				attempt, maxRecoverAttempts, srv.Name, err)
+			if attempt >= maxRecoverAttempts {
+				log.Printf("Health monitor: giving up on %s after %d attempts - manual restart required",
+					srv.Name, maxRecoverAttempts)
+			}
+			return
+		}
+
+		hm.ResetRecoveryState(srv.ID)
+		log.Printf("Health monitor: auto-recovered server %s (type: %s)", srv.Name, srv.ServerType)
+	}()
 }
 
 func (hm *HealthMonitor) resetFailCount(serverID string) {
@@ -171,8 +235,21 @@ func (hm *HealthMonitor) resetFailCount(serverID string) {
 	hm.mu.Unlock()
 }
 
+// ResetRecoveryState clears all recovery tracking for a server.
+// Call this after a successful auto-recovery or manual restart so the server
+// gets a fresh retry budget if it fails again later.
+func (hm *HealthMonitor) ResetRecoveryState(serverID string) {
+	hm.mu.Lock()
+	delete(hm.failCounts, serverID)
+	delete(hm.recoverAttempts, serverID)
+	delete(hm.lastRecover, serverID)
+	hm.mu.Unlock()
+}
+
 // isStatelessServer returns true for server types that can be reconnected
 // without managing external state (containers, processes, etc).
+// Used to select the recovery strategy in tryRecover: inline RetryServer
+// for stateless servers, async RecreateContainer for Docker-managed ones.
 func (hm *HealthMonitor) isStatelessServer(srv *store.Server) bool {
 	switch srv.ServerType {
 	case store.ServerTypeRemote:

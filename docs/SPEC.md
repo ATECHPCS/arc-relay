@@ -1376,6 +1376,58 @@ MCP Wrangler under Comma Compliance org branding:
 
 ---
 
+## Maybe Later: Ideas from Competitive Analysis
+
+Patterns and concepts observed in other MCP proxy projects (March 2026). Not committed to any phase - revisit when scoping future work.
+
+**Sources:** [remote-mcp-adapter](https://github.com/aakashh242/remote-mcp-adapter) (v0.3.0), [PolicyLayer/Intercept](https://github.com/policylayer/intercept) (v1.1.0), [mcp-zero-trust-proxy](https://github.com/AnobleSCM/mcp-zero-trust-proxy) (v1.0.1)
+
+### Per-Session Backend Isolation
+**From:** mcp-zero-trust-proxy, remote-mcp-adapter
+**Gap:** Wrangler keeps one backend per server (one shared stdio bridge, one remote sessionID). All three competitors isolate backends per auth context or MCP session. This matters for multi-user deployments where concurrent users share a server.
+**Overlap:** Partially addressed if 9A (OIDC) ships - scoped sessions become natural.
+
+### Request Body Size Cap
+**From:** mcp-zero-trust-proxy
+**Gap:** Wrangler does unbounded `io.ReadAll` in the HTTP handler. A `MaxBodySize` check before parse is trivial and prevents OOM on malicious payloads.
+**Effort:** Low - could ship standalone.
+
+### Declarative Policy Middleware (tools/call Rules Engine)
+**From:** PolicyLayer/Intercept
+**Gap:** Wrangler's Sanitizer does regex match/redact/block, but Intercept has a real policy language: nested-path conditions on tool arguments (`arguments.path startsWith /safe`), wildcard rules, deny/warn actions, per-tool rate limits, stateful counters with `increment_from`, optional Redis-backed shared state. This is significantly more expressive than regex patterns.
+**Overlap:** Extends the existing middleware registry in `internal/middleware/`. Could be a new middleware type alongside Sanitizer/Sizer/Alerter.
+
+### Policy Scan & Auto-Generation
+**From:** PolicyLayer/Intercept
+**Gap:** Intercept's `scan` command generates starter policies from live tool catalogs, grouped by read/write/destructive risk. Wrangler already enumerates server endpoints - this would use that data to bootstrap middleware configs rather than requiring manual setup.
+**Pairs with:** Declarative policy middleware above.
+
+### Tool Definition Pinning & Drift Detection
+**From:** remote-mcp-adapter
+**Gap:** Snapshot `tools/list` on first enumeration, alert when upstream schemas change. Defends against prompt injection via modified tool descriptions and catches unexpected upstream changes.
+**Overlap:** Health monitoring already probes servers periodically - drift detection could piggyback on that.
+
+### Tool Metadata Sanitization
+**From:** remote-mcp-adapter
+**Gap:** Scrub model-visible tool descriptions/schema text in `tools/list` responses before forwarding to clients. Defense against prompt injection embedded in tool metadata by upstream servers.
+**Effort:** Low - hooks into the same place Wrangler already filters tools.
+
+### Decision-Oriented Audit Logging
+**From:** PolicyLayer/Intercept
+**Gap:** Wrangler's middleware_events table logs request summaries. Intercept logs structured decision events: allowed/denied, matched rule ID, hashed arguments (not raw payloads by default), config reload events. Better for compliance review.
+**Overlap:** Pairs naturally with the Comma Compliance integration (Phase 8).
+
+### Hot Reload for Middleware Config
+**From:** PolicyLayer/Intercept
+**Gap:** Middleware/policy changes require server restart. Intercept validates config changes and applies them live. Wrangler's registry factory pattern could support this with a rebuild-pipeline-on-change mechanism.
+
+### Session-Scoped File Staging (upload/artifact handles)
+**From:** remote-mcp-adapter
+**Gap:** Inject an upload helper tool into stdio servers, issue signed short-lived upload URLs, rewrite `upload://` handles to container-visible paths, capture output files as `artifact://` resources with download endpoints. Solves file exchange with Docker stdio servers.
+**Effort:** High - new transport layer concern.
+
+---
+
 ## Dependencies (Go)
 
 | Package | Purpose |

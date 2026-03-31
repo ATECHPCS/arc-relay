@@ -1,12 +1,10 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
@@ -15,11 +13,11 @@ import (
 
 // ArchiveConfig configures the archive middleware.
 type ArchiveConfig struct {
-	URL           string `json:"url"`                      // Target URL to POST archived data
-	AuthType      string `json:"auth_type"`                // "none", "bearer", "api_key"
-	AuthValue     string `json:"auth_value"`               // Token/key value
-	APIKeyHeader  string `json:"api_key_header,omitempty"` // Header name for api_key auth (default: X-API-Key)
-	Include       string `json:"include"`                  // "request", "response", "both"
+	URL          string `json:"url"`                      // Target URL to POST archived data
+	AuthType     string `json:"auth_type"`                // "none", "bearer", "api_key"
+	AuthValue    string `json:"auth_value"`               // Token/key value
+	APIKeyHeader string `json:"api_key_header,omitempty"` // Header name for api_key auth (default: X-API-Key)
+	Include      string `json:"include"`                  // "request", "response", "both"
 }
 
 // DefaultArchiveConfig returns sensible defaults.
@@ -34,11 +32,11 @@ func DefaultArchiveConfig() ArchiveConfig {
 type archivePayload struct {
 	Version   string          `json:"version"`
 	Source    string          `json:"source"`
-	Phase    string           `json:"phase"`
+	Phase     string          `json:"phase"`
 	Timestamp string          `json:"timestamp"`
-	Meta     archiveMeta      `json:"meta"`
-	Request  json.RawMessage  `json:"request,omitempty"`
-	Response json.RawMessage  `json:"response,omitempty"`
+	Meta      archiveMeta     `json:"meta"`
+	Request   json.RawMessage `json:"request,omitempty"`
+	Response  json.RawMessage `json:"response,omitempty"`
 }
 
 type archiveMeta struct {
@@ -51,17 +49,16 @@ type archiveMeta struct {
 	RequestID  string `json:"request_id"`
 }
 
-// Archive sends MCP request/response data to a configured HTTP endpoint.
-// It is observe-only and never blocks MCP traffic.
+// Archive sends MCP request/response data to a configured HTTP endpoint
+// via the shared ArchiveDispatcher. It is observe-only and never blocks MCP traffic.
 type Archive struct {
 	cfg         ArchiveConfig
 	eventLogger EventLogger
-	httpClient  *http.Client
-	sendCh      chan []byte
+	dispatcher  *ArchiveDispatcher
 }
 
 // NewArchiveFromConfig creates an Archive from JSON config.
-func NewArchiveFromConfig(config json.RawMessage, logger EventLogger) (Middleware, error) {
+func NewArchiveFromConfig(config json.RawMessage, logger EventLogger, dispatcher *ArchiveDispatcher) (Middleware, error) {
 	var cfg ArchiveConfig
 	if len(config) > 0 && string(config) != "{}" {
 		if err := json.Unmarshal(config, &cfg); err != nil {
@@ -79,15 +76,15 @@ func NewArchiveFromConfig(config json.RawMessage, logger EventLogger) (Middlewar
 	if cfg.APIKeyHeader == "" {
 		cfg.APIKeyHeader = "X-API-Key"
 	}
+	if dispatcher == nil {
+		return nil, fmt.Errorf("archive: dispatcher not available")
+	}
 
-	a := &Archive{
+	return &Archive{
 		cfg:         cfg,
 		eventLogger: logger,
-		httpClient:  &http.Client{Timeout: 2 * time.Second},
-		sendCh:      make(chan []byte, 256),
-	}
-	go a.worker()
-	return a, nil
+		dispatcher:  dispatcher,
+	}, nil
 }
 
 func (a *Archive) Name() string { return "archive" }
@@ -99,7 +96,7 @@ func (a *Archive) ProcessRequest(ctx context.Context, req *mcp.Request, meta *Re
 
 	reqJSON, _ := json.Marshal(req)
 	payload := a.buildPayload("request", meta, reqJSON, nil)
-	a.enqueue(payload)
+	a.enqueue(payload, meta)
 	return req, nil
 }
 
@@ -122,7 +119,7 @@ func (a *Archive) ProcessResponse(ctx context.Context, req *mcp.Request, resp *m
 	}
 
 	payload := a.buildPayload(phase, meta, reqJSON, respJSON)
-	a.enqueue(payload)
+	a.enqueue(payload, meta)
 	return resp, nil
 }
 
@@ -130,7 +127,7 @@ func (a *Archive) buildPayload(phase string, meta *RequestMeta, reqJSON, respJSO
 	p := archivePayload{
 		Version:   "v1",
 		Source:    "mcp_wrangler",
-		Phase:    phase,
+		Phase:     phase,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Meta: archiveMeta{
 			ServerID:   meta.ServerID,
@@ -148,50 +145,15 @@ func (a *Archive) buildPayload(phase string, meta *RequestMeta, reqJSON, respJSO
 	return body
 }
 
-func (a *Archive) enqueue(body []byte) {
-	select {
-	case a.sendCh <- body:
-	default:
-		// Queue full - drop and log
-		log.Printf("archive: queue full, dropping payload")
+func (a *Archive) enqueue(body []byte, meta *RequestMeta) {
+	if err := a.dispatcher.EnqueueWithServer(body, a.cfg, meta.ServerID); err != nil {
+		log.Printf("archive: failed to enqueue: %v", err)
 		if a.eventLogger != nil {
 			a.eventLogger(&store.MiddlewareEvent{
 				Middleware: "archive",
-				EventType:  "dropped",
-				Summary:    "archive queue full, payload dropped",
+				EventType:  "error",
+				Summary:    "failed to enqueue archive payload: " + err.Error(),
 			})
 		}
-	}
-}
-
-func (a *Archive) worker() {
-	for body := range a.sendCh {
-		a.send(body)
-	}
-}
-
-func (a *Archive) send(body []byte) {
-	req, err := http.NewRequest("POST", a.cfg.URL, bytes.NewReader(body))
-	if err != nil {
-		log.Printf("archive: failed to create request: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	switch a.cfg.AuthType {
-	case "bearer":
-		req.Header.Set("Authorization", "Bearer "+a.cfg.AuthValue)
-	case "api_key":
-		req.Header.Set(a.cfg.APIKeyHeader, a.cfg.AuthValue)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		log.Printf("archive: POST to %s failed: %v", a.cfg.URL, err)
-		return
-	}
-	resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		log.Printf("archive: POST to %s returned status %d", a.cfg.URL, resp.StatusCode)
 	}
 }
