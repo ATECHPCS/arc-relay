@@ -270,6 +270,92 @@
         Monitors requests and responses for keyword patterns (e.g., "production", "master-password") and fires alerts via logs or webhooks.
       </div>
     </div>
+
+    {{/* Compliance Archive */}}
+    <div class="mw-card" id="mw-archive" data-config="{{if .GlobalArchiveConfig}}{{.GlobalArchiveConfig}}{{else}}{}{{end}}">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>Compliance Archive</strong>
+          <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">Audit trail</span>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="mw-archive-toggle" onchange="toggleArchive(this.checked)"
+            {{range $configs}}{{if eq .Middleware "archive"}}{{if .Enabled}}checked{{end}}{{end}}{{end}}>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="mw-detail" style="margin-top:0.5rem;font-size:0.85rem;color:var(--text-muted)">
+        Archives MCP tool calls to an external compliance endpoint for audit, security review, and policy enforcement.
+      </div>
+      {{if .ArchiveQueueStatus}}
+      <div style="margin-top:0.75rem;padding:0.5rem 0.75rem;border-radius:4px;background:var(--bg-muted, #f8f9fa);font-size:0.85rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem">
+          <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+            {{if eq .ArchiveQueueStatus.CircuitState "closed"}}
+              {{if and (eq .ArchiveQueueStatus.QueueStatus.PendingCount 0) (eq .ArchiveQueueStatus.QueueStatus.HoldCount 0)}}
+                <span class="badge" style="background:#198754;color:#fff">Healthy</span>
+              {{else}}
+                <span class="badge" style="background:#ffc107;color:#000">Delivering</span>
+              {{end}}
+            {{else if eq .ArchiveQueueStatus.CircuitState "half-open"}}
+              <span class="badge" style="background:#ffc107;color:#000">Recovering</span>
+            {{else}}
+              <span class="badge" style="background:#dc3545;color:#fff">Paused</span>
+            {{end}}
+            {{if gt .ArchiveQueueStatus.QueueStatus.PendingCount 0}}
+              <span>{{.ArchiveQueueStatus.QueueStatus.PendingCount}} queued</span>
+            {{end}}
+            {{if gt .ArchiveQueueStatus.QueueStatus.HoldCount 0}}
+              <span class="badge" style="background:#dc3545;color:#fff">{{.ArchiveQueueStatus.QueueStatus.HoldCount}} held</span>
+            {{end}}
+          </div>
+          <div style="display:flex;gap:0.5rem">
+            {{if gt .ArchiveQueueStatus.QueueStatus.HoldCount 0}}
+              <button onclick="retryArchive()" class="btn btn-sm" style="background:#ffc107;color:#000;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer">Retry Now</button>
+            {{end}}
+            <button onclick="testArchive()" class="btn btn-sm" style="background:var(--border, #dee2e6);color:var(--text, #212529);border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" id="archive-test-btn">Send Test</button>
+          </div>
+        </div>
+        {{if .ArchiveQueueStatus.QueueStatus.LastError}}
+          <div style="margin-top:0.25rem;color:var(--danger, #dc3545);font-size:0.8rem">
+            Last error: {{.ArchiveQueueStatus.QueueStatus.LastError}}
+          </div>
+        {{end}}
+        <div id="archive-test-result" style="margin-top:0.25rem;font-size:0.8rem;display:none"></div>
+      </div>
+      {{end}}
+      <div id="mw-archive-config" style="margin-top:0.75rem;display:flex;flex-direction:column;gap:0.5rem">
+        <div>
+          <label style="font-size:0.8rem;font-weight:600">Archive URL</label>
+          <input type="text" id="archive-url" placeholder="https://app.commacompli.com/api/v1/archive/ingest" style="width:100%;padding:0.35rem 0.5rem;font-size:0.85rem;border:1px solid var(--border);border-radius:4px">
+        </div>
+        <div style="display:flex;gap:0.75rem">
+          <div style="flex:1">
+            <label style="font-size:0.8rem;font-weight:600">Auth Type</label>
+            <select id="archive-auth-type" onchange="document.getElementById('archive-auth-value').type = this.value === 'none' ? 'hidden' : 'password'" style="width:100%;padding:0.35rem 0.5rem;font-size:0.85rem;border:1px solid var(--border);border-radius:4px">
+              <option value="none">None</option>
+              <option value="bearer">Bearer Token</option>
+              <option value="api_key">API Key</option>
+            </select>
+          </div>
+          <div style="flex:1">
+            <label style="font-size:0.8rem;font-weight:600">Auth Value</label>
+            <input type="password" id="archive-auth-value" placeholder="Token or key" style="width:100%;padding:0.35rem 0.5rem;font-size:0.85rem;border:1px solid var(--border);border-radius:4px">
+          </div>
+        </div>
+        <div>
+          <label style="font-size:0.8rem;font-weight:600">Include</label>
+          <select id="archive-include" style="width:100%;padding:0.35rem 0.5rem;font-size:0.85rem;border:1px solid var(--border);border-radius:4px">
+            <option value="both">Both (request + response)</option>
+            <option value="request">Request only</option>
+            <option value="response">Response only</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.25rem">
+          <button onclick="saveArchiveConfig()" class="btn btn-sm btn-primary" type="button">Save Config</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -283,6 +369,100 @@
       if (!r.ok) alert('Failed to update middleware');
     });
   }
+
+  function toggleArchive(enabled) {
+    fetch('/servers/{{.Server.ID}}/middleware', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+      body: JSON.stringify({middleware: 'archive', enabled: enabled})
+    }).then(r => {
+      if (!r.ok) alert('Failed to update archive middleware');
+    });
+  }
+
+  function saveArchiveConfig() {
+    var cfg = buildArchiveConfig();
+    fetch('/api/middleware/global', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+      body: JSON.stringify({middleware: 'archive', config: cfg})
+    }).then(r => {
+      if (r.ok) {
+        var btn = document.querySelector('#mw-archive-config .btn-primary');
+        var orig = btn.textContent;
+        btn.textContent = 'Saved!';
+        setTimeout(function(){ btn.textContent = orig; }, 1500);
+      } else {
+        alert('Failed to save archive config');
+      }
+    });
+  }
+
+  function buildArchiveConfig() {
+    return {
+      url: document.getElementById('archive-url').value,
+      auth_type: document.getElementById('archive-auth-type').value,
+      auth_value: document.getElementById('archive-auth-value').value,
+      include: document.getElementById('archive-include').value
+    };
+  }
+
+  function retryArchive() {
+    fetch('/api/archive/retry', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.status === 'ok') location.reload();
+      else alert('Retry failed: ' + (data.error || 'unknown'));
+    });
+  }
+
+  function testArchive() {
+    var btn = document.getElementById('archive-test-btn');
+    var result = document.getElementById('archive-test-result');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    result.style.display = 'none';
+    fetch('/api/archive/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      btn.disabled = false;
+      btn.textContent = 'Send Test';
+      result.style.display = 'block';
+      if (data.success) {
+        result.style.color = '#198754';
+        result.textContent = 'Connection successful (HTTP ' + data.status_code + ')';
+      } else {
+        result.style.color = '#dc3545';
+        result.textContent = 'Connection failed: ' + (data.error || 'unknown error');
+      }
+      setTimeout(function(){ result.style.display = 'none'; }, 8000);
+    }).catch(function(err) {
+      btn.disabled = false;
+      btn.textContent = 'Send Test';
+      result.style.display = 'block';
+      result.style.color = '#dc3545';
+      result.textContent = 'Request failed: ' + err.message;
+    });
+  }
+
+  // Load existing archive config into form from data attribute
+  (function() {
+    try {
+      var raw = document.getElementById('mw-archive').dataset.config;
+      if (raw && raw !== '{}') {
+        var cfg = JSON.parse(raw);
+        if (cfg.url) document.getElementById('archive-url').value = cfg.url;
+        if (cfg.auth_type) {
+          document.getElementById('archive-auth-type').value = cfg.auth_type;
+          if (cfg.auth_type === 'none') document.getElementById('archive-auth-value').type = 'hidden';
+        }
+        if (cfg.auth_value) document.getElementById('archive-auth-value').value = cfg.auth_value;
+        if (cfg.include) document.getElementById('archive-include').value = cfg.include;
+      }
+    } catch(e) {}
+  })();
   </script>
 </div>
 

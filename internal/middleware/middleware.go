@@ -85,8 +85,9 @@ func (p *Pipeline) ProcessResponse(ctx context.Context, req *mcp.Request, resp *
 
 // Registry holds middleware factories and builds pipelines from DB configs.
 type Registry struct {
-	factories map[string]Factory
-	store     *store.MiddlewareStore
+	factories          map[string]Factory
+	store              *store.MiddlewareStore
+	archiveDispatcher  *ArchiveDispatcher
 }
 
 // Factory creates a middleware instance from a JSON config.
@@ -96,17 +97,26 @@ type Factory func(config json.RawMessage, eventLogger EventLogger) (Middleware, 
 type EventLogger func(evt *store.MiddlewareEvent)
 
 // NewRegistry creates a registry with the built-in middleware factories.
-func NewRegistry(mwStore *store.MiddlewareStore) *Registry {
+func NewRegistry(mwStore *store.MiddlewareStore, archiveDispatcher *ArchiveDispatcher) *Registry {
 	r := &Registry{
-		factories: make(map[string]Factory),
-		store:     mwStore,
+		factories:         make(map[string]Factory),
+		store:             mwStore,
+		archiveDispatcher: archiveDispatcher,
 	}
 	// Register built-in middleware
 	r.Register("sanitizer", NewSanitizerFromConfig)
 	r.Register("sizer", NewSizerFromConfig)
 	r.Register("alerter", NewAlerterFromConfig)
-	r.Register("archive", NewArchiveFromConfig)
+	// Archive uses a closure to capture the shared dispatcher
+	r.Register("archive", func(config json.RawMessage, logger EventLogger) (Middleware, error) {
+		return NewArchiveFromConfig(config, logger, archiveDispatcher)
+	})
 	return r
+}
+
+// ArchiveDispatcher returns the shared archive dispatcher, or nil if not configured.
+func (r *Registry) ArchiveDispatcher() *ArchiveDispatcher {
+	return r.archiveDispatcher
 }
 
 // Register adds a middleware factory.

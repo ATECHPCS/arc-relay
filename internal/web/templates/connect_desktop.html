@@ -139,9 +139,68 @@
 </div>
 {{end}}
 
+<!-- Compliance Archive -->
+<div style="margin-top: 2rem; border-top: 2px solid var(--border, #dee2e6); padding-top: 1.5rem;">
+  <h3 style="margin-bottom: 0.25rem;">Compliance Archive</h3>
+  <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+    Archive MCP tool calls for compliance, audit, and security review. Enable the archive middleware on each server to stream requests and responses to Comma Compliance.
+  </p>
+  <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+    <a href="https://app.commacompliance.com/archive/setup?source=mcp_wrangler&wrangler_url={{.BaseURL}}" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.5rem 1rem; text-decoration: none;">
+      Set up with Comma Compliance
+    </a>
+    {{if .IsAdmin}}
+    <button onclick="testArchiveConnect()" id="connect-test-btn" class="btn" style="font-size: 0.85rem; padding: 0.5rem 1rem; border: 1px solid var(--border, #dee2e6); background: var(--bg, #fff); cursor: pointer; border-radius: 4px;">
+      Test Connection
+    </button>
+    {{end}}
+  </div>
+  {{if .IsAdmin}}
+  <div id="connect-test-result" style="margin-top: 0.5rem; font-size: 0.85rem; display: none;"></div>
+  {{end}}
+</div>
+
 </div>
 
 <script>
+var _csrfToken = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+function testArchiveConnect() {
+  var btn = document.getElementById('connect-test-btn');
+  var result = document.getElementById('connect-test-result');
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  if (result) result.style.display = 'none';
+  fetch('/api/archive/test', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+  }).then(function(r) { return r.json(); }).then(function(data) {
+    btn.disabled = false;
+    btn.textContent = 'Test Connection';
+    if (result) {
+      result.style.display = 'block';
+      if (data.success) {
+        result.style.color = '#198754';
+        result.textContent = 'Connection successful (HTTP ' + data.status_code + ')';
+      } else if (data.error && data.error.indexOf('no archive config') >= 0) {
+        result.style.color = '#856404';
+        result.textContent = 'No archive config saved yet. Configure it on any server detail page first.';
+      } else {
+        result.style.color = '#dc3545';
+        result.textContent = 'Connection failed: ' + (data.error || 'unknown error');
+      }
+      setTimeout(function(){ result.style.display = 'none'; }, 8000);
+    }
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = 'Test Connection';
+    if (result) {
+      result.style.display = 'block';
+      result.style.color = '#dc3545';
+      result.textContent = 'Request failed: ' + err.message;
+    }
+  });
+}
+
 function copyEl(id, btn) {
   var text = document.getElementById(id).textContent;
   navigator.clipboard.writeText(text).then(function() {

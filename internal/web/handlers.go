@@ -267,6 +267,10 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api-keys/", h.requireAuth(h.handleAPIKeyRoutes))
 	mux.HandleFunc("/profiles", h.requireAuth(h.handleProfiles))
 	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
+	mux.HandleFunc("/api/middleware/global", h.requireAuth(h.handleGlobalMiddleware))
+	mux.HandleFunc("/api/archive/retry", h.requireAuth(h.handleArchiveRetry))
+	mux.HandleFunc("/api/archive/test", h.requireAuth(h.handleArchiveTest))
+	mux.HandleFunc("/api/archive/status", h.requireAuth(h.handleArchiveStatus))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
 	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
@@ -723,9 +727,13 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		// Middleware configs and events
 		var mwConfigs []*store.MiddlewareConfig
 		var mwEvents []*store.MiddlewareEvent
+		var globalArchiveCfg string
 		if h.middlewareStore != nil {
 			mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
 			mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
+			if gac, err := h.middlewareStore.GetGlobal("archive"); err == nil && gac != nil {
+				globalArchiveCfg = string(gac.Config)
+			}
 		}
 
 		cd := buildConfigDisplay(srv)
@@ -754,6 +762,10 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		data["RecentLogs"] = serverLogs
 		data["MiddlewareConfigs"] = mwConfigs
 		data["MiddlewareEvents"] = mwEvents
+		data["GlobalArchiveConfig"] = globalArchiveCfg
+		if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
+			data["ArchiveQueueStatus"] = disp.Status()
+		}
 	}
 
 	// All users see their permitted endpoints
@@ -884,6 +896,8 @@ func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id 
 	}
 	if err := h.proxy.StartServer(r.Context(), srv); err != nil {
 		log.Printf("Error starting server %s: %v", srv.Name, err) // #nosec G706 - server name from DB
+	} else if h.healthMon != nil {
+		h.healthMon.ResetRecoveryState(id)
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -963,6 +977,8 @@ func (h *Handlers) handleServerRebuildRestart(w http.ResponseWriter, r *http.Req
 	}
 	if err := h.proxy.RebuildAndRestart(r.Context(), srv); err != nil {
 		log.Printf("Error rebuild+restart for server %s: %v", srv.Name, err) // #nosec G706
+	} else if h.healthMon != nil {
+		h.healthMon.ResetRecoveryState(id)
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -979,6 +995,8 @@ func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, 
 	}
 	if err := h.proxy.RecreateContainer(r.Context(), srv); err != nil {
 		log.Printf("Error recreating container for server %s: %v", srv.Name, err) // #nosec G706
+	} else if h.healthMon != nil {
+		h.healthMon.ResetRecoveryState(id)
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -1049,7 +1067,7 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 	}
 
 	// Validate middleware name
-	validNames := map[string]bool{"sanitizer": true, "sizer": true, "alerter": true}
+	validNames := map[string]bool{"sanitizer": true, "sizer": true, "alerter": true, "archive": true}
 	if !validNames[body.Middleware] {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown middleware: " + body.Middleware})
 		return
@@ -1060,14 +1078,9 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 		enabled = *body.Enabled
 	}
 
-	cfg := json.RawMessage("{}")
-	if body.Config != nil {
-		cfg = body.Config
-	}
-
 	priority := body.Priority
 	if priority == 0 {
-		// Default priorities: sanitizer=10, sizer=20, alerter=30
+		// Default priorities: sanitizer=10, sizer=20, alerter=30, archive=40
 		switch body.Middleware {
 		case "sanitizer":
 			priority = 10
@@ -1075,16 +1088,28 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 			priority = 20
 		case "alerter":
 			priority = 30
+		case "archive":
+			priority = 40
 		default:
 			priority = 100
 		}
+	}
+
+	// Toggle-only (no config provided): update enabled without overwriting config
+	if body.Config == nil {
+		if err := h.middlewareStore.UpsertEnabled(serverID, body.Middleware, enabled, priority); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
 	}
 
 	mc := &store.MiddlewareConfig{
 		ServerID:   &serverID,
 		Middleware: body.Middleware,
 		Enabled:    enabled,
-		Config:     cfg,
+		Config:     body.Config,
 		Priority:   priority,
 	}
 
@@ -1094,6 +1119,137 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleGlobalMiddleware saves a global middleware config (server_id NULL).
+// Used for archive config that applies across all servers.
+func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+
+	var body struct {
+		Middleware string          `json:"middleware"`
+		Config     json.RawMessage `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	// Only archive supports global config for now
+	if body.Middleware != "archive" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "global config only supported for archive"})
+		return
+	}
+
+	mc := &store.MiddlewareConfig{
+		Middleware: body.Middleware,
+		Enabled:   false, // Global row is config-only; per-server toggles control enabled
+		Config:    body.Config,
+		Priority:  40,
+	}
+
+	if err := h.middlewareStore.UpsertGlobal(mc); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleArchiveRetry resets held archive items for immediate retry.
+func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
+		return
+	}
+	count, err := disp.RetryHeld()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "retried": count})
+}
+
+// handleArchiveTest sends a test payload to verify archive connectivity.
+func (h *Handlers) handleArchiveTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
+		return
+	}
+
+	// Load global archive config
+	globalCfg, err := h.middlewareStore.GetGlobal("archive")
+	if err != nil || globalCfg == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no archive config found - save config first"})
+		return
+	}
+
+	var archiveCfg middleware.ArchiveConfig
+	if err := json.Unmarshal(globalCfg.Config, &archiveCfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid archive config: " + err.Error()})
+		return
+	}
+	if archiveCfg.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "archive URL not configured"})
+		return
+	}
+
+	statusCode, testErr := disp.SendTest(archiveCfg)
+	if testErr != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success":     false,
+			"status_code": statusCode,
+			"error":       testErr.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":     true,
+		"status_code": statusCode,
+	})
+}
+
+// handleArchiveStatus returns archive queue status.
+func (h *Handlers) handleArchiveStatus(w http.ResponseWriter, r *http.Request) {
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, disp.Status())
 }
 
 // --- Users ---
@@ -1805,9 +1961,11 @@ func (h *Handlers) handleConnectDesktop(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	isAdmin := user != nil && user.Role == "admin"
 	h.render(w, r, "connect_desktop.html", map[string]any{
 		"Nav":     "connect",
 		"User":    user,
+		"IsAdmin": isAdmin,
 		"Servers": running,
 		"BaseURL": h.cfg.PublicBaseURL(),
 	})

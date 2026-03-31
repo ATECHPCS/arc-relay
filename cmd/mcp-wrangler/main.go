@@ -78,7 +78,15 @@ func main() {
 
 	// Initialize middleware
 	middlewareStore := store.NewMiddlewareStore(db)
-	mwRegistry := middleware.NewRegistry(middlewareStore)
+	archiveQueueStore := store.NewArchiveQueueStore(db)
+	archiveEventLogger := func(evt *store.MiddlewareEvent) {
+		if err := middlewareStore.LogEvent(evt); err != nil {
+			log.Printf("archive dispatcher: failed to log event: %v", err)
+		}
+	}
+	archiveDispatcher := middleware.NewArchiveDispatcher(archiveQueueStore, archiveEventLogger)
+	archiveDispatcher.Start()
+	mwRegistry := middleware.NewRegistry(middlewareStore, archiveDispatcher)
 
 	// Initialize proxy manager
 	proxyMgr := proxy.NewManager(serverStore, dockerMgr, oauthMgr, accessStore)
@@ -138,6 +146,7 @@ func main() {
 		<-sigCh
 		log.Println("Shutting down...")
 		healthMon.Stop()
+		archiveDispatcher.Stop()
 		db.StopBackup()
 		proxyMgr.StopAll(ctx)
 		if dockerMgr != nil {
