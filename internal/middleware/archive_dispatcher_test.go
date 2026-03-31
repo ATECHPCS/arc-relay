@@ -298,8 +298,8 @@ func TestDispatcher_SendTest_DoesNotEnqueue(t *testing.T) {
 	}))
 
 	cfg := middleware.ArchiveConfig{
-		URL:      ts.URL,
-		AuthType: "bearer",
+		URL:       ts.URL,
+		AuthType:  "bearer",
 		AuthValue: "test-token",
 	}
 
@@ -323,8 +323,8 @@ func TestDispatcher_SendTest_ReportsFailure(t *testing.T) {
 	}))
 
 	cfg := middleware.ArchiveConfig{
-		URL:      ts.URL,
-		AuthType: "bearer",
+		URL:       ts.URL,
+		AuthType:  "bearer",
 		AuthValue: "bad-token",
 	}
 

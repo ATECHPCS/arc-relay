@@ -14,19 +14,19 @@ func sqliteTime(t time.Time) string {
 
 // ArchiveQueueItem represents a queued archive payload awaiting delivery.
 type ArchiveQueueItem struct {
-	ID             string
-	ServerID       string
-	CreatedAt      time.Time
-	Payload        string
-	URL            string
-	AuthType       string
-	AuthValue      string
-	APIKeyHeader   string
-	Status         string // "pending" or "hold"
-	Attempts       int
-	NextAttemptAt  time.Time
-	LastAttemptAt  *time.Time
-	LastError      string
+	ID            string
+	ServerID      string
+	CreatedAt     time.Time
+	Payload       string
+	URL           string
+	AuthType      string
+	AuthValue     string
+	APIKeyHeader  string
+	Status        string // "pending" or "hold"
+	Attempts      int
+	NextAttemptAt time.Time
+	LastAttemptAt *time.Time
+	LastError     string
 }
 
 // ArchiveQueueStatus summarizes the queue state for display.

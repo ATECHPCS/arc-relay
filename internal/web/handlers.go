@@ -1151,9 +1151,9 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 
 	mc := &store.MiddlewareConfig{
 		Middleware: body.Middleware,
-		Enabled:   false, // Global row is config-only; per-server toggles control enabled
-		Config:    body.Config,
-		Priority:  40,
+		Enabled:    false, // Global row is config-only; per-server toggles control enabled
+		Config:     body.Config,
+		Priority:   40,
 	}
 
 	if err := h.middlewareStore.UpsertGlobal(mc); err != nil {

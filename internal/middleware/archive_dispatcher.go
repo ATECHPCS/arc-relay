@@ -14,13 +14,13 @@ import (
 
 // BackoffSchedule defines retry intervals by attempt number.
 var BackoffSchedule = []time.Duration{
-	0,                    // attempt 0: immediate (already tried once at enqueue)
-	15 * time.Second,     // attempt 1
-	1 * time.Minute,      // attempt 2
-	5 * time.Minute,      // attempt 3
-	15 * time.Minute,     // attempt 4
-	1 * time.Hour,        // attempt 5
-	6 * time.Hour,        // attempt 6+ (cap)
+	0,                // attempt 0: immediate (already tried once at enqueue)
+	15 * time.Second, // attempt 1
+	1 * time.Minute,  // attempt 2
+	5 * time.Minute,  // attempt 3
+	15 * time.Minute, // attempt 4
+	1 * time.Hour,    // attempt 5
+	6 * time.Hour,    // attempt 6+ (cap)
 }
 
 var cbPauseDurations = []time.Duration{
@@ -59,8 +59,8 @@ type ArchiveDispatcher struct {
 	stopOnce sync.Once
 
 	// Injectables for testing
-	NowFunc    func() time.Time
-	NewTicker  func(d time.Duration) (<-chan time.Time, func())
+	NowFunc   func() time.Time
+	NewTicker func(d time.Duration) (<-chan time.Time, func())
 }
 
 // NewArchiveDispatcher creates a new dispatcher.
@@ -208,8 +208,8 @@ func (d *ArchiveDispatcher) drainDue() {
 				if d.eventLogger != nil {
 					d.eventLogger(&store.MiddlewareEvent{
 						Middleware: "archive",
-						EventType: "circuit_closed",
-						Summary:   "archive delivery recovered, circuit breaker closed",
+						EventType:  "circuit_closed",
+						Summary:    "archive delivery recovered, circuit breaker closed",
 					})
 				}
 			}
@@ -233,8 +233,8 @@ func (d *ArchiveDispatcher) drainDue() {
 				if d.eventLogger != nil {
 					d.eventLogger(&store.MiddlewareEvent{
 						Middleware: "archive",
-						EventType: "circuit_open",
-						Summary:   fmt.Sprintf("archive delivery failing, circuit breaker opened after %d failures", d.consecutiveFails),
+						EventType:  "circuit_open",
+						Summary:    fmt.Sprintf("archive delivery failing, circuit breaker opened after %d failures", d.consecutiveFails),
 					})
 				}
 				d.mu.Unlock()
@@ -355,8 +355,8 @@ func (d *ArchiveDispatcher) SendTest(cfg ArchiveConfig) (int, error) {
 
 // Status returns a snapshot of the dispatcher and queue state.
 type ArchiveDispatcherStatus struct {
-	CircuitState string                  `json:"circuit_state"`
-	Enabled      bool                    `json:"enabled"`
+	CircuitState string                    `json:"circuit_state"`
+	Enabled      bool                      `json:"enabled"`
 	QueueStatus  *store.ArchiveQueueStatus `json:"queue"`
 }
 

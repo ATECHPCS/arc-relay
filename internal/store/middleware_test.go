@@ -133,9 +133,9 @@ func TestUpsertGlobal_CreateAndUpdate(t *testing.T) {
 	// Create global config
 	mc := &store.MiddlewareConfig{
 		Middleware: "archive",
-		Enabled:   true,
-		Config:    cfg,
-		Priority:  40,
+		Enabled:    true,
+		Config:     cfg,
+		Priority:   40,
 	}
 	if err := mwStore.UpsertGlobal(mc); err != nil {
 		t.Fatalf("UpsertGlobal (create): %v", err)
@@ -170,9 +170,9 @@ func TestUpsertGlobal_NoDuplicates(t *testing.T) {
 
 	mc := &store.MiddlewareConfig{
 		Middleware: "archive",
-		Enabled:   true,
-		Config:    json.RawMessage(`{"url":"https://example.com"}`),
-		Priority:  40,
+		Enabled:    true,
+		Config:     json.RawMessage(`{"url":"https://example.com"}`),
+		Priority:   40,
 	}
 
 	// Call UpsertGlobal twice
@@ -200,9 +200,9 @@ func TestGetForServer_InheritsGlobalConfig(t *testing.T) {
 	// Create global archive config (enabled=false, config-only container)
 	globalMC := &store.MiddlewareConfig{
 		Middleware: "archive",
-		Enabled:   false,
-		Config:    json.RawMessage(`{"url":"https://global.example.com","auth_type":"bearer","auth_value":"globaltoken"}`),
-		Priority:  40,
+		Enabled:    false,
+		Config:     json.RawMessage(`{"url":"https://global.example.com","auth_type":"bearer","auth_value":"globaltoken"}`),
+		Priority:   40,
 	}
 	if err := mwStore.UpsertGlobal(globalMC); err != nil {
 		t.Fatalf("UpsertGlobal: %v", err)
@@ -257,9 +257,9 @@ func TestGetForServer_ServerConfigOverridesGlobal(t *testing.T) {
 	// Create global archive config
 	globalMC := &store.MiddlewareConfig{
 		Middleware: "archive",
-		Enabled:   true,
-		Config:    json.RawMessage(`{"url":"https://global.example.com"}`),
-		Priority:  40,
+		Enabled:    true,
+		Config:     json.RawMessage(`{"url":"https://global.example.com"}`),
+		Priority:   40,
 	}
 	if err := mwStore.UpsertGlobal(globalMC); err != nil {
 		t.Fatalf("UpsertGlobal: %v", err)

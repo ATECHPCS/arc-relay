@@ -85,9 +85,9 @@ func (p *Pipeline) ProcessResponse(ctx context.Context, req *mcp.Request, resp *
 
 // Registry holds middleware factories and builds pipelines from DB configs.
 type Registry struct {
-	factories          map[string]Factory
-	store              *store.MiddlewareStore
-	archiveDispatcher  *ArchiveDispatcher
+	factories         map[string]Factory
+	store             *store.MiddlewareStore
+	archiveDispatcher *ArchiveDispatcher
 }
 
 // Factory creates a middleware instance from a JSON config.
