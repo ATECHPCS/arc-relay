@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/config"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 // newTestHandlers creates a minimal Handlers for CSRF testing.

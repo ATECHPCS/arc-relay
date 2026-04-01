@@ -19,12 +19,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/catalog"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/catalog"
+	"github.com/comma-compliance/arc-relay/internal/config"
+	"github.com/comma-compliance/arc-relay/internal/middleware"
+	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 //go:embed templates/*.html
@@ -287,7 +287,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	// Invite token exchange (no auth — CLI uses the token itself as proof)
 	mux.HandleFunc("/api/auth/invite", h.handleInviteExchange)
 
-	// Binary hosting for mcp-sync CLI
+	// Binary hosting for arc-sync CLI
 	mux.HandleFunc("/install.sh", h.handleInstallScript)
 	mux.HandleFunc("/download/", h.handleDownload)
 }
@@ -1444,7 +1444,7 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Create an API key for the invited user
-	rawKey, _, err := h.users.CreateAPIKey(invite.UserID, "mcp-sync invite", invite.ProfileID)
+	rawKey, _, err := h.users.CreateAPIKey(invite.UserID, "arc-sync invite", invite.ProfileID)
 	if err != nil {
 		log.Printf("Invite exchange: failed to create API key for user %s: %v", invite.UserID, err)
 		http.Error(w, `{"error":"failed to create API key"}`, http.StatusInternalServerError)
@@ -1978,12 +1978,22 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !h.requireAdmin(w, r) {
+		return
+	}
 
 	var body struct {
 		RemoteURL string `json:"remote_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RemoteURL == "" {
 		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+
+	// Validate URL scheme - only allow https to prevent SSRF against internal services
+	parsed, err := url.Parse(body.RemoteURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid URL"})
 		return
 	}
 
@@ -2070,7 +2080,7 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 
 func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Login - MCP Wrangler</title>
+	fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Login - Arc Relay</title>
 <style>body{font-family:system-ui,sans-serif;background:#f8f9fa;color:#212529;}
 .card{background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:1.25rem;max-width:400px;margin:4rem auto;}
 .card h2{font-size:1.1rem;margin-bottom:1rem;}
@@ -2081,7 +2091,7 @@ func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg, next string) {
 .btn:hover{background:#0b5ed7;}
 .alert{background:#f8d7da;color:#842029;padding:.75rem;border-radius:6px;margin-bottom:1rem;font-size:.9rem;}
 </style></head><body>
-<div class="card"><h2>Log in to MCP Wrangler</h2>`)
+<div class="card"><h2>Log in to Arc Relay</h2>`)
 	if errMsg != "" {
 		fmt.Fprintf(w, `<div class="alert">%s</div>`, template.HTMLEscapeString(errMsg))
 	}

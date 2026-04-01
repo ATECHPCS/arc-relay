@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
 )
 
 // parseHTTPResponse reads an MCP response from an HTTP response body,

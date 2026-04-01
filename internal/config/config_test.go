@@ -53,11 +53,11 @@ func TestLoad(t *testing.T) {
 		if cfg.Server.Port != 8080 {
 			t.Errorf("Server.Port = %d, want %d", cfg.Server.Port, 8080)
 		}
-		if cfg.Database.Path != "mcp-wrangler.db" {
-			t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, "mcp-wrangler.db")
+		if cfg.Database.Path != "arc-relay.db" {
+			t.Errorf("Database.Path = %q, want %q", cfg.Database.Path, "arc-relay.db")
 		}
-		if cfg.Docker.Network != "mcp-wrangler" {
-			t.Errorf("Docker.Network = %q, want %q", cfg.Docker.Network, "mcp-wrangler")
+		if cfg.Docker.Network != "arc-relay" {
+			t.Errorf("Docker.Network = %q, want %q", cfg.Docker.Network, "arc-relay")
 		}
 	})
 
@@ -92,12 +92,12 @@ path = "/tmp/test.db"
 	})
 
 	t.Run("env var overrides", func(t *testing.T) {
-		t.Setenv("MCP_WRANGLER_PORT", "4444")
-		t.Setenv("MCP_WRANGLER_BASE_URL", "https://override.example.com")
-		t.Setenv("MCP_WRANGLER_DB_PATH", "/override/db.sqlite")
-		t.Setenv("MCP_WRANGLER_ENCRYPTION_KEY", "secret-key")
-		t.Setenv("MCP_WRANGLER_SESSION_SECRET", "session-secret")
-		t.Setenv("MCP_WRANGLER_ADMIN_PASSWORD", "admin-pass")
+		t.Setenv("ARC_RELAY_PORT", "4444")
+		t.Setenv("ARC_RELAY_BASE_URL", "https://override.example.com")
+		t.Setenv("ARC_RELAY_DB_PATH", "/override/db.sqlite")
+		t.Setenv("ARC_RELAY_ENCRYPTION_KEY", "secret-key")
+		t.Setenv("ARC_RELAY_SESSION_SECRET", "session-secret")
+		t.Setenv("ARC_RELAY_ADMIN_PASSWORD", "admin-pass")
 
 		cfg, err := Load("")
 		if err != nil {

@@ -1,6 +1,7 @@
-# Binary (root only, not cmd/mcp-wrangler/ directory)
-/mcp-wrangler
-!/cmd/mcp-wrangler/
+# Binary (root only, not cmd/arc-relay/ directory)
+/arc-relay
+/arc-sync
+!/cmd/arc-relay/
 
 # Database
 *.db
@@ -31,3 +32,4 @@ config.toml
 *.exe
 # Nightshift plan artifacts (keep out of version control)
 .nightshift-plan
+.claude/worktrees/

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // TokenSet holds OAuth tokens for a server.

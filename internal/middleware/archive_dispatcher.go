@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // BackoffSchedule defines retry intervals by attempt number.
@@ -310,7 +310,7 @@ func isTransient(statusCode int) bool {
 // It shares request-building and error classification with production sends.
 // Returns the HTTP status code (0 on network error) and any error.
 func (d *ArchiveDispatcher) SendTest(cfg ArchiveConfig) (int, error) {
-	testPayload := []byte(`{"version":"v1","source":"mcp_wrangler","phase":"test","meta":{"server_name":"connectivity_test"}}`)
+	testPayload := []byte(`{"version":"v1","source":"arc_relay","phase":"test","meta":{"server_name":"connectivity_test"}}`)
 
 	req, err := http.NewRequest("POST", cfg.URL, bytes.NewReader(testPayload))
 	if err != nil {

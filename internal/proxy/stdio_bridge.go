@@ -9,7 +9,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
 )
 
 // StdioBridge translates between HTTP requests and a stdio MCP server process.

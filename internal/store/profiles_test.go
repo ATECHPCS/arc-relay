@@ -3,8 +3,8 @@ package store_test
 import (
 	"testing"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 func TestProfileCRUD(t *testing.T) {

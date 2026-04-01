@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
 )
 
 // HTTPProxy forwards MCP requests to an HTTP-based MCP server.

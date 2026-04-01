@@ -127,7 +127,7 @@ func FormatChangeSummary(changes []PlannedChange, projectDir string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("mcp-sync: planning changes\n\n")
+	b.WriteString("arc-sync: planning changes\n\n")
 
 	if len(projectChanges) > 0 {
 		b.WriteString("  PROJECT FILES (committed to git):\n")

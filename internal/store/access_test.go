@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/JeremiahChurch/mcp-wrangler/migrations"
+	"github.com/comma-compliance/arc-relay/migrations"
 )
 
 // openTestDB creates a file-based SQLite database in a temp directory.

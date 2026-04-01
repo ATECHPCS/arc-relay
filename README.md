@@ -1,88 +1,116 @@
-# MCP Wrangler
+# Arc Relay
 
-A management proxy for [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) servers. MCP Wrangler sits between your AI tools (Claude Code, Claude Desktop, etc.) and your MCP servers, providing a single authenticated endpoint that handles Docker container lifecycle, health monitoring, and multi-transport proxying.
+An open-source MCP (Model Context Protocol) control plane. Arc Relay sits between your AI tools and MCP servers, providing auth, policy controls, traffic interception, and archiving - not just proxying.
+
+```
+AI Clients                Arc Relay                    MCP Servers
+ (Claude Code,     +-----------------------+      +----------------+
+  Cursor, etc.)    |  Auth & API Keys      |      | Docker stdio   |
+       |           |  Middleware Pipeline   |----->| Docker HTTP    |
+       +---------->|    Sanitizer (PII)     |      | Remote (OAuth) |
+       |  POST     |    Sizer (limits)      |<-----+----------------+
+       |  /mcp/    |    Alerter (rules)     |
+       |  {name}   |    Archive (webhook)   |
+       |           |  Health Monitor        |
+       +---------->|  Web UI + REST API     |
+                   +-----------------------+
+```
 
 ## Features
 
-- **Unified proxy** — expose all your MCP servers through one endpoint (`/mcp/{server-name}`)
-- **Multi-transport** — supports stdio (Docker), HTTP (Docker or external), and remote (SSE/Streamable HTTP) backends
-- **Docker lifecycle management** — automatically starts, stops, and monitors containers for stdio and HTTP MCP servers
-- **Web UI** — manage servers, users, and API keys from a browser dashboard
-- **API key authentication** — issue Bearer tokens to control access to proxied MCP servers
-- **Endpoint enumeration** — discovers tools, prompts, and resources exposed by each MCP server
-- **Access tiers** — per-endpoint risk-based access control (read/write/admin) with auto-classification
-- **OAuth support** — PKCE authorization flows for remote servers (e.g., Sentry MCP), with automatic token refresh
-- **Request logging** — per-endpoint call counts, error tracking, and recent activity dashboard
-- **Health monitoring** — periodic health checks with automatic recovery for remote and external HTTP servers
-- **Credential encryption** — AES-GCM encryption at rest for server configs (tokens, API keys, env vars)
-- **Rate limiting** — per-user token bucket rate limiting on proxy endpoints
+- **Unified proxy** - all MCP servers behind one endpoint (`/mcp/{server-name}`)
+- **Middleware pipeline** - bidirectional request/response processing (sanitizer, sizer, alerter, archive)
+- **Archive with encryption** - stream tool calls to any webhook, optionally encrypted with NaCl Box
+- **Docker lifecycle** - auto-start, stop, health check, and recover containers
+- **Multi-transport** - stdio (Docker), HTTP (Docker/external), remote (SSE/OAuth)
+- **Auth** - session cookies (web UI) + Bearer API keys (proxy) + OAuth 2.1 (remote servers)
+- **Access tiers** - per-endpoint risk-based access control with auto-classification
+- **Web UI** - manage servers, users, API keys, middleware, and logs
+- **CLI tool** (`arc-sync`) - sync MCP servers to Claude Code projects via `.mcp.json`
+- **Health monitoring** - periodic pings with auto-recovery for failed servers
 
-## Quick Start (Docker Compose)
+## Quick Start
+
+### Docker Compose
 
 ```bash
-# Clone and configure
-git clone https://github.com/JeremiahChurch/mcp-wrangler.git
-cd mcp-wrangler
+git clone https://github.com/comma-compliance/arc-relay.git
+cd arc-relay
 cp .env.example .env
-# Edit .env — change the encryption key, session secret, and admin password
+# Edit .env - change encryption key, session secret, and admin password
 
-# Start
 docker compose up -d
-
-# Open the web UI
 open http://localhost:8080
 ```
 
-Log in with username `admin` and the password you set in `.env`.
+### From Source
 
-## Building from Source
-
-Requires Go 1.24+, GCC, and SQLite dev headers (see [CONTRIBUTING.md](CONTRIBUTING.md) for platform-specific instructions).
+Requires Go 1.24+, GCC, and SQLite dev headers.
 
 ```bash
 make build
-./mcp-wrangler --config config.example.toml
+./arc-relay --config config.example.toml
 ```
+
+Log in with username `admin` and the password from your `.env` or config.
 
 ## Configuration
 
-MCP Wrangler reads a TOML config file and environment variables. See [`config.example.toml`](config.example.toml) for all options.
-
-Key environment variables (also settable in `.env`):
+Arc Relay reads a TOML config file with environment variable overrides. See [`config.example.toml`](config.example.toml).
 
 | Variable | Purpose |
 |---|---|
-| `MCP_WRANGLER_ENCRYPTION_KEY` | Encrypts stored credentials |
-| `MCP_WRANGLER_SESSION_SECRET` | Signs web UI session cookies |
-| `MCP_WRANGLER_ADMIN_PASSWORD` | Initial admin password (first run only) |
-| `MCP_WRANGLER_DB_PATH` | SQLite database path |
+| `ARC_RELAY_ENCRYPTION_KEY` | Encrypts stored credentials (generate: `openssl rand -hex 32`) |
+| `ARC_RELAY_SESSION_SECRET` | Signs web UI session cookies |
+| `ARC_RELAY_ADMIN_PASSWORD` | Initial admin password (first run only) |
+| `ARC_RELAY_DB_PATH` | SQLite database path (default: `arc-relay.db`) |
+| `ARC_RELAY_BASE_URL` | Public URL for OAuth callbacks |
 
-## Architecture
+## Adding Servers to Claude Code
 
-MCP Wrangler supports three server types:
+Install the CLI and sync your project:
 
-- **stdio** — runs an MCP server in a Docker container, communicating over stdin/stdout (JSON-RPC). Best for servers that use the stdio transport (e.g., Python FastMCP servers).
-- **http** — runs an MCP server in a Docker container that exposes an HTTP port. MCP Wrangler proxies requests to the container.
-- **remote** — proxies to an externally hosted MCP server (SSE or Streamable HTTP). No container management — just auth and proxying.
+```bash
+arc-sync init https://your-relay:8080
+arc-sync add my-server
+```
 
-All server types are accessed through the same unified endpoint: `POST /mcp/{server-name}`.
-
-## Adding an MCP Server to Claude Code
-
-Once MCP Wrangler is running with servers configured, point Claude Code at the proxy:
+Or add manually:
 
 ```bash
 claude mcp add --transport http my-server \
-  http://localhost:8080/mcp/my-server \
+  https://your-relay:8080/mcp/my-server \
   --header "Authorization: Bearer YOUR_API_KEY"
 ```
 
-Generate API keys from the web UI under **API Keys**.
+## Middleware Pipeline
+
+Arc Relay's middleware processes MCP traffic bidirectionally:
+
+| Middleware | Purpose | Actions |
+|---|---|---|
+| **Sanitizer** | Redact PII and secrets from responses | redact, block |
+| **Sizer** | Enforce response size limits | truncate, warn, block |
+| **Alerter** | Pattern and size-based alerting | log, webhook |
+| **Archive** | Stream requests/responses to a webhook | POST with optional NaCl encryption |
+
+Configure middleware per-server via the web UI or API. The archive middleware supports NaCl Box encryption (X25519 + XSalsa20-Poly1305) for defense-in-depth on top of TLS.
+
+## Connect to Comma Compliance Arc
+
+Arc Relay works standalone as a self-hosted MCP control plane. Optionally connect to [Comma Compliance Arc](https://commacompliance.ai) for managed compliance policies, audit trails, and enterprise reporting.
+
+Configure the archive middleware to point at your Comma Compliance webhook endpoint. See the web UI's "Compliance Archive" section for setup.
 
 ## Documentation
 
-See [`docs/SPEC.md`](docs/SPEC.md) for the full specification, including server configuration examples, proxy behavior, and the access control model.
+- [AGENTS.md](AGENTS.md) - AI contributor guide (project structure, key abstractions)
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Development setup, PR process
+- [SECURITY.md](SECURITY.md) - Vulnerability reporting
+- [docs/SPEC.md](docs/SPEC.md) - Full technical specification
 
 ## License
 
-MCP Wrangler is licensed under the [GNU Affero General Public License v3.0](LICENSE).
+Arc Relay is licensed under the [MIT License](LICENSE).
+
+Built by [Comma Compliance](https://commacompliance.ai).

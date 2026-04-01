@@ -112,7 +112,7 @@ func (b *StdioBuildConfig) BuildImageTag() string {
 	if version == "" {
 		version = "latest"
 	}
-	return fmt.Sprintf("mcp-wrangler-build/%s:%s", name, version)
+	return fmt.Sprintf("arc-relay-build/%s:%s", name, version)
 }
 
 // repoNameFromURL extracts the repository name from a git URL.

@@ -15,7 +15,7 @@ func TestClassifyPath(t *testing.T) {
 		want       FileScope
 	}{
 		{"file in project", "/home/user/project/.mcp.json", "/home/user/project", ScopeProject},
-		{"file outside project", "/home/user/.config/mcp-sync/config.json", "/home/user/project", ScopeUser},
+		{"file outside project", "/home/user/.config/arc-sync/config.json", "/home/user/project", ScopeUser},
 		{"nested file in project", "/home/user/project/sub/dir/file", "/home/user/project", ScopeProject},
 		{"sibling directory", "/home/user/other-project/file", "/home/user/project", ScopeUser},
 	}
@@ -129,7 +129,7 @@ func TestCheckGitignoreWithComments(t *testing.T) {
 func TestFormatChangeSummary(t *testing.T) {
 	changes := []PlannedChange{
 		{Path: "/home/user/project/.mcp.json", Description: "adding 2 servers", Scope: ScopeProject},
-		{Path: "/home/user/.config/mcp-sync/state.json", Description: "updating skip list", Scope: ScopeUser},
+		{Path: "/home/user/.config/arc-sync/state.json", Description: "updating skip list", Scope: ScopeUser},
 	}
 
 	output := FormatChangeSummary(changes, "/home/user/project")

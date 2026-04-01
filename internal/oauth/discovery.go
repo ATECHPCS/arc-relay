@@ -63,7 +63,7 @@ func DiscoverOAuth(ctx context.Context, serverURL string) (*OAuthDiscovery, erro
 // RegisterClient performs dynamic client registration at the given endpoint.
 func RegisterClient(ctx context.Context, registrationEndpoint, callbackURL string) (*ClientRegistration, error) {
 	body := map[string]any{
-		"client_name":                "MCP Wrangler",
+		"client_name":                "Arc Relay",
 		"redirect_uris":              []string{callbackURL},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},

@@ -60,11 +60,11 @@ func Load(path string) (*Config, error) {
 			Port: 8080,
 		},
 		Database: DatabaseConfig{
-			Path: "mcp-wrangler.db",
+			Path: "arc-relay.db",
 		},
 		Docker: DockerConfig{
 			Socket:  "unix:///var/run/docker.sock",
-			Network: "mcp-wrangler",
+			Network: "arc-relay",
 		},
 	}
 
@@ -75,25 +75,25 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Environment variable overrides
-	if v := os.Getenv("MCP_WRANGLER_ENCRYPTION_KEY"); v != "" {
+	if v := os.Getenv("ARC_RELAY_ENCRYPTION_KEY"); v != "" {
 		cfg.Encryption.Key = v
 	}
-	if v := os.Getenv("MCP_WRANGLER_SESSION_SECRET"); v != "" {
+	if v := os.Getenv("ARC_RELAY_SESSION_SECRET"); v != "" {
 		cfg.Auth.SessionSecret = v
 	}
-	if v := os.Getenv("MCP_WRANGLER_ADMIN_PASSWORD"); v != "" {
+	if v := os.Getenv("ARC_RELAY_ADMIN_PASSWORD"); v != "" {
 		cfg.Auth.AdminPassword = v
 	}
-	if v := os.Getenv("MCP_WRANGLER_DB_PATH"); v != "" {
+	if v := os.Getenv("ARC_RELAY_DB_PATH"); v != "" {
 		cfg.Database.Path = v
 	}
-	if v := os.Getenv("MCP_WRANGLER_BASE_URL"); v != "" {
+	if v := os.Getenv("ARC_RELAY_BASE_URL"); v != "" {
 		cfg.Server.BaseURL = v
 	}
-	if v := os.Getenv("MCP_WRANGLER_SENTRY_DSN"); v != "" {
+	if v := os.Getenv("ARC_RELAY_SENTRY_DSN"); v != "" {
 		cfg.SentryDSN = v
 	}
-	if v := os.Getenv("MCP_WRANGLER_PORT"); v != "" {
+	if v := os.Getenv("ARC_RELAY_PORT"); v != "" {
 		var port int
 		if _, err := fmt.Sscanf(v, "%d", &port); err == nil {
 			cfg.Server.Port = port

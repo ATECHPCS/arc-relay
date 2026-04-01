@@ -13,16 +13,16 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/web"
+	"github.com/comma-compliance/arc-relay/internal/config"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/middleware"
+	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/web"
 )
 
-// Server is the main HTTP server for MCP Wrangler.
+// Server is the main HTTP server for Arc Relay.
 type Server struct {
 	cfg             *config.Config
 	servers         *store.ServerStore
@@ -115,7 +115,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ListenAndServe() error {
 	addr := s.cfg.Addr()
-	log.Printf("MCP Wrangler listening on %s", addr)
+	log.Printf("Arc Relay listening on %s", addr)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           s,

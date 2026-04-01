@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	dockermgr "github.com/JeremiahChurch/mcp-wrangler/internal/docker"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	dockermgr "github.com/comma-compliance/arc-relay/internal/docker"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // Backend is the interface for sending MCP requests to a backend server.
@@ -285,7 +285,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 		return fmt.Errorf("invalid git URL: %w", err)
 	}
 
-	tmpDir, err := os.MkdirTemp("", "mcp-wrangler-git-*")
+	tmpDir, err := os.MkdirTemp("", "arc-relay-git-*")
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}

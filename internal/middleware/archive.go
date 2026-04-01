@@ -7,17 +7,18 @@ import (
 	"log"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // ArchiveConfig configures the archive middleware.
 type ArchiveConfig struct {
-	URL          string `json:"url"`                      // Target URL to POST archived data
-	AuthType     string `json:"auth_type"`                // "none", "bearer", "api_key"
-	AuthValue    string `json:"auth_value"`               // Token/key value
-	APIKeyHeader string `json:"api_key_header,omitempty"` // Header name for api_key auth (default: X-API-Key)
-	Include      string `json:"include"`                  // "request", "response", "both"
+	URL              string `json:"url"`                                 // Target URL to POST archived data
+	AuthType         string `json:"auth_type"`                           // "none", "bearer", "api_key"
+	AuthValue        string `json:"auth_value"`                          // Token/key value
+	APIKeyHeader     string `json:"api_key_header,omitempty"`            // Header name for api_key auth (default: X-API-Key)
+	Include          string `json:"include"`                             // "request", "response", "both"
+	NaClRecipientKey string `json:"nacl_recipient_key,omitempty"`        // Base64-encoded Curve25519 public key for NaCl Box encryption
 }
 
 // DefaultArchiveConfig returns sensible defaults.
@@ -126,7 +127,7 @@ func (a *Archive) ProcessResponse(ctx context.Context, req *mcp.Request, resp *m
 func (a *Archive) buildPayload(phase string, meta *RequestMeta, reqJSON, respJSON json.RawMessage) []byte {
 	p := archivePayload{
 		Version:   "v1",
-		Source:    "mcp_wrangler",
+		Source:    "arc_relay",
 		Phase:     phase,
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Meta: archiveMeta{
@@ -146,7 +147,21 @@ func (a *Archive) buildPayload(phase string, meta *RequestMeta, reqJSON, respJSO
 }
 
 func (a *Archive) enqueue(body []byte, meta *RequestMeta) {
-	if err := a.dispatcher.EnqueueWithServer(body, a.cfg, meta.ServerID); err != nil {
+	payload := body
+	if a.cfg.NaClRecipientKey != "" {
+		recipientKey, err := decodeRecipientKey(a.cfg.NaClRecipientKey)
+		if err != nil {
+			log.Printf("archive: invalid nacl_recipient_key: %v", err)
+			return
+		}
+		encrypted, err := encryptPayload(payload, recipientKey)
+		if err != nil {
+			log.Printf("archive: encryption failed: %v", err)
+			return
+		}
+		payload = encrypted
+	}
+	if err := a.dispatcher.EnqueueWithServer(payload, a.cfg, meta.ServerID); err != nil {
 		log.Printf("archive: failed to enqueue: %v", err)
 		if a.eventLogger != nil {
 			a.eventLogger(&store.MiddlewareEvent{

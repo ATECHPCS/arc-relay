@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-const testWranglerURL = "http://10.10.69.50:8080"
+const testRelayURL = "http://10.10.69.50:8080"
 
 func TestClaudeCodeTargetName(t *testing.T) {
 	target := &ClaudeCodeTarget{}
@@ -47,7 +47,7 @@ func TestClaudeCodeTargetReadEmpty(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0644)
 
 	target := &ClaudeCodeTarget{}
-	servers, err := target.Read(dir, testWranglerURL)
+	servers, err := target.Read(dir, testRelayURL)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestClaudeCodeTargetReadNoFile(t *testing.T) {
 	dir := t.TempDir()
 
 	target := &ClaudeCodeTarget{}
-	servers, err := target.Read(dir, testWranglerURL)
+	servers, err := target.Read(dir, testRelayURL)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestClaudeCodeTargetReadNoFile(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeTargetReadWranglerServers(t *testing.T) {
+func TestClaudeCodeTargetReadRelayServers(t *testing.T) {
 	dir := t.TempDir()
 	mcpJSON := `{
   "mcpServers": {
@@ -93,13 +93,13 @@ func TestClaudeCodeTargetReadWranglerServers(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644)
 
 	target := &ClaudeCodeTarget{}
-	servers, err := target.Read(dir, testWranglerURL)
+	servers, err := target.Read(dir, testRelayURL)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 
 	if len(servers) != 2 {
-		t.Fatalf("expected 2 wrangler servers, got %d", len(servers))
+		t.Fatalf("expected 2 relay servers, got %d", len(servers))
 	}
 
 	names := map[string]bool{}
@@ -107,10 +107,10 @@ func TestClaudeCodeTargetReadWranglerServers(t *testing.T) {
 		names[s.Name] = true
 	}
 	if !names["sentry"] {
-		t.Error("expected sentry in wrangler servers")
+		t.Error("expected sentry in relay servers")
 	}
 	if !names["pfsense"] {
-		t.Error("expected pfsense in wrangler servers")
+		t.Error("expected pfsense in relay servers")
 	}
 }
 
@@ -122,7 +122,7 @@ func TestClaudeCodeTargetWriteNewFile(t *testing.T) {
 		{Name: "sentry", URL: "http://10.10.69.50:8080/mcp/sentry"},
 	}
 
-	err := target.Write(dir, testWranglerURL, "test-key", servers)
+	err := target.Write(dir, testRelayURL, "test-key", servers)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestClaudeCodeTargetWritePreservesExisting(t *testing.T) {
 		{Name: "sentry", URL: "http://10.10.69.50:8080/mcp/sentry"},
 	}
 
-	err := target.Write(dir, testWranglerURL, "key", servers)
+	err := target.Write(dir, testRelayURL, "key", servers)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestClaudeCodeTargetWriteMultipleServers(t *testing.T) {
 		{Name: "shortcut", URL: "http://10.10.69.50:8080/mcp/shortcut"},
 	}
 
-	err := target.Write(dir, testWranglerURL, "key", servers)
+	err := target.Write(dir, testRelayURL, "key", servers)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -246,8 +246,8 @@ func TestClaudeCodeTargetWriteIdempotent(t *testing.T) {
 	}
 
 	// Write twice
-	target.Write(dir, testWranglerURL, "key", servers)
-	target.Write(dir, testWranglerURL, "key", servers)
+	target.Write(dir, testRelayURL, "key", servers)
+	target.Write(dir, testRelayURL, "key", servers)
 
 	data, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
 	var raw map[string]json.RawMessage
@@ -261,7 +261,7 @@ func TestClaudeCodeTargetWriteIdempotent(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeTargetReadDifferentWrangler(t *testing.T) {
+func TestClaudeCodeTargetReadDifferentRelay(t *testing.T) {
 	dir := t.TempDir()
 	mcpJSON := `{
   "mcpServers": {
@@ -275,13 +275,13 @@ func TestClaudeCodeTargetReadDifferentWrangler(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644)
 
 	target := &ClaudeCodeTarget{}
-	// Read with a different wrangler URL — should not match
-	servers, err := target.Read(dir, "http://other-wrangler:9090")
+	// Read with a different relay URL — should not match
+	servers, err := target.Read(dir, "http://other-relay:9090")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 
 	if len(servers) != 0 {
-		t.Errorf("expected 0 servers for different wrangler URL, got %d", len(servers))
+		t.Errorf("expected 0 servers for different relay URL, got %d", len(servers))
 	}
 }

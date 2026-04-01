@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"log"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // Middleware processes MCP messages flowing through the proxy.
