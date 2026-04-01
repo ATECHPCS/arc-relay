@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
@@ -88,6 +90,22 @@ func (s *Server) routes() {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s %s", r.Method, r.URL.Path)
+
+	hub := sentry.GetHubFromContext(r.Context())
+	if hub == nil {
+		hub = sentry.CurrentHub().Clone()
+	}
+	hub.Scope().SetRequest(r)
+
+	defer func() {
+		if rv := recover(); rv != nil {
+			hub.RecoverWithContext(r.Context(), rv)
+			sentry.Flush(2 * time.Second)
+			log.Printf("Panic recovered in %s %s: %v", r.Method, r.URL.Path, rv)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")

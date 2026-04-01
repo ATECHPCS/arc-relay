@@ -13,6 +13,7 @@ type Config struct {
 	Docker     DockerConfig     `toml:"docker"`
 	Encryption EncryptionConfig `toml:"encryption"`
 	Auth       AuthConfig       `toml:"auth"`
+	SentryDSN  string           `toml:"sentry_dsn"`
 }
 
 type ServerConfig struct {
@@ -88,6 +89,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("MCP_WRANGLER_BASE_URL"); v != "" {
 		cfg.Server.BaseURL = v
+	}
+	if v := os.Getenv("MCP_WRANGLER_SENTRY_DSN"); v != "" {
+		cfg.SentryDSN = v
 	}
 	if v := os.Getenv("MCP_WRANGLER_PORT"); v != "" {
 		var port int

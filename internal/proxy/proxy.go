@@ -520,6 +520,38 @@ func (m *Manager) PullAndRecreateContainer(ctx context.Context, srv *store.Serve
 	return m.RecreateContainer(ctx, srv)
 }
 
+// RecreateWithProgress performs a recreate (optionally with pull) and reports
+// progress via a callback. Each call to progress sends a status message to
+// the caller (e.g. for SSE streaming to the browser).
+func (m *Manager) RecreateWithProgress(ctx context.Context, srv *store.Server, pull bool, progress func(string)) error {
+	if pull {
+		image := serverImageRef(srv)
+		if image == "" {
+			return fmt.Errorf("server has no Docker image configured")
+		}
+		progress("Pulling latest image: " + image)
+		if err := m.docker.PullImage(ctx, image); err != nil {
+			return fmt.Errorf("pulling image: %w", err)
+		}
+		progress("Image pulled successfully")
+	}
+
+	progress("Stopping container...")
+	m.StopServer(ctx, srv.ID)
+
+	updated, err := m.servers.Get(srv.ID)
+	if err != nil || updated == nil {
+		return fmt.Errorf("failed to refresh server: %w", err)
+	}
+
+	progress("Starting new container...")
+	if err := m.StartServer(ctx, updated); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // serverImageRef extracts the Docker image reference from a server's config.
 func serverImageRef(srv *store.Server) string {
 	switch srv.ServerType {
@@ -530,7 +562,7 @@ func serverImageRef(srv *store.Server) string {
 		}
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
-		if err := json.Unmarshal(srv.Config, &cfg); err == nil {
+		if err := json.Unmarshal(srv.Config, &cfg); err == nil && cfg.URL == "" {
 			return cfg.Image
 		}
 	}

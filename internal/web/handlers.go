@@ -648,7 +648,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 	case "":
 		h.handleServerDetail(w, r, id)
 	case "edit", "start", "stop", "delete", "enumerate", "rebuild",
-		"rebuild-restart", "recreate", "access-tier", "middleware", "health-check":
+		"rebuild-restart", "recreate", "recreate-stream",
+		"access-tier", "middleware", "health-check":
 		if !h.requireAdmin(w, r) {
 			return
 		}
@@ -669,6 +670,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 			h.handleServerRebuildRestart(w, r, id)
 		case "recreate":
 			h.handleServerRecreate(w, r, id)
+		case "recreate-stream":
+			h.handleRecreateStream(w, r, id)
 		case "access-tier":
 			h.handleAccessTier(w, r, id)
 		case "middleware":
@@ -1013,6 +1016,47 @@ func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, 
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
 
+func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	srv, _ := h.servers.Get(id)
+	if srv == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	send := func(msg string) {
+		fmt.Fprintf(w, "data: %s\n\n", msg)
+		flusher.Flush()
+	}
+
+	pull := r.FormValue("pull") == "1"
+	err := h.proxy.RecreateWithProgress(r.Context(), srv, pull, send)
+	if err != nil {
+		log.Printf("Error recreating container for server %s: %v", srv.Name, err)
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	if h.healthMon != nil {
+		h.healthMon.ResetRecoveryState(id)
+	}
+	fmt.Fprintf(w, "event: done\ndata: Container recreated successfully\n\n")
+	flusher.Flush()
+}
 
 // --- Access Tiers ---
 
@@ -2329,11 +2373,11 @@ func serverToFormData(srv *store.Server) map[string]any {
 	return data
 }
 
-// truncateImageID shortens a Docker image ID for display.
-// "sha256:abc123def456..." becomes "sha256:abc123def456".
+// truncateImageID shortens a Docker image ID for display, matching
+// Docker's standard short-ID format (12 hex chars, no sha256: prefix).
 func truncateImageID(id string) string {
-	if strings.HasPrefix(id, "sha256:") && len(id) > 19 {
-		return id[:19] // "sha256:" (7) + 12 hex chars
+	if strings.HasPrefix(id, "sha256:") {
+		id = id[len("sha256:"):]
 	}
 	if len(id) > 12 {
 		return id[:12]
