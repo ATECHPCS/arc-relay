@@ -1,6 +1,8 @@
-# Binary (root only, not cmd/arc-relay/ directory)
+# Binaries (root only, not cmd/ directories)
 /arc-relay
 /arc-sync
+/mcp-wrangler
+/mcp-sync
 !/cmd/arc-relay/
 
 # Database
