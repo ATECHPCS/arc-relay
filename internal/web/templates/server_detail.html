@@ -20,6 +20,13 @@
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline" style="border-color:#e6a817;color:#664d03">Recreate Container</button>
     </form>
+    {{else if and .ConfigDisplay.IsDocker (not .ConfigDisplay.HasBuildConfig)}}
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
+          onsubmit="return confirm('This will pull the latest image from the registry, then stop and recreate the container. Continue?')">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="pull" value="1">
+      <button type="submit" class="btn btn-outline" style="border-color:#0d6efd;color:#0d6efd">Pull &amp; Recreate</button>
+    </form>
     {{end}}
     {{else if eq (printf "%s" .Server.Status) "error"}}
     <form method="POST" action="/servers/{{.Server.ID}}/start" style="display:inline">
@@ -128,17 +135,27 @@
     {{if .ConfigDisplay.ImageStale}}
     <dt>Image Status</dt>
     <dd>
-      <span class="badge" style="background:#fff3cd;color:#664d03">Image Updated</span>
+      <span class="badge" style="background:#fff3cd;color:#664d03">Update Available</span>
       <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">Recreate container to use the latest image</span>
     </dd>
+    <dt>Container Image</dt><dd><code>{{.ConfigDisplay.ContainerIDShort}}</code></dd>
+    <dt>Latest Image</dt><dd><code>{{.ConfigDisplay.ImageIDShort}}</code></dd>
     {{end}}
   </div>
-  {{if and .ConfigDisplay.IsDocker (eq (printf "%s" .Server.Status) "running")}}
+  {{if and .ConfigDisplay.IsDocker (not .ConfigDisplay.HasBuildConfig) (eq (printf "%s" .Server.Status) "running")}}
   <div style="margin-top: 0.75rem;">
+    {{if .ConfigDisplay.ImageStale}}
     <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
-          onsubmit="return confirm('This will stop and recreate the container from the current local image. Continue?')">
+          onsubmit="return confirm('This will stop and recreate the container with the updated local image. Continue?')">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <button type="submit" class="btn btn-outline btn-sm">Recreate Container</button>
+      <button type="submit" class="btn btn-primary btn-sm">Recreate Container</button>
+    </form>
+    {{end}}
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
+          onsubmit="return confirm('This will pull the latest image from the registry, then stop and recreate the container. Continue?')">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="pull" value="1">
+      <button type="submit" class="btn btn-outline btn-sm">Pull &amp; Recreate</button>
     </form>
   </div>
   {{end}}

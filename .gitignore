@@ -29,3 +29,5 @@ config.toml
 # Build artifacts
 /dist/
 *.exe
+# Nightshift plan artifacts (keep out of version control)
+.nightshift-plan

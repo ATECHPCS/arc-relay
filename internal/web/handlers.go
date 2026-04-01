@@ -59,11 +59,14 @@ type ConfigDisplay struct {
 	BuildCustom  bool
 	// Image staleness fields
 	ImageID          string // sha256 ID of the current image tag
+	ImageIDShort     string // truncated image ID for display
 	ImageCreated     string // human-readable image creation time
 	ImageAge         string // human-readable age (e.g., "3 days ago")
 	ContainerImageID string // sha256 ID used when container was created
+	ContainerIDShort string // truncated container image ID for display
 	ImageStale       bool   // true if container is running an older image
 	IsDocker         bool   // true if this server uses Docker (has an image)
+	HasBuildConfig   bool   // true if this is a locally-built image (not from registry)
 }
 
 // loginRateLimiter tracks failed login attempts per IP.
@@ -743,6 +746,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			ctx := r.Context()
 			if imgInfo, err := h.proxy.Docker().InspectImage(ctx, cd.Image); err == nil {
 				cd.ImageID = imgInfo.ID
+				cd.ImageIDShort = truncateImageID(imgInfo.ID)
 				if !imgInfo.Created.IsZero() {
 					cd.ImageCreated = imgInfo.Created.Format("2006-01-02 15:04:05")
 					cd.ImageAge = humanizeAge(imgInfo.Created)
@@ -751,6 +755,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			if containerID, ok := h.proxy.GetContainerID(srv.ID); ok {
 				if cImgID, err := h.proxy.Docker().GetContainerImageID(ctx, containerID); err == nil {
 					cd.ContainerImageID = cImgID
+					cd.ContainerIDShort = truncateImageID(cImgID)
 					cd.ImageStale = cd.ImageID != "" && cd.ImageID != cImgID
 				}
 			}
@@ -993,13 +998,21 @@ func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	if err := h.proxy.RecreateContainer(r.Context(), srv); err != nil {
+	pull := r.FormValue("pull") == "1"
+	var err error
+	if pull {
+		err = h.proxy.PullAndRecreateContainer(r.Context(), srv)
+	} else {
+		err = h.proxy.RecreateContainer(r.Context(), srv)
+	}
+	if err != nil {
 		log.Printf("Error recreating container for server %s: %v", srv.Name, err) // #nosec G706
 	} else if h.healthMon != nil {
 		h.healthMon.ResetRecoveryState(id)
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
+
 
 // --- Access Tiers ---
 
@@ -2230,6 +2243,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		cd.EnvVars = cfg.Env
 		if cfg.Build != nil {
 			cd.HasBuild = true
+			cd.HasBuildConfig = true
 			cd.BuildRuntime = cfg.Build.Runtime
 			cd.BuildPackage = cfg.Build.Package
 			cd.BuildVersion = cfg.Build.Version
@@ -2241,7 +2255,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		var cfg store.HTTPConfig
 		json.Unmarshal(srv.Config, &cfg)
 		cd.Image = cfg.Image
-		cd.IsDocker = cfg.Image != "" // Docker-managed if image set (vs external URL)
+		cd.IsDocker = cfg.Image != "" && cfg.URL == "" // Docker-managed only when no external URL
 		cd.Port = cfg.Port
 		cd.URL = cfg.URL
 		cd.HealthCheck = cfg.HealthCheck
@@ -2313,6 +2327,18 @@ func serverToFormData(srv *store.Server) map[string]any {
 		data["OAuthScopes"] = cfg.Auth.Scopes
 	}
 	return data
+}
+
+// truncateImageID shortens a Docker image ID for display.
+// "sha256:abc123def456..." becomes "sha256:abc123def456".
+func truncateImageID(id string) string {
+	if strings.HasPrefix(id, "sha256:") && len(id) > 19 {
+		return id[:19] // "sha256:" (7) + 12 hex chars
+	}
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func humanizeAge(t time.Time) string {

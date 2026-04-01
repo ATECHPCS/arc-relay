@@ -506,6 +506,37 @@ func (m *Manager) RecreateContainer(ctx context.Context, srv *store.Server) erro
 	return m.StartServer(ctx, updated)
 }
 
+// PullAndRecreateContainer pulls the latest image from the registry, then
+// stops the current container and starts a fresh one from the updated image.
+func (m *Manager) PullAndRecreateContainer(ctx context.Context, srv *store.Server) error {
+	image := serverImageRef(srv)
+	if image == "" {
+		return fmt.Errorf("server has no Docker image configured")
+	}
+	log.Printf("Pulling latest image %s for server %s...", image, srv.Name)
+	if err := m.docker.PullImage(ctx, image); err != nil {
+		return fmt.Errorf("pulling image: %w", err)
+	}
+	return m.RecreateContainer(ctx, srv)
+}
+
+// serverImageRef extracts the Docker image reference from a server's config.
+func serverImageRef(srv *store.Server) string {
+	switch srv.ServerType {
+	case store.ServerTypeStdio:
+		var cfg store.StdioConfig
+		if err := json.Unmarshal(srv.Config, &cfg); err == nil {
+			return cfg.Image
+		}
+	case store.ServerTypeHTTP:
+		var cfg store.HTTPConfig
+		if err := json.Unmarshal(srv.Config, &cfg); err == nil {
+			return cfg.Image
+		}
+	}
+	return ""
+}
+
 // StopAll stops all running servers.
 func (m *Manager) StopAll(ctx context.Context) {
 	m.mu.Lock()
