@@ -80,6 +80,12 @@ func NewArchiveFromConfig(config json.RawMessage, logger EventLogger, dispatcher
 	if dispatcher == nil {
 		return nil, fmt.Errorf("archive: dispatcher not available")
 	}
+	// Validate NaCl recipient key at config time so a bad key is caught immediately
+	if cfg.NaClRecipientKey != "" {
+		if _, err := decodeRecipientKey(cfg.NaClRecipientKey); err != nil {
+			return nil, fmt.Errorf("archive: invalid nacl_recipient_key: %w", err)
+		}
+	}
 
 	return &Archive{
 		cfg:         cfg,
@@ -152,11 +158,25 @@ func (a *Archive) enqueue(body []byte, meta *RequestMeta) {
 		recipientKey, err := decodeRecipientKey(a.cfg.NaClRecipientKey)
 		if err != nil {
 			log.Printf("archive: invalid nacl_recipient_key: %v", err)
+			if a.eventLogger != nil {
+				a.eventLogger(&store.MiddlewareEvent{
+					Middleware: "archive",
+					EventType:  "error",
+					Summary:    "archive payload dropped: invalid nacl_recipient_key - " + err.Error(),
+				})
+			}
 			return
 		}
 		encrypted, err := encryptPayload(payload, recipientKey)
 		if err != nil {
 			log.Printf("archive: encryption failed: %v", err)
+			if a.eventLogger != nil {
+				a.eventLogger(&store.MiddlewareEvent{
+					Middleware: "archive",
+					EventType:  "error",
+					Summary:    "archive payload dropped: encryption failed - " + err.Error(),
+				})
+			}
 			return
 		}
 		payload = encrypted

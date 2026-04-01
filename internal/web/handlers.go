@@ -1990,10 +1990,9 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Validate URL scheme - only allow https to prevent SSRF against internal services
-	parsed, err := url.Parse(body.RemoteURL)
-	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid URL"})
+	// Validate URL scheme and block private/loopback hosts to prevent SSRF
+	if err := validateExternalURL(body.RemoteURL); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -2003,15 +2002,20 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// If a registration endpoint is available, try dynamic client registration
+	// If a registration endpoint is available, try dynamic client registration.
+	// Validate the endpoint URL to prevent SSRF via adversarial discovery responses.
 	if discovery.RegistrationEndpoint != "" {
-		reg, err := oauth.RegisterClient(r.Context(), discovery.RegistrationEndpoint, h.oauth.CallbackURL())
-		if err != nil {
-			log.Printf("Dynamic client registration failed: %v", err)
-		} else if reg != nil {
-			discovery.ClientID = reg.ClientID
-			discovery.ClientSecret = reg.ClientSecret
-			discovery.RegisteredRedirectURI = h.oauth.CallbackURL()
+		if err := validateExternalURL(discovery.RegistrationEndpoint); err != nil {
+			log.Printf("Registration endpoint blocked by SSRF check: %s", discovery.RegistrationEndpoint)
+		} else {
+			reg, err := oauth.RegisterClient(r.Context(), discovery.RegistrationEndpoint, h.oauth.CallbackURL())
+			if err != nil {
+				log.Printf("Dynamic client registration failed: %v", err)
+			} else if reg != nil {
+				discovery.ClientID = reg.ClientID
+				discovery.ClientSecret = reg.ClientSecret
+				discovery.RegisteredRedirectURI = h.oauth.CallbackURL()
+			}
 		}
 	}
 
@@ -2532,6 +2536,29 @@ func validateServerURL(rawURL string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("URL must include a host")
+	}
+	return nil
+}
+
+// validateExternalURL checks that a URL is safe to make outbound requests to.
+// Rejects non-HTTPS schemes and private/loopback IP ranges to prevent SSRF.
+func validateExternalURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL")
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("only https URLs are allowed")
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid URL")
+	}
+	host := parsed.Hostname()
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("private/loopback addresses are not allowed")
+		}
 	}
 	return nil
 }
