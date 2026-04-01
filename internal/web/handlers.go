@@ -59,11 +59,14 @@ type ConfigDisplay struct {
 	BuildCustom  bool
 	// Image staleness fields
 	ImageID          string // sha256 ID of the current image tag
+	ImageIDShort     string // truncated image ID for display
 	ImageCreated     string // human-readable image creation time
 	ImageAge         string // human-readable age (e.g., "3 days ago")
 	ContainerImageID string // sha256 ID used when container was created
+	ContainerIDShort string // truncated container image ID for display
 	ImageStale       bool   // true if container is running an older image
 	IsDocker         bool   // true if this server uses Docker (has an image)
+	HasBuildConfig   bool   // true if this is a locally-built image (not from registry)
 }
 
 // loginRateLimiter tracks failed login attempts per IP.
@@ -645,7 +648,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 	case "":
 		h.handleServerDetail(w, r, id)
 	case "edit", "start", "stop", "delete", "enumerate", "rebuild",
-		"rebuild-restart", "recreate", "access-tier", "middleware", "health-check":
+		"rebuild-restart", "recreate", "recreate-stream",
+		"access-tier", "middleware", "health-check":
 		if !h.requireAdmin(w, r) {
 			return
 		}
@@ -666,6 +670,8 @@ func (h *Handlers) handleServerRoutes(w http.ResponseWriter, r *http.Request) {
 			h.handleServerRebuildRestart(w, r, id)
 		case "recreate":
 			h.handleServerRecreate(w, r, id)
+		case "recreate-stream":
+			h.handleRecreateStream(w, r, id)
 		case "access-tier":
 			h.handleAccessTier(w, r, id)
 		case "middleware":
@@ -743,6 +749,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			ctx := r.Context()
 			if imgInfo, err := h.proxy.Docker().InspectImage(ctx, cd.Image); err == nil {
 				cd.ImageID = imgInfo.ID
+				cd.ImageIDShort = truncateImageID(imgInfo.ID)
 				if !imgInfo.Created.IsZero() {
 					cd.ImageCreated = imgInfo.Created.Format("2006-01-02 15:04:05")
 					cd.ImageAge = humanizeAge(imgInfo.Created)
@@ -751,6 +758,7 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			if containerID, ok := h.proxy.GetContainerID(srv.ID); ok {
 				if cImgID, err := h.proxy.Docker().GetContainerImageID(ctx, containerID); err == nil {
 					cd.ContainerImageID = cImgID
+					cd.ContainerIDShort = truncateImageID(cImgID)
 					cd.ImageStale = cd.ImageID != "" && cd.ImageID != cImgID
 				}
 			}
@@ -993,12 +1001,65 @@ func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	if err := h.proxy.RecreateContainer(r.Context(), srv); err != nil {
+	pull := r.FormValue("pull") == "1"
+	var err error
+	if pull {
+		err = h.proxy.PullAndRecreateContainer(r.Context(), srv)
+	} else {
+		err = h.proxy.RecreateContainer(r.Context(), srv)
+	}
+	if err != nil {
 		log.Printf("Error recreating container for server %s: %v", srv.Name, err) // #nosec G706
 	} else if h.healthMon != nil {
 		h.healthMon.ResetRecoveryState(id)
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
+}
+
+func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	srv, _ := h.servers.Get(id)
+	if srv == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	send := func(msg string) {
+		fmt.Fprintf(w, "data: %s\n\n", msg)
+		flusher.Flush()
+	}
+
+	pull := r.FormValue("pull") == "1"
+	err := h.proxy.RecreateWithProgress(r.Context(), srv, pull, send)
+	if err != nil {
+		log.Printf("Error recreating container for server %s: %v", srv.Name, err)
+		// Sanitize error for SSE output to satisfy gosec G705 (XSS taint).
+		// SSE data is consumed by JS, not rendered as HTML, but we sanitize anyway.
+		safeErr := strings.ReplaceAll(err.Error(), "<", "&lt;")
+		safeErr = strings.ReplaceAll(safeErr, ">", "&gt;")
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", safeErr) // #nosec G705
+		flusher.Flush()
+		return
+	}
+
+	if h.healthMon != nil {
+		h.healthMon.ResetRecoveryState(id)
+	}
+	fmt.Fprintf(w, "event: done\ndata: Container recreated successfully\n\n")
+	flusher.Flush()
 }
 
 // --- Access Tiers ---
@@ -2230,6 +2291,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		cd.EnvVars = cfg.Env
 		if cfg.Build != nil {
 			cd.HasBuild = true
+			cd.HasBuildConfig = true
 			cd.BuildRuntime = cfg.Build.Runtime
 			cd.BuildPackage = cfg.Build.Package
 			cd.BuildVersion = cfg.Build.Version
@@ -2241,7 +2303,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		var cfg store.HTTPConfig
 		json.Unmarshal(srv.Config, &cfg)
 		cd.Image = cfg.Image
-		cd.IsDocker = cfg.Image != "" // Docker-managed if image set (vs external URL)
+		cd.IsDocker = cfg.Image != "" && cfg.URL == "" // Docker-managed only when no external URL
 		cd.Port = cfg.Port
 		cd.URL = cfg.URL
 		cd.HealthCheck = cfg.HealthCheck
@@ -2313,6 +2375,16 @@ func serverToFormData(srv *store.Server) map[string]any {
 		data["OAuthScopes"] = cfg.Auth.Scopes
 	}
 	return data
+}
+
+// truncateImageID shortens a Docker image ID for display, matching
+// Docker's standard short-ID format (12 hex chars, no sha256: prefix).
+func truncateImageID(id string) string {
+	id = strings.TrimPrefix(id, "sha256:")
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func humanizeAge(t time.Time) string {

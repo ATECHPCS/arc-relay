@@ -15,10 +15,17 @@
       <button type="submit" class="btn btn-outline">Stop</button>
     </form>
     {{if .ConfigDisplay.ImageStale}}
-    <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
-          onsubmit="return confirm('Recreate container with updated image?')">
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate-stream" style="display:inline"
+          onsubmit="return recreateStream(this)">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <button type="submit" class="btn btn-outline" style="border-color:#e6a817;color:#664d03">Recreate Container</button>
+    </form>
+    {{else if and .ConfigDisplay.IsDocker (not .ConfigDisplay.HasBuildConfig)}}
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate-stream" style="display:inline"
+          onsubmit="return recreateStream(this)">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="pull" value="1">
+      <button type="submit" class="btn btn-outline" style="border-color:#0d6efd;color:#0d6efd">Pull &amp; Recreate</button>
     </form>
     {{end}}
     {{else if eq (printf "%s" .Server.Status) "error"}}
@@ -45,6 +52,12 @@
     </form>
   </div>
   {{end}}
+</div>
+
+<div id="recreate-progress" style="display:none;margin-bottom:1rem;padding:0.75rem 1rem;border-radius:6px;background:#f0f4ff;border:1px solid #c5d5f0;font-size:0.9rem">
+  <span id="recreate-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid #0d6efd;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;vertical-align:middle;margin-right:0.5rem"></span>
+  <span id="recreate-status">Starting...</span>
+  <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
 </div>
 
 <div class="card">
@@ -128,17 +141,27 @@
     {{if .ConfigDisplay.ImageStale}}
     <dt>Image Status</dt>
     <dd>
-      <span class="badge" style="background:#fff3cd;color:#664d03">Image Updated</span>
+      <span class="badge" style="background:#fff3cd;color:#664d03">Update Available</span>
       <span style="font-size:0.8rem;color:var(--text-muted);margin-left:0.5rem">Recreate container to use the latest image</span>
     </dd>
+    <dt>Container Image</dt><dd><code>{{.ConfigDisplay.ContainerIDShort}}</code></dd>
+    <dt>Latest Image</dt><dd><code>{{.ConfigDisplay.ImageIDShort}}</code></dd>
     {{end}}
   </div>
-  {{if and .ConfigDisplay.IsDocker (eq (printf "%s" .Server.Status) "running")}}
+  {{if and .IsAdmin .ConfigDisplay.IsDocker (not .ConfigDisplay.HasBuildConfig) (eq (printf "%s" .Server.Status) "running")}}
   <div style="margin-top: 0.75rem;">
-    <form method="POST" action="/servers/{{.Server.ID}}/recreate" style="display:inline"
-          onsubmit="return confirm('This will stop and recreate the container from the current local image. Continue?')">
+    {{if .ConfigDisplay.ImageStale}}
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate-stream" style="display:inline"
+          onsubmit="return recreateStream(this)">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <button type="submit" class="btn btn-outline btn-sm">Recreate Container</button>
+      <button type="submit" class="btn btn-primary btn-sm">Recreate Container</button>
+    </form>
+    {{end}}
+    <form method="POST" action="/servers/{{.Server.ID}}/recreate-stream" style="display:inline"
+          onsubmit="return recreateStream(this)">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="pull" value="1">
+      <button type="submit" class="btn btn-outline btn-sm">Pull &amp; Recreate</button>
     </form>
   </div>
   {{end}}
@@ -757,6 +780,87 @@ mcp-sync init {{.BaseURL}}</code></pre>
       btn.textContent = 'Copied!';
       setTimeout(function() { btn.textContent = 'Copy URL'; }, 1500);
     });
+  }
+
+  function recreateStream(form) {
+    var progressEl = document.getElementById('recreate-progress');
+    var statusEl = document.getElementById('recreate-status');
+    var spinnerEl = document.getElementById('recreate-spinner');
+    progressEl.style.display = 'block';
+    statusEl.textContent = 'Starting...';
+    form.querySelector('button').disabled = true;
+
+    var finished = false; // tracks whether done/error event was received
+    var buf = '';         // accumulates partial SSE chunks across reads
+
+    fetch(form.action, {
+      method: 'POST',
+      body: new FormData(form)
+    }).then(function(response) {
+      if (!response.ok) {
+        throw new Error('Server returned ' + response.status);
+      }
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+
+      function processLines(text) {
+        buf += text;
+        var parts = buf.split('\n');
+        buf = parts.pop(); // keep incomplete trailing line in buffer
+        for (var i = 0; i < parts.length; i++) {
+          var line = parts[i];
+          if (line.indexOf('event: error') === 0) {
+            finished = true;
+            progressEl.style.background = '#fde8e8';
+            progressEl.style.borderColor = '#f5c6cb';
+            spinnerEl.style.display = 'none';
+          } else if (line.indexOf('event: done') === 0) {
+            finished = true;
+            progressEl.style.background = '#e8f5e9';
+            progressEl.style.borderColor = '#c3e6cb';
+            spinnerEl.style.animation = 'none';
+            spinnerEl.innerHTML = '<span style="color:#198754;margin-right:0.5rem">&#10003;</span><span id="recreate-status"></span>';
+            statusEl = document.getElementById('recreate-status');
+            setTimeout(function() { location.reload(); }, 1200);
+          } else if (line.indexOf('data: ') === 0) {
+            statusEl.textContent = line.slice(6);
+          }
+        }
+      }
+
+      function read() {
+        reader.read().then(function(result) {
+          if (result.done) {
+            if (buf) processLines('\n'); // flush remaining buffer
+            if (!finished) {
+              // Stream closed without done/error event - unexpected
+              statusEl.textContent = 'Connection closed unexpectedly';
+              progressEl.style.background = '#fde8e8';
+              progressEl.style.borderColor = '#f5c6cb';
+              spinnerEl.style.display = 'none';
+            }
+            return;
+          }
+          processLines(decoder.decode(result.value, {stream: true}));
+          read();
+        }).catch(function(err) {
+          if (!finished) {
+            statusEl.textContent = 'Connection error: ' + err.message;
+            progressEl.style.background = '#fde8e8';
+            progressEl.style.borderColor = '#f5c6cb';
+            spinnerEl.style.display = 'none';
+          }
+        });
+      }
+      read();
+    }).catch(function(err) {
+      statusEl.textContent = 'Error: ' + err.message;
+      progressEl.style.background = '#fde8e8';
+      progressEl.style.borderColor = '#f5c6cb';
+      spinnerEl.style.display = 'none';
+    });
+
+    return false;
   }
   </script>
 </div>

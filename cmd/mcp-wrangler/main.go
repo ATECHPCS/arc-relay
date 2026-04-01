@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/docker"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
@@ -29,6 +31,20 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Initialize Sentry error tracking
+	if cfg.SentryDSN != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:              cfg.SentryDSN,
+			EnableTracing:    false,
+			AttachStacktrace: true,
+		}); err != nil {
+			log.Printf("Warning: Sentry init failed: %v", err)
+		} else {
+			log.Println("Sentry error tracking enabled")
+			defer sentry.Flush(2 * time.Second)
+		}
 	}
 
 	// Open database with embedded migrations

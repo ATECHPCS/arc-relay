@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
 	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
 )
@@ -186,6 +188,8 @@ func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
 		if err := hm.proxyMgr.RetryServer(ctx, srv); err != nil {
 			log.Printf("Health monitor: recovery %d/%d failed for %s: %v",
 				attempt, maxRecoverAttempts, srv.Name, err)
+			sentry.CaptureException(fmt.Errorf("health recovery failed for %s (attempt %d/%d): %w",
+				srv.Name, attempt, maxRecoverAttempts, err))
 			if attempt >= maxRecoverAttempts {
 				log.Printf("Health monitor: giving up on %s after %d attempts - manual restart required",
 					srv.Name, maxRecoverAttempts)
@@ -217,6 +221,8 @@ func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
 		if err := hm.proxyMgr.RecreateContainer(recoverCtx, srv); err != nil {
 			log.Printf("Health monitor: recovery %d/%d failed for %s: %v",
 				attempt, maxRecoverAttempts, srv.Name, err)
+			sentry.CaptureException(fmt.Errorf("health recovery failed for %s (attempt %d/%d): %w",
+				srv.Name, attempt, maxRecoverAttempts, err))
 			if attempt >= maxRecoverAttempts {
 				log.Printf("Health monitor: giving up on %s after %d attempts - manual restart required",
 					srv.Name, maxRecoverAttempts)
