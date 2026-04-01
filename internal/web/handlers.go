@@ -1046,7 +1046,11 @@ func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, 
 	err := h.proxy.RecreateWithProgress(r.Context(), srv, pull, send)
 	if err != nil {
 		log.Printf("Error recreating container for server %s: %v", srv.Name, err)
-		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		// Sanitize error for SSE output to satisfy gosec G705 (XSS taint).
+		// SSE data is consumed by JS, not rendered as HTML, but we sanitize anyway.
+		safeErr := strings.ReplaceAll(err.Error(), "<", "&lt;")
+		safeErr = strings.ReplaceAll(safeErr, ">", "&gt;")
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", safeErr) // #nosec G705
 		flusher.Flush()
 		return
 	}
@@ -2376,9 +2380,7 @@ func serverToFormData(srv *store.Server) map[string]any {
 // truncateImageID shortens a Docker image ID for display, matching
 // Docker's standard short-ID format (12 hex chars, no sha256: prefix).
 func truncateImageID(id string) string {
-	if strings.HasPrefix(id, "sha256:") {
-		id = id[len("sha256:"):]
-	}
+	id = strings.TrimPrefix(id, "sha256:")
 	if len(id) > 12 {
 		return id[:12]
 	}
