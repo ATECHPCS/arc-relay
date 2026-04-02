@@ -96,8 +96,8 @@ func ResolveCredentials(configDir string) (*Credentials, error) {
 	if url != "" && key != "" {
 		return &Credentials{
 			RelayURL: url,
-			APIKey:      key,
-			Source:      "environment",
+			APIKey:   key,
+			Source:   "environment",
 		}, nil
 	}
 
@@ -108,8 +108,8 @@ func ResolveCredentials(configDir string) (*Credentials, error) {
 
 	return &Credentials{
 		RelayURL: cfg.RelayURL,
-		APIKey:      cfg.APIKey,
-		Source:      fmt.Sprintf("config file (%s)", ConfigPath(configDir)),
+		APIKey:   cfg.APIKey,
+		Source:   fmt.Sprintf("config file (%s)", ConfigPath(configDir)),
 	}, nil
 }
 

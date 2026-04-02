@@ -9,8 +9,8 @@ import (
 
 	"github.com/comma-compliance/arc-relay/internal/cli/config"
 	"github.com/comma-compliance/arc-relay/internal/cli/project"
-	"github.com/comma-compliance/arc-relay/internal/cli/safety"
 	"github.com/comma-compliance/arc-relay/internal/cli/relay"
+	"github.com/comma-compliance/arc-relay/internal/cli/safety"
 )
 
 // Options configures a sync operation.

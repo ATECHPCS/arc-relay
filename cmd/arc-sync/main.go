@@ -15,9 +15,9 @@ import (
 
 	"github.com/comma-compliance/arc-relay/internal/cli/config"
 	"github.com/comma-compliance/arc-relay/internal/cli/project"
+	"github.com/comma-compliance/arc-relay/internal/cli/relay"
 	"github.com/comma-compliance/arc-relay/internal/cli/safety"
 	"github.com/comma-compliance/arc-relay/internal/cli/sync"
-	"github.com/comma-compliance/arc-relay/internal/cli/relay"
 )
 
 //go:embed skill.md
@@ -229,7 +229,7 @@ func runInit() {
 
 	cfg := &config.Config{
 		RelayURL: url,
-		APIKey:      key,
+		APIKey:   key,
 	}
 
 	if err := config.SaveConfig(configDir, cfg); err != nil {

@@ -13,12 +13,12 @@ import (
 
 // ArchiveConfig configures the archive middleware.
 type ArchiveConfig struct {
-	URL              string `json:"url"`                                 // Target URL to POST archived data
-	AuthType         string `json:"auth_type"`                           // "none", "bearer", "api_key"
-	AuthValue        string `json:"auth_value"`                          // Token/key value
-	APIKeyHeader     string `json:"api_key_header,omitempty"`            // Header name for api_key auth (default: X-API-Key)
-	Include          string `json:"include"`                             // "request", "response", "both"
-	NaClRecipientKey string `json:"nacl_recipient_key,omitempty"`        // Base64-encoded Curve25519 public key for NaCl Box encryption
+	URL              string `json:"url"`                          // Target URL to POST archived data
+	AuthType         string `json:"auth_type"`                    // "none", "bearer", "api_key"
+	AuthValue        string `json:"auth_value"`                   // Token/key value
+	APIKeyHeader     string `json:"api_key_header,omitempty"`     // Header name for api_key auth (default: X-API-Key)
+	Include          string `json:"include"`                      // "request", "response", "both"
+	NaClRecipientKey string `json:"nacl_recipient_key,omitempty"` // Base64-encoded Curve25519 public key for NaCl Box encryption
 }
 
 // DefaultArchiveConfig returns sensible defaults.

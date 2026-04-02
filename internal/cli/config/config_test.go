@@ -11,7 +11,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &Config{
 		RelayURL: "http://10.10.69.50:8080",
-		APIKey:      "test-token-123",
+		APIKey:   "test-token-123",
 	}
 
 	if err := SaveConfig(dir, cfg); err != nil {
