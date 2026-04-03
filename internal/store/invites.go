@@ -11,17 +11,23 @@ import (
 	"github.com/google/uuid"
 )
 
-// InviteToken represents a one-time token for CLI onboarding.
+// InviteToken represents a one-time account-template invite for onboarding.
+// Invites are not tied to a pre-existing user; the recipient chooses their
+// own username and password when redeeming.
 type InviteToken struct {
-	ID        string     `json:"id"`
-	TokenHash string     `json:"-"`
-	UserID    string     `json:"user_id"`
-	Username  string     `json:"username,omitempty"` // populated on read, not stored
-	ProfileID *string    `json:"profile_id,omitempty"`
-	CreatedBy string     `json:"created_by"`
-	ExpiresAt time.Time  `json:"expires_at"`
-	UsedAt    *time.Time `json:"used_at,omitempty"`
-	Status    string     `json:"status"`
+	ID             string     `json:"id"`
+	TokenHash      string     `json:"-"`
+	Role           string     `json:"role"`
+	AccessLevel    string     `json:"access_level"`
+	ProfileID      *string    `json:"profile_id,omitempty"`
+	CreatedBy      string     `json:"created_by"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	UsedAt         *time.Time `json:"used_at,omitempty"`
+	RedeemedUserID *string    `json:"redeemed_user_id,omitempty"`
+	Status         string     `json:"status"`
+	// Populated on read via JOIN, not stored on the token itself.
+	RedeemedUsername string `json:"redeemed_username,omitempty"`
+	CreatedByName    string `json:"created_by_name,omitempty"`
 }
 
 // InviteStore manages invite tokens.
@@ -33,47 +39,91 @@ func NewInviteStore(db *DB) *InviteStore {
 	return &InviteStore{db: db}
 }
 
+// DB returns the underlying database for transaction management.
+func (s *InviteStore) DB() *DB {
+	return s.db
+}
+
 func hashInviteToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
 
-// Create generates a new invite token for a user. Returns the raw token (shown once).
-func (s *InviteStore) Create(userID string, profileID *string, createdBy string, expiresAt time.Time) (string, *InviteToken, error) {
+// CreateAccountInvite generates a new invite token with account-template settings.
+// Returns the raw token (shown once to the admin).
+func (s *InviteStore) CreateAccountInvite(role, accessLevel string, profileID *string, createdBy string, expiresAt time.Time) (string, *InviteToken, error) {
 	rawToken := uuid.New().String()
 	tokenHash := hashInviteToken(rawToken)
 
+	if role == "admin" {
+		accessLevel = "admin"
+	}
+	if accessLevel == "" {
+		accessLevel = "write"
+	}
+
 	t := &InviteToken{
-		ID:        uuid.New().String(),
-		TokenHash: tokenHash,
-		UserID:    userID,
-		ProfileID: profileID,
-		CreatedBy: createdBy,
-		ExpiresAt: expiresAt,
-		Status:    "pending",
+		ID:          uuid.New().String(),
+		TokenHash:   tokenHash,
+		Role:        role,
+		AccessLevel: accessLevel,
+		ProfileID:   profileID,
+		CreatedBy:   createdBy,
+		ExpiresAt:   expiresAt,
+		Status:      "pending",
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO invite_tokens (id, token_hash, user_id, profile_id, created_by, expires_at, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.TokenHash, t.UserID, t.ProfileID, t.CreatedBy, t.ExpiresAt, t.Status,
+		INSERT INTO invite_tokens (id, token_hash, role, access_level, profile_id, created_by, expires_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.TokenHash, t.Role, t.AccessLevel, t.ProfileID, t.CreatedBy, t.ExpiresAt, t.Status,
 	)
 	if err != nil {
-		return "", nil, fmt.Errorf("creating invite token: %w", err)
+		return "", nil, fmt.Errorf("creating account invite token: %w", err)
 	}
 	return rawToken, t, nil
 }
 
-// ValidateAndConsume atomically checks a raw token, marks it used, and returns the invite details.
-// The UPDATE uses WHERE status='pending' AND expires_at > now to prevent races.
-// Returns nil if invalid, expired, or already used.
-func (s *InviteStore) ValidateAndConsume(rawToken string) (*InviteToken, error) {
+// Peek checks whether a raw token is valid (pending and not expired) without consuming it.
+// Used to render the browser invite form before the user submits.
+func (s *InviteStore) Peek(rawToken string) (*InviteToken, error) {
 	tokenHash := hashInviteToken(rawToken)
 	now := time.Now()
 
-	// Atomically claim the token: only one concurrent caller can succeed
-	// because the WHERE clause ensures only a pending, non-expired token matches.
-	result, err := s.db.Exec(`
+	t := &InviteToken{}
+	var storedHash string
+	var profileID sql.NullString
+	err := s.db.QueryRow(`
+		SELECT id, token_hash, role, access_level, profile_id, created_by, expires_at, status
+		FROM invite_tokens
+		WHERE token_hash = ? AND status = 'pending' AND expires_at > ?`,
+		tokenHash, now,
+	).Scan(&t.ID, &storedHash, &t.Role, &t.AccessLevel, &profileID, &t.CreatedBy, &t.ExpiresAt, &t.Status)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("peeking invite token: %w", err)
+	}
+
+	if subtle.ConstantTimeCompare([]byte(tokenHash), []byte(storedHash)) != 1 {
+		return nil, nil
+	}
+
+	if profileID.Valid {
+		t.ProfileID = &profileID.String
+	}
+	return t, nil
+}
+
+// ValidateAndConsumeTx atomically marks a token as used within the given transaction.
+// Returns nil if the token is invalid, expired, or already used.
+// The caller is responsible for committing or rolling back the transaction.
+func (s *InviteStore) ValidateAndConsumeTx(tx *sql.Tx, rawToken string) (*InviteToken, error) {
+	tokenHash := hashInviteToken(rawToken)
+	now := time.Now()
+
+	result, err := tx.Exec(`
 		UPDATE invite_tokens SET status = 'used', used_at = ?
 		WHERE token_hash = ? AND status = 'pending' AND expires_at > ?`,
 		now, tokenHash, now,
@@ -86,25 +136,20 @@ func (s *InviteStore) ValidateAndConsume(rawToken string) (*InviteToken, error) 
 		return nil, fmt.Errorf("checking invite token update: %w", err)
 	}
 	if affected == 0 {
-		// Token doesn't exist, is expired, or already used
-		// Mark any expired tokens while we're here
-		_, _ = s.db.Exec("UPDATE invite_tokens SET status = 'expired' WHERE token_hash = ? AND status = 'pending' AND expires_at <= ?", tokenHash, now)
 		return nil, nil
 	}
 
-	// Token was claimed - now read the full record
 	t := &InviteToken{}
 	var storedHash string
 	var profileID sql.NullString
-	err = s.db.QueryRow(`
-		SELECT id, token_hash, user_id, profile_id, created_by, expires_at, used_at, status
+	err = tx.QueryRow(`
+		SELECT id, token_hash, role, access_level, profile_id, created_by, expires_at, used_at, status
 		FROM invite_tokens WHERE token_hash = ?`, tokenHash,
-	).Scan(&t.ID, &storedHash, &t.UserID, &profileID, &t.CreatedBy, &t.ExpiresAt, &t.UsedAt, &t.Status)
+	).Scan(&t.ID, &storedHash, &t.Role, &t.AccessLevel, &profileID, &t.CreatedBy, &t.ExpiresAt, &t.UsedAt, &t.Status)
 	if err != nil {
 		return nil, fmt.Errorf("reading consumed invite token: %w", err)
 	}
 
-	// Constant-time comparison (defense in depth)
 	if subtle.ConstantTimeCompare([]byte(tokenHash), []byte(storedHash)) != 1 {
 		return nil, nil
 	}
@@ -112,32 +157,24 @@ func (s *InviteStore) ValidateAndConsume(rawToken string) (*InviteToken, error) 
 	if profileID.Valid {
 		t.ProfileID = &profileID.String
 	}
-
 	return t, nil
 }
 
-// ListForUser returns all invite tokens created for a specific user.
-func (s *InviteStore) ListForUser(userID string) ([]*InviteToken, error) {
-	rows, err := s.db.Query(`
-		SELECT it.id, it.user_id, u.username, it.profile_id, it.created_by, it.expires_at, it.used_at, it.status
-		FROM invite_tokens it
-		JOIN users u ON it.user_id = u.id
-		WHERE it.user_id = ?
-		ORDER BY it.expires_at DESC`, userID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("listing invite tokens: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	return scanInviteTokens(rows)
+// SetRedeemedUserTx records which user redeemed the invite (within the caller's transaction).
+func (s *InviteStore) SetRedeemedUserTx(tx *sql.Tx, tokenID, userID string) error {
+	_, err := tx.Exec(`UPDATE invite_tokens SET redeemed_user_id = ? WHERE id = ?`, userID, tokenID)
+	return err
 }
 
-// ListAll returns all invite tokens (admin view).
+// ListAll returns all invite tokens (admin view) ordered by most recent first.
 func (s *InviteStore) ListAll() ([]*InviteToken, error) {
 	rows, err := s.db.Query(`
-		SELECT it.id, it.user_id, u.username, it.profile_id, it.created_by, it.expires_at, it.used_at, it.status
+		SELECT it.id, it.role, it.access_level, it.profile_id, it.created_by,
+		       COALESCE(cb.username, ''), it.expires_at, it.used_at,
+		       it.redeemed_user_id, COALESCE(ru.username, ''), it.status
 		FROM invite_tokens it
-		JOIN users u ON it.user_id = u.id
+		LEFT JOIN users cb ON it.created_by = cb.id
+		LEFT JOIN users ru ON it.redeemed_user_id = ru.id
 		ORDER BY it.expires_at DESC`,
 	)
 	if err != nil {
@@ -147,16 +184,42 @@ func (s *InviteStore) ListAll() ([]*InviteToken, error) {
 	return scanInviteTokens(rows)
 }
 
+// ListPending returns pending (unclaimed) invite tokens for admin view.
+func (s *InviteStore) ListPending() ([]*InviteToken, error) {
+	rows, err := s.db.Query(`
+		SELECT it.id, it.role, it.access_level, it.profile_id, it.created_by,
+		       COALESCE(cb.username, ''), it.expires_at, it.used_at,
+		       it.redeemed_user_id, COALESCE(ru.username, ''), it.status
+		FROM invite_tokens it
+		LEFT JOIN users cb ON it.created_by = cb.id
+		LEFT JOIN users ru ON it.redeemed_user_id = ru.id
+		WHERE it.status = 'pending' AND it.expires_at > ?
+		ORDER BY it.expires_at DESC`, time.Now(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing pending invite tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	return scanInviteTokens(rows)
+}
+
 func scanInviteTokens(rows *sql.Rows) ([]*InviteToken, error) {
 	var tokens []*InviteToken
 	for rows.Next() {
 		t := &InviteToken{}
-		var profileID sql.NullString
-		if err := rows.Scan(&t.ID, &t.UserID, &t.Username, &profileID, &t.CreatedBy, &t.ExpiresAt, &t.UsedAt, &t.Status); err != nil {
+		var profileID, redeemedUserID sql.NullString
+		if err := rows.Scan(
+			&t.ID, &t.Role, &t.AccessLevel, &profileID, &t.CreatedBy,
+			&t.CreatedByName, &t.ExpiresAt, &t.UsedAt,
+			&redeemedUserID, &t.RedeemedUsername, &t.Status,
+		); err != nil {
 			return nil, fmt.Errorf("scanning invite token: %w", err)
 		}
 		if profileID.Valid {
 			t.ProfileID = &profileID.String
+		}
+		if redeemedUserID.Valid {
+			t.RedeemedUserID = &redeemedUserID.String
 		}
 		tokens = append(tokens, t)
 	}
@@ -175,15 +238,4 @@ func (s *InviteStore) CleanupExpired() error {
 		UPDATE invite_tokens SET status = 'expired'
 		WHERE status = 'pending' AND expires_at < ?`, time.Now())
 	return err
-}
-
-// PendingCountForUser returns the number of pending invite tokens for a user.
-func (s *InviteStore) PendingCountForUser(userID string) (int, error) {
-	var count int
-	err := s.db.QueryRow(`
-		SELECT COUNT(*) FROM invite_tokens
-		WHERE user_id = ? AND status = 'pending' AND expires_at > ?`,
-		userID, time.Now(),
-	).Scan(&count)
-	return count, err
 }

@@ -219,13 +219,14 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	}
 
 	// Parse each page template together with the layout
-	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html", "connect_desktop.html"}
+	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html", "connect_desktop.html", "change_password.html"}
 	for _, page := range pages {
 		t := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/"+page))
 		h.tmpls[page] = t
 	}
-	// Login is standalone (no layout)
+	// Login and invite_redeem are standalone (no layout)
 	h.tmpls["login.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/login.html"))
+	h.tmpls["invite_redeem.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/invite_redeem.html"))
 
 	return h
 }
@@ -284,8 +285,12 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/auth/device/token", h.handleDeviceAuthToken) // No auth — CLI polls for token
 	mux.HandleFunc("/auth/device", h.handleDeviceAuthPage)            // Session auth checked internally (redirects to login)
 
-	// Invite token exchange (no auth — CLI uses the token itself as proof)
+	// Invite token exchange (no auth — token is proof)
 	mux.HandleFunc("/api/auth/invite", h.handleInviteExchange)
+	mux.HandleFunc("/invite/", h.handleInviteRedeem) // Browser account setup
+
+	// Self-service password change
+	mux.HandleFunc("/account/password", h.requireAuth(h.handleChangePassword))
 
 	// Binary hosting for arc-sync CLI
 	mux.HandleFunc("/install.sh", h.handleInstallScript)
@@ -352,6 +357,11 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		}
+		// Force password change before allowing any other page
+		if user.MustChangePassword && r.URL.Path != "/account/password" && r.URL.Path != "/logout" {
+			http.Redirect(w, r, "/account/password", http.StatusFound)
+			return
+		}
 		// Validate CSRF for state-changing requests
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 			if !h.validateCSRF(r, cookie.Value) {
@@ -411,6 +421,12 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   strings.HasPrefix(h.cfg.PublicBaseURL(), "https"),
 		SameSite: http.SameSiteLaxMode,
 	})
+
+	// Force password change if required
+	if user.MustChangePassword {
+		http.Redirect(w, r, "/account/password", http.StatusFound)
+		return
+	}
 
 	// Redirect to the original destination if set, but only allow local paths
 	redirectTo := "/"
@@ -1327,11 +1343,13 @@ func (h *Handlers) handleUsers(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) renderUsersList(w http.ResponseWriter, r *http.Request, errMsg string) {
 	users, _ := h.users.List()
 	profiles, _ := h.profileStore.List()
+	pendingInvites, _ := h.inviteStore.ListPending()
 	data := map[string]any{
-		"Nav":      "users",
-		"User":     getUser(r),
-		"Users":    users,
-		"Profiles": profiles,
+		"Nav":            "users",
+		"User":           getUser(r),
+		"Users":          users,
+		"Profiles":       profiles,
+		"PendingInvites": pendingInvites,
 	}
 	if errMsg != "" {
 		data["Error"] = errMsg
@@ -1353,6 +1371,15 @@ func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		h.handleUserCreate(w, r)
 		return
 	}
+	if parts[0] == "invite-new" && r.Method == http.MethodPost {
+		h.handleCreateAccountInvite(w, r)
+		return
+	}
+	if parts[0] == "invite-revoke" && len(parts) > 1 && r.Method == http.MethodPost {
+		_ = h.inviteStore.Delete(parts[1])
+		http.Redirect(w, r, "/users", http.StatusFound)
+		return
+	}
 	if len(parts) > 1 && r.Method == http.MethodPost {
 		userID := parts[0]
 		switch parts[1] {
@@ -1363,9 +1390,6 @@ func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		case "update":
 			h.handleUserUpdate(w, r, userID)
 			return
-		case "invite":
-			h.handleUserInvite(w, r, userID)
-			return
 		case "reset-password":
 			h.handleUserResetPassword(w, r, userID)
 			return
@@ -1374,48 +1398,53 @@ func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func (h *Handlers) handleUserInvite(w http.ResponseWriter, r *http.Request, userID string) {
+// handleCreateAccountInvite creates a new account-template invite (admin action).
+func (h *Handlers) handleCreateAccountInvite(w http.ResponseWriter, r *http.Request) {
 	admin := getUser(r)
 	if admin == nil || admin.Role != "admin" {
 		http.Error(w, "Admin access required", http.StatusForbidden)
 		return
 	}
 
-	targetUser, err := h.users.Get(userID)
-	if err != nil || targetUser == nil {
-		h.renderUsersList(w, r, "User not found")
-		return
+	role := r.FormValue("role")
+	if role != "admin" {
+		role = "user"
 	}
-
-	// Use the user's default profile for the invite
+	accessLevel := r.FormValue("access_level")
+	if accessLevel != "read" && accessLevel != "write" && accessLevel != "admin" {
+		accessLevel = "write"
+	}
 	var profileID *string
-	if targetUser.DefaultProfileID != nil {
-		profileID = targetUser.DefaultProfileID
+	if pid := strings.TrimSpace(r.FormValue("profile_id")); pid != "" {
+		profileID = &pid
 	}
 
 	expiresAt := time.Now().Add(48 * time.Hour)
-	rawToken, _, err := h.inviteStore.Create(userID, profileID, admin.ID, expiresAt)
+	rawToken, _, err := h.inviteStore.CreateAccountInvite(role, accessLevel, profileID, admin.ID, expiresAt)
 	if err != nil {
 		h.renderUsersList(w, r, "Failed to create invite: "+err.Error())
 		return
 	}
 
 	baseURL := h.cfg.PublicBaseURL()
+	inviteLink := fmt.Sprintf("%s/invite/%s", baseURL, rawToken)
 	installCmd := fmt.Sprintf("curl -fsSL %s/install.sh | bash -s -- --token %s", baseURL, rawToken)
 
 	users, _ := h.users.List()
 	profiles, _ := h.profileStore.List()
+	pendingInvites, _ := h.inviteStore.ListPending()
 	h.render(w, r, "users.html", map[string]any{
-		"Nav":        "users",
-		"User":       admin,
-		"Users":      users,
-		"Profiles":   profiles,
-		"InviteCmd":  installCmd,
-		"InviteUser": targetUser.Username,
+		"Nav":            "users",
+		"User":           admin,
+		"Users":          users,
+		"Profiles":       profiles,
+		"PendingInvites": pendingInvites,
+		"InviteCmd":      installCmd,
+		"InviteLink":     inviteLink,
 	})
 }
 
-// handleInviteExchange handles POST /api/auth/invite - exchanges a token for an API key.
+// handleInviteExchange handles POST /api/auth/invite - creates account and returns API key.
 func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -1423,14 +1452,37 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var body struct {
-		Token string `json:"token"`
+		Token    string `json:"token"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Token == "" {
 		http.Error(w, `{"error":"token is required"}`, http.StatusBadRequest)
 		return
 	}
+	if body.Username == "" || body.Password == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "username and password are required"})
+		return
+	}
+	if len(body.Password) < 8 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "password must be at least 8 characters"})
+		return
+	}
 
-	invite, err := h.inviteStore.ValidateAndConsume(body.Token)
+	// Transactional: consume token + create user + create API key atomically
+	tx, err := h.inviteStore.DB().Begin()
+	if err != nil {
+		log.Printf("Invite exchange: failed to begin transaction: %v", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	invite, err := h.inviteStore.ValidateAndConsumeTx(tx, body.Token)
 	if err != nil {
 		log.Printf("Invite exchange error: %v", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -1443,18 +1495,260 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Create an API key for the invited user
-	rawKey, _, err := h.users.CreateAPIKey(invite.UserID, "arc-sync invite", invite.ProfileID)
+	user, err := h.users.CreateWithAccessLevelTx(tx, body.Username, body.Password, invite.Role, invite.AccessLevel, invite.ProfileID)
 	if err != nil {
-		log.Printf("Invite exchange: failed to create API key for user %s: %v", invite.UserID, err)
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "username already taken"})
+			return
+		}
+		log.Printf("Invite exchange: failed to create user: %v", err)
+		http.Error(w, `{"error":"failed to create account"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rawKey, _, err := h.users.CreateAPIKeyTx(tx, user.ID, "arc-sync invite", invite.ProfileID)
+	if err != nil {
+		log.Printf("Invite exchange: failed to create API key: %v", err)
 		http.Error(w, `{"error":"failed to create API key"}`, http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Invite exchange: created API key for user %s via invite %s", invite.UserID, invite.ID)
+	if err := h.inviteStore.SetRedeemedUserTx(tx, invite.ID, user.ID); err != nil {
+		log.Printf("Invite exchange: failed to record redeemed user: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("Invite exchange: failed to commit transaction: %v", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Invite exchange: created user %q and API key via invite %s", user.Username, invite.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"api_key": rawKey})
+}
+
+// handleInviteRedeem handles GET/POST /invite/{token} - browser account setup.
+func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
+	rawToken := strings.TrimPrefix(r.URL.Path, "/invite/")
+	if rawToken == "" {
+		http.Error(w, "Missing invite token", http.StatusBadRequest)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		invite, err := h.inviteStore.Peek(rawToken)
+		if err != nil {
+			log.Printf("Invite redeem peek error: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		data := map[string]any{"Token": rawToken}
+		if invite == nil {
+			data["Expired"] = true
+		} else {
+			data["Role"] = invite.Role
+		}
+		h.renderInviteRedeem(w, data)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	username := strings.TrimSpace(r.FormValue("username"))
+	password := r.FormValue("password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	renderErr := func(msg string) {
+		// Peek again to check if token is still valid
+		invite, _ := h.inviteStore.Peek(rawToken)
+		data := map[string]any{"Token": rawToken, "Error": msg, "Username": username}
+		if invite == nil {
+			data["Expired"] = true
+		} else {
+			data["Role"] = invite.Role
+		}
+		h.renderInviteRedeem(w, data)
+	}
+
+	if username == "" || password == "" {
+		renderErr("Username and password are required")
+		return
+	}
+	if len(password) < 8 {
+		renderErr("Password must be at least 8 characters")
+		return
+	}
+	if password != confirmPassword {
+		renderErr("Passwords do not match")
+		return
+	}
+
+	// Transactional: consume token + create user atomically
+	tx, err := h.inviteStore.DB().Begin()
+	if err != nil {
+		log.Printf("Invite redeem: failed to begin transaction: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	invite, err := h.inviteStore.ValidateAndConsumeTx(tx, rawToken)
+	if err != nil {
+		log.Printf("Invite redeem error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if invite == nil {
+		h.renderInviteRedeem(w, map[string]any{"Token": rawToken, "Expired": true})
+		return
+	}
+
+	user, err := h.users.CreateWithAccessLevelTx(tx, username, password, invite.Role, invite.AccessLevel, invite.ProfileID)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			renderErr("Username already taken")
+			return
+		}
+		log.Printf("Invite redeem: failed to create user: %v", err)
+		renderErr("Failed to create account")
+		return
+	}
+
+	if err := h.inviteStore.SetRedeemedUserTx(tx, invite.ID, user.ID); err != nil {
+		log.Printf("Invite redeem: failed to record redeemed user: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf("Invite redeem: failed to commit: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create a session and log the user in
+	sessionID, err := generateID()
+	if err != nil {
+		log.Printf("Invite redeem: failed to generate session ID: %v", err)
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+	if err := h.sessionStore.Create(sessionID, user.ID, expiresAt); err != nil {
+		log.Printf("Invite redeem: failed to create session: %v", err)
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 - Secure is conditional for local dev
+		Name:     "session",
+		Value:    sessionID,
+		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(h.cfg.PublicBaseURL(), "https"),
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	log.Printf("Invite redeem: created user %q via invite %s (browser)", user.Username, invite.ID)
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// renderInviteRedeem renders the standalone invite_redeem template.
+func (h *Handlers) renderInviteRedeem(w http.ResponseWriter, data map[string]any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	t := h.tmpls["invite_redeem.html"]
+	if err := t.ExecuteTemplate(w, "content", data); err != nil {
+		log.Printf("Template error: %v", err)
+	}
+}
+
+// handleChangePassword handles GET/POST /account/password - self-service password change.
+func (h *Handlers) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	user := getUser(r)
+
+	if r.Method == http.MethodGet {
+		h.render(w, r, "change_password.html", map[string]any{
+			"Nav":        "",
+			"User":       user,
+			"MustChange": user.MustChangePassword,
+		})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	currentPassword := r.FormValue("current_password")
+	newPassword := r.FormValue("new_password")
+	confirmPassword := r.FormValue("confirm_password")
+
+	renderErr := func(msg string) {
+		h.render(w, r, "change_password.html", map[string]any{
+			"Nav":        "",
+			"User":       user,
+			"MustChange": user.MustChangePassword,
+			"Error":      msg,
+		})
+	}
+
+	// If not a forced change, verify current password
+	if !user.MustChangePassword {
+		authed, err := h.users.Authenticate(user.Username, currentPassword)
+		if err != nil || authed == nil {
+			renderErr("Current password is incorrect")
+			return
+		}
+	}
+
+	if len(newPassword) < 8 {
+		renderErr("New password must be at least 8 characters")
+		return
+	}
+	if newPassword != confirmPassword {
+		renderErr("Passwords do not match")
+		return
+	}
+
+	if err := h.users.SetPassword(user.ID, newPassword); err != nil {
+		renderErr("Failed to update password: " + err.Error())
+		return
+	}
+
+	// Invalidate all sessions, then create a fresh one for this browser
+	h.sessionStore.DeleteByUser(user.ID)
+
+	newSessionID, err := generateID()
+	if err != nil {
+		log.Printf("Failed to generate session ID after password change: %v", err)
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	expiresAt := time.Now().Add(30 * 24 * time.Hour)
+	if err := h.sessionStore.Create(newSessionID, user.ID, expiresAt); err != nil {
+		log.Printf("Failed to create session after password change: %v", err)
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 - Secure is conditional for local dev
+		Name:     "session",
+		Value:    newSessionID,
+		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(h.cfg.PublicBaseURL(), "https"),
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	// Redirect rather than render - the old session in the request context is gone,
+	// so the CSRF token would be stale. A fresh GET will use the new session cookie.
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 func (h *Handlers) handleUserUpdate(w http.ResponseWriter, r *http.Request, userID string) {
@@ -1494,19 +1788,24 @@ func (h *Handlers) handleUserResetPassword(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Force the user to change their password on next login
+	_ = h.users.SetMustChangePassword(userID, true)
+
 	// Invalidate all sessions for the target user
 	h.sessionStore.DeleteByUser(userID)
 
-	log.Printf("Admin %s reset password for user %s", getUser(r).Username, targetUser.Username)
+	log.Printf("Admin %s reset password for user %s (forced change required)", getUser(r).Username, targetUser.Username)
 
 	users, _ := h.users.List()
 	profiles, _ := h.profileStore.List()
+	pendingInvites, _ := h.inviteStore.ListPending()
 	h.render(w, r, "users.html", map[string]any{
-		"Nav":      "users",
-		"User":     getUser(r),
-		"Users":    users,
-		"Profiles": profiles,
-		"Flash":    &Flash{Type: "success", Message: fmt.Sprintf("Password reset for %s. Their active sessions have been invalidated.", targetUser.Username)},
+		"Nav":            "users",
+		"User":           getUser(r),
+		"Users":          users,
+		"Profiles":       profiles,
+		"PendingInvites": pendingInvites,
+		"Flash":          &Flash{Type: "success", Message: fmt.Sprintf("Password reset for %s. They will be required to change it on next login.", targetUser.Username)},
 	})
 }
 
