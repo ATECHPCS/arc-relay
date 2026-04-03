@@ -35,3 +35,4 @@ config.toml
 # Nightshift plan artifacts (keep out of version control)
 .nightshift-plan
 .claude/worktrees/
+.claude/scheduled_tasks.lock

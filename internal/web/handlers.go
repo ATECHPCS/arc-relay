@@ -2253,10 +2253,15 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 						auth.Scopes = strings.Join(disc.ScopesSupported, " ")
 					}
 					if disc.RegistrationEndpoint != "" {
-						auth.RegistrationEndpoint = disc.RegistrationEndpoint
+						// Validate registration endpoint to prevent SSRF via adversarial discovery responses
+						if err := validateExternalURL(disc.RegistrationEndpoint); err != nil {
+							log.Printf("Registration endpoint blocked by SSRF check in server form: %s", disc.RegistrationEndpoint)
+						} else {
+							auth.RegistrationEndpoint = disc.RegistrationEndpoint
+						}
 					}
-					if auth.ClientID == "" && disc.RegistrationEndpoint != "" {
-						reg, _ := oauth.RegisterClient(r.Context(), disc.RegistrationEndpoint, h.oauth.CallbackURL())
+					if auth.ClientID == "" && auth.RegistrationEndpoint != "" {
+						reg, _ := oauth.RegisterClient(r.Context(), auth.RegistrationEndpoint, h.oauth.CallbackURL())
 						if reg != nil {
 							auth.ClientID = reg.ClientID
 							auth.ClientSecret = reg.ClientSecret
@@ -2542,6 +2547,7 @@ func validateServerURL(rawURL string) error {
 
 // validateExternalURL checks that a URL is safe to make outbound requests to.
 // Rejects non-HTTPS schemes and private/loopback IP ranges to prevent SSRF.
+// Hostnames are resolved to check that they don't point to private addresses.
 func validateExternalURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -2554,13 +2560,31 @@ func validateExternalURL(rawURL string) error {
 		return fmt.Errorf("invalid URL")
 	}
 	host := parsed.Hostname()
-	ip := net.ParseIP(host)
-	if ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+
+	// Check literal IP addresses directly
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(ip) {
 			return fmt.Errorf("private/loopback addresses are not allowed")
+		}
+		return nil
+	}
+
+	// Resolve hostname and check all resulting IPs
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("cannot resolve host: %w", err)
+	}
+	for _, ipStr := range ips {
+		if ip := net.ParseIP(ipStr); ip != nil && isPrivateIP(ip) {
+			return fmt.Errorf("host resolves to private/loopback address")
 		}
 	}
 	return nil
+}
+
+// isPrivateIP returns true if the IP is loopback, private, link-local, or unspecified.
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func generateID() (string, error) {

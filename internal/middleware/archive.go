@@ -53,9 +53,10 @@ type archiveMeta struct {
 // Archive sends MCP request/response data to a configured HTTP endpoint
 // via the shared ArchiveDispatcher. It is observe-only and never blocks MCP traffic.
 type Archive struct {
-	cfg         ArchiveConfig
-	eventLogger EventLogger
-	dispatcher  *ArchiveDispatcher
+	cfg            ArchiveConfig
+	eventLogger    EventLogger
+	dispatcher     *ArchiveDispatcher
+	recipientKey   *[32]byte // cached decoded NaCl key (nil if encryption disabled)
 }
 
 // NewArchiveFromConfig creates an Archive from JSON config.
@@ -80,17 +81,21 @@ func NewArchiveFromConfig(config json.RawMessage, logger EventLogger, dispatcher
 	if dispatcher == nil {
 		return nil, fmt.Errorf("archive: dispatcher not available")
 	}
-	// Validate NaCl recipient key at config time so a bad key is caught immediately
+	// Validate and cache NaCl recipient key at config time so a bad key is caught immediately
+	var recipientKey *[32]byte
 	if cfg.NaClRecipientKey != "" {
-		if _, err := decodeRecipientKey(cfg.NaClRecipientKey); err != nil {
+		key, err := decodeRecipientKey(cfg.NaClRecipientKey)
+		if err != nil {
 			return nil, fmt.Errorf("archive: invalid nacl_recipient_key: %w", err)
 		}
+		recipientKey = &key
 	}
 
 	return &Archive{
-		cfg:         cfg,
-		eventLogger: logger,
-		dispatcher:  dispatcher,
+		cfg:          cfg,
+		eventLogger:  logger,
+		dispatcher:   dispatcher,
+		recipientKey: recipientKey,
 	}, nil
 }
 
@@ -154,20 +159,8 @@ func (a *Archive) buildPayload(phase string, meta *RequestMeta, reqJSON, respJSO
 
 func (a *Archive) enqueue(body []byte, meta *RequestMeta) {
 	payload := body
-	if a.cfg.NaClRecipientKey != "" {
-		recipientKey, err := decodeRecipientKey(a.cfg.NaClRecipientKey)
-		if err != nil {
-			log.Printf("archive: invalid nacl_recipient_key: %v", err)
-			if a.eventLogger != nil {
-				a.eventLogger(&store.MiddlewareEvent{
-					Middleware: "archive",
-					EventType:  "error",
-					Summary:    "archive payload dropped: invalid nacl_recipient_key - " + err.Error(),
-				})
-			}
-			return
-		}
-		encrypted, err := encryptPayload(payload, recipientKey)
+	if a.recipientKey != nil {
+		encrypted, err := encryptPayload(payload, *a.recipientKey)
 		if err != nil {
 			log.Printf("archive: encryption failed: %v", err)
 			if a.eventLogger != nil {

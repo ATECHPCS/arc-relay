@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -29,7 +30,35 @@ type ClientRegistration struct {
 	ClientSecret string `json:"client_secret"`
 }
 
-var discoveryClient = &http.Client{Timeout: 10 * time.Second}
+// discoveryClient is an HTTP client for OAuth discovery that blocks redirects
+// to private/loopback addresses to prevent redirect-based SSRF.
+var discoveryClient = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		host := req.URL.Hostname()
+		if ip := net.ParseIP(host); ip != nil {
+			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+				return fmt.Errorf("redirect to private/loopback address blocked")
+			}
+		} else {
+			// Resolve hostname and check all IPs
+			ips, err := net.LookupHost(host)
+			if err == nil {
+				for _, ipStr := range ips {
+					if resolved := net.ParseIP(ipStr); resolved != nil {
+						if resolved.IsLoopback() || resolved.IsPrivate() || resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast() || resolved.IsUnspecified() {
+							return fmt.Errorf("redirect to host resolving to private address blocked")
+						}
+					}
+				}
+			}
+		}
+		return nil
+	},
+}
 
 // DiscoverOAuth probes .well-known endpoints to auto-discover OAuth configuration.
 // Returns nil, nil if no OAuth is found (not an error).
