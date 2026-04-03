@@ -93,7 +93,7 @@ func (p *RemoteProxy) SendNotification(n *mcp.Notification) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -202,7 +202,7 @@ func (p *RemoteProxy) doSend(ctx context.Context, req *mcp.Request) (*mcp.Respon
 	if err != nil {
 		return nil, 0, fmt.Errorf("sending request to %s: %w", p.config.URL, err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode == http.StatusUnauthorized {
 		return nil, http.StatusUnauthorized, fmt.Errorf("remote server returned status 401")

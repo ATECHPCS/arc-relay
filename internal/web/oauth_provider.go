@@ -129,7 +129,7 @@ func oauthError(w http.ResponseWriter, status int, errCode, description string) 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error":             errCode,
 		"error_description": description,
 	})
@@ -178,7 +178,7 @@ func (h *Handlers) handleProtectedResourceMetadata(w http.ResponseWriter, r *htt
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"resource":                 resource,
 		"authorization_servers":    []string{baseURL},
 		"bearer_methods_supported": []string{"header"},
@@ -193,7 +193,7 @@ func (h *Handlers) handleAuthorizationServerMetadata(w http.ResponseWriter, r *h
 	}
 	baseURL := h.cfg.PublicBaseURL()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"issuer":                                baseURL,
 		"authorization_endpoint":                baseURL + "/authorize",
 		"token_endpoint":                        baseURL + "/token",
@@ -282,7 +282,7 @@ func (h *Handlers) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleOAuthAuthorize handles GET/POST /authorize.
@@ -562,7 +562,7 @@ func (h *Handlers) handleTokenAuthorizationCode(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"access_token":  accessToken,
 		"token_type":    "Bearer",
 		"expires_in":    3600,
@@ -617,7 +617,7 @@ func (h *Handlers) handleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"access_token":  accessToken,
 		"token_type":    "Bearer",
 		"expires_in":    3600,

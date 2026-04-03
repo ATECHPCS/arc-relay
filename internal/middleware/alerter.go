@@ -192,7 +192,7 @@ func (a *Alerter) sendWebhook(url, summary string, meta *RequestMeta) {
 		log.Printf("alerter: webhook failed for %s: %v", url, err)
 		return
 	}
-	resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		log.Printf("alerter: webhook %s returned status %d", url, resp.StatusCode)
 	}

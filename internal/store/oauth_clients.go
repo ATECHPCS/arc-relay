@@ -67,7 +67,7 @@ func (s *OAuthClientStore) Get(clientID string) *OAuthClient {
 	if err != nil {
 		return nil
 	}
-	json.Unmarshal([]byte(urisJSON), &client.RedirectURIs)
+	_ = json.Unmarshal([]byte(urisJSON), &client.RedirectURIs)
 	return &client
 }
 
@@ -123,18 +123,18 @@ func (s *OAuthRefreshTokenStore) Consume(rawToken string) *OAuthRefreshTokenData
 	}
 
 	if time.Now().After(data.ExpiresAt) {
-		s.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE token_hash = ?`, tokenHash)
+		_, _ = s.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE token_hash = ?`, tokenHash)
 		return nil
 	}
 
 	// Delete (single-use)
-	s.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE token_hash = ?`, tokenHash)
+	_, _ = s.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE token_hash = ?`, tokenHash)
 	return &data
 }
 
 // Cleanup removes expired refresh tokens.
 func (s *OAuthRefreshTokenStore) Cleanup() {
-	s.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE expires_at < ?`, time.Now())
+	_, _ = s.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE expires_at < ?`, time.Now())
 }
 
 // OAuthRefreshTokenData holds the metadata from a consumed refresh token.

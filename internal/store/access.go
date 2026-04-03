@@ -47,7 +47,7 @@ func (s *AccessStore) GetAllTiers(serverID string) ([]EndpointTier, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing access tiers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tiers []EndpointTier
 	for rows.Next() {
@@ -116,7 +116,7 @@ func (s *AccessStore) SyncAfterEnumerate(serverID string, endpoints []EndpointIn
 		for _, t := range existing {
 			key := t.EndpointType + ":" + t.EndpointName
 			if !current[key] {
-				tx.Exec(`DELETE FROM endpoint_access_tiers
+				_, _ = tx.Exec(`DELETE FROM endpoint_access_tiers
 					WHERE server_id = ? AND endpoint_type = ? AND endpoint_name = ?`,
 					serverID, t.EndpointType, t.EndpointName)
 			}

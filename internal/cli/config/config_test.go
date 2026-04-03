@@ -72,7 +72,9 @@ func TestLoadConfigNotFound(t *testing.T) {
 func TestLoadConfigMissingURL(t *testing.T) {
 	dir := t.TempDir()
 	data := `{"api_key": "key"}`
-	os.WriteFile(filepath.Join(dir, configFileName), []byte(data), 0600)
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := LoadConfig(dir)
 	if err == nil {
@@ -83,7 +85,9 @@ func TestLoadConfigMissingURL(t *testing.T) {
 func TestLoadConfigMissingKey(t *testing.T) {
 	dir := t.TempDir()
 	data := `{"relay_url": "http://example.com"}`
-	os.WriteFile(filepath.Join(dir, configFileName), []byte(data), 0600)
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := LoadConfig(dir)
 	if err == nil {
@@ -93,7 +97,9 @@ func TestLoadConfigMissingKey(t *testing.T) {
 
 func TestLoadConfigMalformedJSON(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, configFileName), []byte("{not json"), 0600)
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := LoadConfig(dir)
 	if err == nil {
@@ -152,7 +158,9 @@ func TestResolveCredentialsEnvPartial(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &Config{RelayURL: "http://file:8080", APIKey: "file-key"}
-	SaveConfig(dir, cfg)
+	if err := SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	creds, err := ResolveCredentials(dir)
 	if err != nil {
@@ -172,7 +180,9 @@ func TestCheckPermissionsSecure(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &Config{RelayURL: "http://example.com", APIKey: "key"}
-	SaveConfig(dir, cfg)
+	if err := SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	warning := CheckPermissions(dir)
 	if warning != "" {
@@ -187,10 +197,14 @@ func TestCheckPermissionsInsecure(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := &Config{RelayURL: "http://example.com", APIKey: "key"}
-	SaveConfig(dir, cfg)
+	if err := SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
 
 	// Make insecure
-	os.Chmod(ConfigPath(dir), 0644)
+	if err := os.Chmod(ConfigPath(dir), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	warning := CheckPermissions(dir)
 	if warning == "" {

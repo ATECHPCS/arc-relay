@@ -44,15 +44,15 @@ func (s *SessionStore) Get(id string) (*User, time.Time, bool) {
 
 // Delete removes a session (logout).
 func (s *SessionStore) Delete(id string) {
-	s.db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
+	_, _ = s.db.Exec(`DELETE FROM sessions WHERE id = ?`, id)
 }
 
 // DeleteByUser removes all sessions for a specific user (e.g., after password reset).
 func (s *SessionStore) DeleteByUser(userID string) {
-	s.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, userID)
+	_, _ = s.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, userID)
 }
 
 // Cleanup removes all expired sessions.
 func (s *SessionStore) Cleanup() {
-	s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, time.Now())
+	_, _ = s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, time.Now())
 }

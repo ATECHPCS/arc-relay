@@ -252,7 +252,7 @@ func (c *Client) fetchRegistry(ctx context.Context, query string, limit int) (*R
 	if err != nil {
 		return nil, fmt.Errorf("registry request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

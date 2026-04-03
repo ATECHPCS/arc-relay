@@ -37,7 +37,7 @@ func setupRelayMock(t *testing.T, servers []testServer, token string) *httptest.
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(servers)
+		_ = json.NewEncoder(w).Encode(servers)
 	}))
 }
 
@@ -56,7 +56,9 @@ func setupTest(t *testing.T, servers []testServer, mcpJSON string) (configDir, p
 
 	projectDir = t.TempDir()
 	if mcpJSON != "" {
-		os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(mcpJSON), 0644)
+		if err := os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(mcpJSON), 0644); err != nil {
+			t.Fatalf("writing .mcp.json: %v", err)
+		}
 	}
 
 	return configDir, projectDir, ts.URL
@@ -93,9 +95,13 @@ func TestSyncNonInteractiveAddsAll(t *testing.T) {
 	}
 
 	var raw map[string]json.RawMessage
-	json.Unmarshal(data, &raw)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshaling .mcp.json: %v", err)
+	}
 	var mcpServers map[string]json.RawMessage
-	json.Unmarshal(raw["mcpServers"], &mcpServers)
+	if err := json.Unmarshal(raw["mcpServers"], &mcpServers); err != nil {
+		t.Fatalf("unmarshaling mcpServers: %v", err)
+	}
 
 	if len(mcpServers) != 2 {
 		t.Errorf("expected 2 servers in .mcp.json, got %d", len(mcpServers))
@@ -111,7 +117,9 @@ func TestSyncSkipsAlreadyConfigured(t *testing.T) {
 	// Pre-configure sentry
 	configDir, projectDir, relayURL := setupTest(t, servers, "")
 	existing := fmt.Sprintf(`{"mcpServers":{"sentry":{"type":"http","url":"%s/mcp/sentry","headers":{"Authorization":"Bearer test-key"}}}}`, relayURL)
-	os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(existing), 0644)
+	if err := os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(existing), 0644); err != nil {
+		t.Fatalf("writing .mcp.json: %v", err)
+	}
 
 	var output bytes.Buffer
 	result, err := Run(Options{
@@ -301,9 +309,13 @@ func TestSyncPreservesManualEntries(t *testing.T) {
 
 	data, _ := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
 	var raw map[string]json.RawMessage
-	json.Unmarshal(data, &raw)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshaling .mcp.json: %v", err)
+	}
 	var mcpServers map[string]json.RawMessage
-	json.Unmarshal(raw["mcpServers"], &mcpServers)
+	if err := json.Unmarshal(raw["mcpServers"], &mcpServers); err != nil {
+		t.Fatalf("unmarshaling mcpServers: %v", err)
+	}
 
 	if _, ok := mcpServers["my-local-server"]; !ok {
 		t.Error("expected my-local-server to be preserved")

@@ -262,7 +262,7 @@ func (s *ServerStore) List() ([]*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing servers: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var servers []*Server
 	for rows.Next() {

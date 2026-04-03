@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -48,12 +49,12 @@ func Run(opts Options) (*Result, error) {
 
 	// Check config permissions
 	if warning := config.CheckPermissions(opts.ConfigDir); warning != "" {
-		fmt.Fprintln(opts.Output, warning)
+		_, _ = fmt.Fprintln(opts.Output, warning)
 	}
 
 	// Fetch relay servers
 	client := relay.NewClient(creds.RelayURL, creds.APIKey)
-	fmt.Fprintf(opts.Output, "Connecting to Arc Relay at %s...\n", creds.RelayURL)
+	_, _ = fmt.Fprintf(opts.Output, "Connecting to Arc Relay at %s...\n", creds.RelayURL)
 
 	allServers, err := client.ListServers()
 	if err != nil {
@@ -67,15 +68,15 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 
-	fmt.Fprintf(opts.Output, "Found %d servers (%d running)\n\n", len(allServers), len(running))
+	_, _ = fmt.Fprintf(opts.Output, "Found %d servers (%d running)\n\n", len(allServers), len(running))
 
 	if len(running) == 0 {
-		fmt.Fprintln(opts.Output, "No running servers available.")
+		_, _ = fmt.Fprintln(opts.Output, "No running servers available.")
 		return &Result{}, nil
 	}
 
 	// Detect project and target
-	fmt.Fprintf(opts.Output, "Current project: %s\n", opts.ProjectDir)
+	_, _ = fmt.Fprintf(opts.Output, "Current project: %s\n", opts.ProjectDir)
 
 	target := &project.ClaudeCodeTarget{}
 	existing, err := target.Read(opts.ProjectDir, creds.RelayURL)
@@ -93,7 +94,7 @@ func Run(opts Options) (*Result, error) {
 		for _, s := range existing {
 			names = append(names, s.Name)
 		}
-		fmt.Fprintf(opts.Output, "Already configured: %s\n", strings.Join(names, ", "))
+		_, _ = fmt.Fprintf(opts.Output, "Already configured: %s\n", strings.Join(names, ", "))
 	}
 
 	// Load state for skip list
@@ -128,7 +129,7 @@ func Run(opts Options) (*Result, error) {
 	// Apply renames to .mcp.json
 	if len(renames) > 0 {
 		for _, r := range renames {
-			fmt.Fprintf(opts.Output, "  Renamed: %s -> %s\n", r.OldName, r.Name)
+			_, _ = fmt.Fprintf(opts.Output, "  Renamed: %s -> %s\n", r.OldName, r.Name)
 		}
 		if !opts.DryRun {
 			// Remove old entries, add new ones
@@ -136,8 +137,12 @@ func Run(opts Options) (*Result, error) {
 			for _, r := range renames {
 				oldNames = append(oldNames, r.OldName)
 			}
-			target.Remove(opts.ProjectDir, oldNames)
-			target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, renames)
+			if _, err := target.Remove(opts.ProjectDir, oldNames); err != nil {
+				log.Printf("sync: removing renamed entries: %v", err)
+			}
+			if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, renames); err != nil {
+				log.Printf("sync: writing renamed entries: %v", err)
+			}
 		}
 	}
 
@@ -155,7 +160,7 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	if len(newServers) == 0 {
-		fmt.Fprintln(opts.Output, "\nAll servers are already configured or skipped.")
+		_, _ = fmt.Fprintln(opts.Output, "\nAll servers are already configured or skipped.")
 		if len(renames) > 0 {
 			if err := config.SaveState(opts.ConfigDir, state); err != nil {
 				return nil, fmt.Errorf("saving state: %w", err)
@@ -164,7 +169,7 @@ func Run(opts Options) (*Result, error) {
 		return result, nil
 	}
 
-	fmt.Fprintln(opts.Output, "\nNew servers available:")
+	_, _ = fmt.Fprintln(opts.Output, "\nNew servers available:")
 
 	// Collect servers to add
 	var toAdd []project.ManagedServer
@@ -196,11 +201,11 @@ func Run(opts Options) (*Result, error) {
 			if healthNote != "" {
 				label += healthNote
 			}
-			fmt.Fprintf(opts.Output, "  [%d] %s — %s\n", i+1, displayName, label)
+			_, _ = fmt.Fprintf(opts.Output, "  [%d] %s — %s\n", i+1, displayName, label)
 			continue
 		}
 
-		fmt.Fprintf(opts.Output, "  [%d] %s%s — Add to project? [y/n]  ", i+1, displayName, healthNote)
+		_, _ = fmt.Fprintf(opts.Output, "  [%d] %s%s — Add to project? [y/n]  ", i+1, displayName, healthNote)
 
 		if !scanner.Scan() {
 			break
@@ -222,7 +227,7 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	if len(toAdd) == 0 {
-		fmt.Fprintln(opts.Output, "\nNo servers added.")
+		_, _ = fmt.Fprintln(opts.Output, "\nNo servers added.")
 		// Still save state if there were skips or renames
 		if len(result.Skipped) > 0 || len(renames) > 0 {
 			if err := config.SaveState(opts.ConfigDir, state); err != nil {
@@ -250,8 +255,8 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	if opts.DryRun {
-		fmt.Fprintf(opts.Output, "\nDRY RUN — no files will be modified\n\n")
-		fmt.Fprint(opts.Output, safety.FormatChangeSummary(changes, opts.ProjectDir))
+		_, _ = fmt.Fprintf(opts.Output, "\nDRY RUN — no files will be modified\n\n")
+		_, _ = fmt.Fprint(opts.Output, safety.FormatChangeSummary(changes, opts.ProjectDir))
 		return result, nil
 	}
 
@@ -259,8 +264,8 @@ func Run(opts Options) (*Result, error) {
 	warnings := safety.CheckGitignore(opts.ProjectDir, ".mcp.json")
 	warningOutput := safety.FormatWarnings(warnings)
 	if warningOutput != "" {
-		fmt.Fprintln(opts.Output)
-		fmt.Fprint(opts.Output, warningOutput)
+		_, _ = fmt.Fprintln(opts.Output)
+		_, _ = fmt.Fprint(opts.Output, warningOutput)
 	}
 
 	// Write changes
@@ -286,9 +291,9 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 
-	fmt.Fprintf(opts.Output, "\nAdded %d server(s) to .mcp.json\n", len(toAdd))
+	_, _ = fmt.Fprintf(opts.Output, "\nAdded %d server(s) to .mcp.json\n", len(toAdd))
 	if len(result.Skipped) > 0 {
-		fmt.Fprintf(opts.Output, "Skipped: %s (won't be prompted again — run 'arc-sync reset' to undo)\n",
+		_, _ = fmt.Fprintf(opts.Output, "Skipped: %s (won't be prompted again — run 'arc-sync reset' to undo)\n",
 			strings.Join(result.Skipped, ", "))
 	}
 

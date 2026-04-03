@@ -47,7 +47,9 @@ func TestServerGetAndGetByName(t *testing.T) {
 		ServerType:  store.ServerTypeRemote,
 		Config:      json.RawMessage(`{"url":"https://example.com"}`),
 	}
-	servers.Create(srv)
+	if err := servers.Create(srv); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("Get found", func(t *testing.T) {
 		found, err := servers.Get(srv.ID)
@@ -113,8 +115,12 @@ func TestServerList(t *testing.T) {
 		}
 	})
 
-	servers.Create(&store.Server{Name: "s1", DisplayName: "S1", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)})
-	servers.Create(&store.Server{Name: "s2", DisplayName: "S2", ServerType: store.ServerTypeHTTP, Config: json.RawMessage(`{}`)})
+	if err := servers.Create(&store.Server{Name: "s1", DisplayName: "S1", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := servers.Create(&store.Server{Name: "s2", DisplayName: "S2", ServerType: store.ServerTypeHTTP, Config: json.RawMessage(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("populated", func(t *testing.T) {
 		list, err := servers.List()
@@ -132,7 +138,9 @@ func TestServerUpdate(t *testing.T) {
 	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{Name: "updatable", DisplayName: "Updatable", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
-	servers.Create(srv)
+	if err := servers.Create(srv); err != nil {
+		t.Fatal(err)
+	}
 	originalUpdatedAt := srv.UpdatedAt
 
 	srv.DisplayName = "Updated Name"
@@ -158,7 +166,9 @@ func TestServerUpdateStatus(t *testing.T) {
 	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{Name: "statustest", DisplayName: "Status Test", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
-	servers.Create(srv)
+	if err := servers.Create(srv); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := servers.UpdateStatus(srv.ID, store.StatusError, "connection refused"); err != nil {
 		t.Fatalf("UpdateStatus() error = %v", err)
@@ -178,7 +188,9 @@ func TestServerUpdateConfig(t *testing.T) {
 	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 
 	srv := &store.Server{Name: "cfgtest", DisplayName: "Config Test", ServerType: store.ServerTypeHTTP, Config: json.RawMessage(`{"url":"old"}`)}
-	servers.Create(srv)
+	if err := servers.Create(srv); err != nil {
+		t.Fatal(err)
+	}
 
 	newConfig := json.RawMessage(`{"url":"new","port":9090}`)
 	if err := servers.UpdateConfig(srv.ID, newConfig); err != nil {
@@ -187,7 +199,9 @@ func TestServerUpdateConfig(t *testing.T) {
 
 	found, _ := servers.Get(srv.ID)
 	var cfg map[string]interface{}
-	json.Unmarshal(found.Config, &cfg)
+	if err := json.Unmarshal(found.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
 	if cfg["url"] != "new" {
 		t.Errorf("config url = %v, want %q", cfg["url"], "new")
 	}
@@ -199,10 +213,14 @@ func TestServerDeleteCascadesAccessTiers(t *testing.T) {
 	access := store.NewAccessStore(db)
 
 	srv := &store.Server{Name: "cascade", DisplayName: "Cascade", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
-	servers.Create(srv)
+	if err := servers.Create(srv); err != nil {
+		t.Fatal(err)
+	}
 
 	// Add an access tier for this server
-	access.SetTier(srv.ID, "tool", "test_tool", "read")
+	if err := access.SetTier(srv.ID, "tool", "test_tool", "read"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Delete server
 	if err := servers.Delete(srv.ID); err != nil {
@@ -226,12 +244,22 @@ func TestServerDeleteWithRequestLogs(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	servers := store.NewServerStore(db, store.NewConfigEncryptor(""))
 	logs := store.NewRequestLogStore(db)
+	users := store.NewUserStore(db)
 
 	srv := &store.Server{Name: "has-logs", DisplayName: "Has Logs", ServerType: store.ServerTypeStdio, Config: json.RawMessage(`{}`)}
-	servers.Create(srv)
+	if err := servers.Create(srv); err != nil {
+		t.Fatal(err)
+	}
+
+	u, err := users.Create("log-user", "pass", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Add a request log referencing this server
-	logs.Create(&store.RequestLog{ServerID: srv.ID, Method: "tools/call", Status: "ok"})
+	if err := logs.Create(&store.RequestLog{ServerID: srv.ID, UserID: u.ID, Method: "tools/call", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Delete server should succeed (was blocked before migration 011)
 	if err := servers.Delete(srv.ID); err != nil {

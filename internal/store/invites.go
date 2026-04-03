@@ -88,7 +88,7 @@ func (s *InviteStore) ValidateAndConsume(rawToken string) (*InviteToken, error) 
 	if affected == 0 {
 		// Token doesn't exist, is expired, or already used
 		// Mark any expired tokens while we're here
-		s.db.Exec("UPDATE invite_tokens SET status = 'expired' WHERE token_hash = ? AND status = 'pending' AND expires_at <= ?", tokenHash, now)
+		_, _ = s.db.Exec("UPDATE invite_tokens SET status = 'expired' WHERE token_hash = ? AND status = 'pending' AND expires_at <= ?", tokenHash, now)
 		return nil, nil
 	}
 
@@ -128,7 +128,7 @@ func (s *InviteStore) ListForUser(userID string) ([]*InviteToken, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing invite tokens: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanInviteTokens(rows)
 }
 
@@ -143,7 +143,7 @@ func (s *InviteStore) ListAll() ([]*InviteToken, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing all invite tokens: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanInviteTokens(rows)
 }
 

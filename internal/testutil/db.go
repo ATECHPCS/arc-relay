@@ -15,7 +15,7 @@ func OpenTestDB(t *testing.T) *store.DB {
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -29,6 +29,6 @@ func OpenTestFileDB(t *testing.T) *store.DB {
 	if err != nil {
 		t.Fatalf("opening test file db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }

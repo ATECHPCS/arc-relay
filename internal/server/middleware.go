@@ -33,7 +33,7 @@ func setWWWAuthenticate(w http.ResponseWriter, baseURL string, r *http.Request) 
 func jsonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	fmt.Fprint(w, msg)
+	_, _ = fmt.Fprint(w, msg)
 }
 
 // APIKeyAuth middleware validates Bearer token API keys.

@@ -341,7 +341,7 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 					`Bearer resource_metadata="%s/.well-known/oauth-protected-resource%s"`, baseURL, r.URL.Path))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
-				fmt.Fprint(w, `{"error":"authentication required"}`)
+				_, _ = fmt.Fprint(w, `{"error":"authentication required"}`)
 				return
 			}
 			http.Redirect(w, r, "/login", http.StatusFound)
@@ -546,7 +546,7 @@ func (h *Handlers) handleLogs(w http.ResponseWriter, r *http.Request) {
 	const perPage = 50
 	page := 1
 	if pageStr != "" {
-		fmt.Sscanf(pageStr, "%d", &page)
+		_, _ = fmt.Sscanf(pageStr, "%d", &page)
 		if page < 1 {
 			page = 1
 		}
@@ -900,7 +900,7 @@ func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id 
 	}
 	// Clean up stale backend/container if server is in error state
 	if srv.Status == store.StatusError {
-		h.proxy.StopServer(r.Context(), id)
+		_ = h.proxy.StopServer(r.Context(), id)
 	}
 	if err := h.proxy.StartServer(r.Context(), srv); err != nil {
 		log.Printf("Error starting server %s: %v", srv.Name, err) // #nosec G706 - server name from DB
@@ -915,7 +915,7 @@ func (h *Handlers) handleServerStop(w http.ResponseWriter, r *http.Request, id s
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	h.proxy.StopServer(r.Context(), id)
+	_ = h.proxy.StopServer(r.Context(), id)
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
 
@@ -924,7 +924,7 @@ func (h *Handlers) handleServerDelete(w http.ResponseWriter, r *http.Request, id
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	h.proxy.StopServer(r.Context(), id)
+	_ = h.proxy.StopServer(r.Context(), id)
 	if err := h.servers.Delete(id); err != nil {
 		log.Printf("Error deleting server %s: %v", id, err)
 		http.Error(w, "Failed to delete server: "+err.Error(), http.StatusInternalServerError)
@@ -1038,7 +1038,7 @@ func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, 
 	w.Header().Set("Connection", "keep-alive")
 
 	send := func(msg string) {
-		fmt.Fprintf(w, "data: %s\n\n", msg)
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", msg)
 		flusher.Flush()
 	}
 
@@ -1050,7 +1050,7 @@ func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, 
 		// SSE data is consumed by JS, not rendered as HTML, but we sanitize anyway.
 		safeErr := strings.ReplaceAll(err.Error(), "<", "&lt;")
 		safeErr = strings.ReplaceAll(safeErr, ">", "&gt;")
-		fmt.Fprintf(w, "event: error\ndata: %s\n\n", safeErr) // #nosec G705
+		_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", safeErr) // #nosec G705
 		flusher.Flush()
 		return
 	}
@@ -1058,7 +1058,7 @@ func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, 
 	if h.healthMon != nil {
 		h.healthMon.ResetRecoveryState(id)
 	}
-	fmt.Fprintf(w, "event: done\ndata: Container recreated successfully\n\n")
+	_, _ = fmt.Fprintf(w, "event: done\ndata: Container recreated successfully\n\n")
 	flusher.Flush()
 }
 
@@ -1357,7 +1357,7 @@ func (h *Handlers) handleUserRoutes(w http.ResponseWriter, r *http.Request) {
 		userID := parts[0]
 		switch parts[1] {
 		case "delete":
-			h.users.Delete(userID)
+			_ = h.users.Delete(userID)
 			http.Redirect(w, r, "/users", http.StatusFound)
 			return
 		case "update":
@@ -1439,7 +1439,7 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 	if invite == nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "invalid, expired, or already used token"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid, expired, or already used token"})
 		return
 	}
 
@@ -1454,20 +1454,20 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 	log.Printf("Invite exchange: created API key for user %s via invite %s", invite.UserID, invite.ID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"api_key": rawKey})
+	_ = json.NewEncoder(w).Encode(map[string]string{"api_key": rawKey})
 }
 
 func (h *Handlers) handleUserUpdate(w http.ResponseWriter, r *http.Request, userID string) {
 	role := r.FormValue("role")
 	if role == "admin" || role == "user" {
-		h.users.UpdateRole(userID, role)
+		_ = h.users.UpdateRole(userID, role)
 	}
 
 	var profileID *string
 	if pid := strings.TrimSpace(r.FormValue("default_profile_id")); pid != "" {
 		profileID = &pid
 	}
-	h.users.UpdateProfile(userID, profileID)
+	_ = h.users.UpdateProfile(userID, profileID)
 
 	http.Redirect(w, r, "/users", http.StatusFound)
 }
@@ -1621,7 +1621,7 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "You can only revoke your own API keys", http.StatusForbidden)
 			return
 		}
-		h.users.RevokeAPIKey(keyID)
+		_ = h.users.RevokeAPIKey(keyID)
 		http.Redirect(w, r, "/api-keys", http.StatusFound)
 		return
 	}
@@ -1782,7 +1782,7 @@ func (h *Handlers) handleProfileUpdate(w http.ResponseWriter, r *http.Request, p
 		http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
 		return
 	}
-	h.profileStore.Update(profileID, name, desc)
+	_ = h.profileStore.Update(profileID, name, desc)
 	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
 }
 
@@ -1791,7 +1791,7 @@ func (h *Handlers) handleProfileDelete(w http.ResponseWriter, r *http.Request, p
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	h.profileStore.Delete(profileID)
+	_ = h.profileStore.Delete(profileID)
 	http.Redirect(w, r, "/profiles", http.StatusFound)
 }
 
@@ -1812,14 +1812,14 @@ func (h *Handlers) handleProfilePermission(w http.ResponseWriter, r *http.Reques
 	}
 
 	if action == "grant" {
-		h.profileStore.SetPermission(profileID, serverID, endpointType, endpointName)
+		_ = h.profileStore.SetPermission(profileID, serverID, endpointType, endpointName)
 	} else {
-		h.profileStore.RemovePermission(profileID, serverID, endpointType, endpointName)
+		_ = h.profileStore.RemovePermission(profileID, serverID, endpointType, endpointName)
 	}
 
 	// Return 200 for JS fetch calls
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
 func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, profileID string) {
@@ -1842,7 +1842,7 @@ func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, pro
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			errJSON, _ := json.Marshal(err.Error())
-			w.Write([]byte(`{"error":` + string(errJSON) + `}`))
+			_, _ = w.Write([]byte(`{"error":` + string(errJSON) + `}`))
 			return
 		}
 	}
@@ -1850,7 +1850,7 @@ func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, pro
 	// AJAX callers get JSON; form submissions get a redirect
 	if r.Header.Get("Accept") == "application/json" {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 		return
 	}
 	http.Redirect(w, r, "/profiles/"+profileID, http.StatusFound)
@@ -2049,7 +2049,7 @@ func (h *Handlers) handleConnectDesktop(w http.ResponseWriter, r *http.Request) 
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // --- Helpers ---
@@ -2084,7 +2084,7 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 
 func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Login - Arc Relay</title>
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head><title>Login - Arc Relay</title>
 <style>body{font-family:system-ui,sans-serif;background:#f8f9fa;color:#212529;}
 .card{background:#fff;border:1px solid #dee2e6;border-radius:8px;padding:1.25rem;max-width:400px;margin:4rem auto;}
 .card h2{font-size:1.1rem;margin-bottom:1rem;}
@@ -2097,13 +2097,13 @@ func (h *Handlers) renderLogin(w http.ResponseWriter, errMsg, next string) {
 </style></head><body>
 <div class="card"><h2>Log in to Arc Relay</h2>`)
 	if errMsg != "" {
-		fmt.Fprintf(w, `<div class="alert">%s</div>`, template.HTMLEscapeString(errMsg))
+		_, _ = fmt.Fprintf(w, `<div class="alert">%s</div>`, template.HTMLEscapeString(errMsg))
 	}
-	fmt.Fprint(w, `<form method="POST" action="/login">`)
+	_, _ = fmt.Fprint(w, `<form method="POST" action="/login">`)
 	if next != "" && strings.HasPrefix(next, "/") && !strings.HasPrefix(next, "//") {
-		fmt.Fprintf(w, `<input type="hidden" name="next" value="%s">`, template.HTMLEscapeString(next))
+		_, _ = fmt.Fprintf(w, `<input type="hidden" name="next" value="%s">`, template.HTMLEscapeString(next))
 	}
-	fmt.Fprint(w, `<div class="form-group"><label for="username">Username</label><input type="text" id="username" name="username" required autofocus></div>
+	_, _ = fmt.Fprint(w, `<div class="form-group"><label for="username">Username</label><input type="text" id="username" name="username" required autofocus></div>
 <div class="form-group"><label for="password">Password</label><input type="password" id="password" name="password" required></div>
 <button type="submit" class="btn">Log In</button>
 </form></div></body></html>`)
@@ -2297,7 +2297,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 	switch srv.ServerType {
 	case store.ServerTypeStdio:
 		var cfg store.StdioConfig
-		json.Unmarshal(srv.Config, &cfg)
+		_ = json.Unmarshal(srv.Config, &cfg)
 		cd.Image = cfg.Image
 		cd.IsDocker = true
 		cd.Command = strings.Join(cfg.Command, " ")
@@ -2315,7 +2315,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		}
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
-		json.Unmarshal(srv.Config, &cfg)
+		_ = json.Unmarshal(srv.Config, &cfg)
 		cd.Image = cfg.Image
 		cd.IsDocker = cfg.Image != "" && cfg.URL == "" // Docker-managed only when no external URL
 		cd.Port = cfg.Port
@@ -2325,7 +2325,7 @@ func buildConfigDisplay(srv *store.Server) *ConfigDisplay {
 		cd.EnvVars = cfg.Env
 	case store.ServerTypeRemote:
 		var cfg store.RemoteConfig
-		json.Unmarshal(srv.Config, &cfg)
+		_ = json.Unmarshal(srv.Config, &cfg)
 		cd.URL = cfg.URL
 		cd.AuthType = cfg.Auth.Type
 		if cfg.Auth.Type == "oauth" {
@@ -2345,7 +2345,7 @@ func serverToFormData(srv *store.Server) map[string]any {
 	switch srv.ServerType {
 	case store.ServerTypeStdio:
 		var cfg store.StdioConfig
-		json.Unmarshal(srv.Config, &cfg)
+		_ = json.Unmarshal(srv.Config, &cfg)
 		data["StdioImage"] = cfg.Image
 		data["StdioEntrypoint"] = strings.Join(cfg.Entrypoint, " ")
 		data["StdioCommand"] = joinQuoted(cfg.Command)
@@ -2369,7 +2369,7 @@ func serverToFormData(srv *store.Server) map[string]any {
 		}
 	case store.ServerTypeHTTP:
 		var cfg store.HTTPConfig
-		json.Unmarshal(srv.Config, &cfg)
+		_ = json.Unmarshal(srv.Config, &cfg)
 		data["HTTPImage"] = cfg.Image
 		data["HTTPPort"] = cfg.Port
 		data["HTTPURL"] = cfg.URL
@@ -2377,7 +2377,7 @@ func serverToFormData(srv *store.Server) map[string]any {
 		data["HTTPEnv"] = envToText(cfg.Env)
 	case store.ServerTypeRemote:
 		var cfg store.RemoteConfig
-		json.Unmarshal(srv.Config, &cfg)
+		_ = json.Unmarshal(srv.Config, &cfg)
 		data["RemoteURL"] = cfg.URL
 		data["RemoteAuthType"] = cfg.Auth.Type
 		data["RemoteToken"] = cfg.Auth.Token
@@ -2481,7 +2481,7 @@ func parseCommand(text string) []string {
 
 func parseInt(s string) int {
 	var n int
-	fmt.Sscanf(s, "%d", &n)
+	_, _ = fmt.Sscanf(s, "%d", &n)
 	return n
 }
 

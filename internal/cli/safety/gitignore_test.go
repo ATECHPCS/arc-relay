@@ -47,7 +47,9 @@ func TestCheckGitignoreNotGitRepo(t *testing.T) {
 
 func TestCheckGitignoreNoGitignoreFile(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".git"), 0755)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	warnings := CheckGitignore(dir, ".mcp.json")
 	if len(warnings) != 1 {
@@ -66,8 +68,12 @@ func TestCheckGitignoreNoGitignoreFile(t *testing.T) {
 
 func TestCheckGitignoreFileNotIgnored(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".git"), 0755)
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules\n*.log\n"), 0644)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules\n*.log\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	warnings := CheckGitignore(dir, ".mcp.json")
 	if len(warnings) != 1 {
@@ -83,8 +89,12 @@ func TestCheckGitignoreFileNotIgnored(t *testing.T) {
 
 func TestCheckGitignoreFileIsIgnored(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".git"), 0755)
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules\n.mcp.json\n*.log\n"), 0644)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("node_modules\n.mcp.json\n*.log\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	warnings := CheckGitignore(dir, ".mcp.json")
 	if len(warnings) != 1 {
@@ -100,8 +110,12 @@ func TestCheckGitignoreFileIsIgnored(t *testing.T) {
 
 func TestCheckGitignoreWithLeadingSlash(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".git"), 0755)
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("/.mcp.json\n"), 0644)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("/.mcp.json\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	warnings := CheckGitignore(dir, ".mcp.json")
 	if len(warnings) != 1 {
@@ -114,8 +128,12 @@ func TestCheckGitignoreWithLeadingSlash(t *testing.T) {
 
 func TestCheckGitignoreWithComments(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".git"), 0755)
-	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("# MCP config\n.mcp.json\n"), 0644)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("# MCP config\n.mcp.json\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	warnings := CheckGitignore(dir, ".mcp.json")
 	if len(warnings) != 1 {

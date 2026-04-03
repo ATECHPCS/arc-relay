@@ -134,8 +134,8 @@ func (b *StdioBridge) SendNotification(notification *mcp.Notification) error {
 func (b *StdioBridge) Close() error {
 	b.closeOnce.Do(func() {
 		b.closed = true
-		b.stdin.Close()
-		b.stdout.Close()
+		_ = b.stdin.Close()
+		_ = b.stdout.Close()
 
 		// Drain any pending requests
 		b.mu.Lock()

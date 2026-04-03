@@ -105,8 +105,12 @@ func TestEncryptPayloadDifferentNonces(t *testing.T) {
 	env2, _ := encryptPayload(payload, *pub)
 
 	var e1, e2 naclEnvelope
-	json.Unmarshal(env1, &e1)
-	json.Unmarshal(env2, &e2)
+	if err := json.Unmarshal(env1, &e1); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(env2, &e2); err != nil {
+		t.Fatal(err)
+	}
 
 	if e1.Nonce == e2.Nonce {
 		t.Error("two encryptions produced the same nonce - nonces must be unique")

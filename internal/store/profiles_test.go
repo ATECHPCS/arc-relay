@@ -98,8 +98,10 @@ func TestProfilePermissionCRUD(t *testing.T) {
 	profiles := store.NewProfileStore(db)
 
 	// Insert a server for FK constraint
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	profile, err := profiles.Create("perm-test", "")
 	if err != nil {
@@ -160,8 +162,10 @@ func TestProfileBulkSetPermissions(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	profiles := store.NewProfileStore(db)
 
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	profile, err := profiles.Create("bulk-test", "")
 	if err != nil {
@@ -202,13 +206,21 @@ func TestProfileSeedFromTier(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	profiles := store.NewProfileStore(db)
 
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	// Insert access tiers for the server
-	db.Exec(`INSERT INTO endpoint_access_tiers (server_id, endpoint_type, endpoint_name, access_tier) VALUES ('srv-1', 'tool', 'list_items', 'read')`)
-	db.Exec(`INSERT INTO endpoint_access_tiers (server_id, endpoint_type, endpoint_name, access_tier) VALUES ('srv-1', 'tool', 'create_item', 'write')`)
-	db.Exec(`INSERT INTO endpoint_access_tiers (server_id, endpoint_type, endpoint_name, access_tier) VALUES ('srv-1', 'tool', 'delete_all', 'admin')`)
+	if _, err := db.Exec(`INSERT INTO endpoint_access_tiers (server_id, endpoint_type, endpoint_name, access_tier) VALUES ('srv-1', 'tool', 'list_items', 'read')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO endpoint_access_tiers (server_id, endpoint_type, endpoint_name, access_tier) VALUES ('srv-1', 'tool', 'create_item', 'write')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO endpoint_access_tiers (server_id, endpoint_type, endpoint_name, access_tier) VALUES ('srv-1', 'tool', 'delete_all', 'admin')`); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("read tier", func(t *testing.T) {
 		p, _ := profiles.Create("read-tier", "")
@@ -248,12 +260,21 @@ func TestProfileCascadeDelete(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	profiles := store.NewProfileStore(db)
 
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
-	profile, _ := profiles.Create("cascade-test", "")
-	profiles.SetPermission(profile.ID, "srv-1", "tool", "a")
-	profiles.SetPermission(profile.ID, "srv-1", "tool", "b")
+	profile, err := profiles.Create("cascade-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.SetPermission(profile.ID, "srv-1", "tool", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.SetPermission(profile.ID, "srv-1", "tool", "b"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify permissions exist
 	perms, _ := profiles.GetPermissions(profile.ID)
@@ -267,7 +288,9 @@ func TestProfileCascadeDelete(t *testing.T) {
 
 	// Verify permissions were cascade-deleted
 	var count int
-	db.QueryRow("SELECT COUNT(*) FROM profile_permissions WHERE profile_id = ?", profile.ID).Scan(&count)
+	if err := db.QueryRow("SELECT COUNT(*) FROM profile_permissions WHERE profile_id = ?", profile.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
 	if count != 0 {
 		t.Errorf("permissions should be cascade-deleted, got %d remaining", count)
 	}
@@ -277,13 +300,24 @@ func TestProfilePermissionCount(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	profiles := store.NewProfileStore(db)
 
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
-	profile, _ := profiles.Create("count-test", "")
-	profiles.SetPermission(profile.ID, "srv-1", "tool", "a")
-	profiles.SetPermission(profile.ID, "srv-1", "tool", "b")
-	profiles.SetPermission(profile.ID, "srv-1", "resource", "c")
+	profile, err := profiles.Create("count-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.SetPermission(profile.ID, "srv-1", "tool", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.SetPermission(profile.ID, "srv-1", "tool", "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := profiles.SetPermission(profile.ID, "srv-1", "resource", "c"); err != nil {
+		t.Fatal(err)
+	}
 
 	count, err := profiles.PermissionCount(profile.ID)
 	if err != nil {

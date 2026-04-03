@@ -81,7 +81,7 @@ func (c *Client) CreateServer(req *CreateServerRequest) (*ServerDetail, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to relay at %s: %w", c.BaseURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -114,7 +114,7 @@ func (c *Client) DeleteServer(serverID string) error {
 	if err != nil {
 		return fmt.Errorf("connecting to relay: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
 		return nil
@@ -148,7 +148,7 @@ func (c *Client) serverAction(serverID, action string) error {
 	if err != nil {
 		return fmt.Errorf("connecting to relay: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
 		return nil
@@ -172,7 +172,7 @@ func (c *Client) GetServer(serverID string) (*ServerDetail, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to relay: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

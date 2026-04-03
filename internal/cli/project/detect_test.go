@@ -8,7 +8,9 @@ import (
 
 func TestDetectProjectDirWithMCPJSON(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := DetectProjectDir(dir)
 	if err != nil {
@@ -21,7 +23,9 @@ func TestDetectProjectDirWithMCPJSON(t *testing.T) {
 
 func TestDetectProjectDirWithClaudeDir(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".claude"), 0755)
+	if err := os.Mkdir(filepath.Join(dir, ".claude"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := DetectProjectDir(dir)
 	if err != nil {
@@ -34,9 +38,13 @@ func TestDetectProjectDirWithClaudeDir(t *testing.T) {
 
 func TestDetectProjectDirWalksUp(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{}"), 0644)
+	if err := os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	sub := filepath.Join(root, "src", "components")
-	os.MkdirAll(sub, 0755)
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := DetectProjectDir(sub)
 	if err != nil {
@@ -50,7 +58,9 @@ func TestDetectProjectDirWalksUp(t *testing.T) {
 func TestDetectProjectDirNoMarker(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "some", "nested", "dir")
-	os.MkdirAll(sub, 0755)
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := DetectProjectDir(sub)
 	if err != nil {
@@ -64,7 +74,9 @@ func TestDetectProjectDirNoMarker(t *testing.T) {
 
 func TestDetectProjectDirWithGitDir(t *testing.T) {
 	dir := t.TempDir()
-	os.Mkdir(filepath.Join(dir, ".git"), 0755)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := DetectProjectDir(dir)
 	if err != nil {
@@ -114,7 +126,9 @@ func TestIsHomeDir(t *testing.T) {
 
 func TestDetectTargets(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0644)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	all := AllTargets()
 	detected := DetectTargets(dir, all)

@@ -14,7 +14,7 @@ func setupManageMock(t *testing.T, token string) (*httptest.Server, *[]http.Requ
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Capture a copy of the request
 		body, _ := io.ReadAll(r.Body)
-		r.Body.Close()
+		_ = r.Body.Close()
 		received = append(received, *r)
 
 		// Auth check
@@ -32,21 +32,21 @@ func setupManageMock(t *testing.T, token string) (*httptest.Server, *[]http.Requ
 			var req CreateServerRequest
 			if err := json.Unmarshal(body, &req); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON"})
 				return
 			}
 			if req.Name == "" {
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "name is required"})
 				return
 			}
 			if req.Name == "existing-server" {
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]string{"error": "already exists"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "already exists"})
 				return
 			}
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(ServerDetail{
+			_ = json.NewEncoder(w).Encode(ServerDetail{
 				ID:          "new-id-123",
 				Name:        req.Name,
 				DisplayName: req.DisplayName,
@@ -75,7 +75,7 @@ func setupManageMock(t *testing.T, token string) (*httptest.Server, *[]http.Requ
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			json.NewEncoder(w).Encode(ServerDetail{
+			_ = json.NewEncoder(w).Encode(ServerDetail{
 				ID:         id,
 				Name:       "test-server",
 				ServerType: "remote",

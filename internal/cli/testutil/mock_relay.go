@@ -32,11 +32,11 @@ func NewMockRelay(servers []Server, expectedToken string) *httptest.Server {
 			auth := r.Header.Get("Authorization")
 			if auth != "Bearer "+expectedToken {
 				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 				return
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(servers)
+		_ = json.NewEncoder(w).Encode(servers)
 	}))
 }

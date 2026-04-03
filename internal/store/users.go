@@ -143,7 +143,7 @@ func (s *UserStore) List() ([]*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing users: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var users []*User
 	for rows.Next() {
@@ -165,7 +165,7 @@ func (s *UserStore) UpdateProfile(id string, defaultProfileID *string) error {
 func (s *UserStore) UpdateRole(id, role string) error {
 	_, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
 	if role == "admin" {
-		s.db.Exec(`UPDATE users SET access_level = 'admin' WHERE id = ?`, id)
+		_, _ = s.db.Exec(`UPDATE users SET access_level = 'admin' WHERE id = ?`, id)
 	}
 	return err
 }
@@ -194,7 +194,7 @@ func (s *UserStore) EnsureAdmin(password string) error {
 	}
 	if count > 0 {
 		// Ensure all admin-role users have admin access level
-		s.db.Exec(`UPDATE users SET access_level = 'admin' WHERE role = 'admin' AND access_level != 'admin'`)
+		_, _ = s.db.Exec(`UPDATE users SET access_level = 'admin' WHERE role = 'admin' AND access_level != 'admin'`)
 		return nil
 	}
 	_, err := s.Create("admin", password, "admin")
@@ -264,7 +264,7 @@ func (s *UserStore) ValidateAPIKey(rawKey string) (*User, error) {
 	}
 
 	// Update last_used
-	s.db.Exec("UPDATE api_keys SET last_used = ? WHERE key_hash = ?", time.Now(), keyHash)
+	_, _ = s.db.Exec("UPDATE api_keys SET last_used = ? WHERE key_hash = ?", time.Now(), keyHash)
 
 	user, err := s.Get(userID)
 	if err != nil || user == nil {
@@ -291,7 +291,7 @@ func (s *UserStore) ListAPIKeys(userID string) ([]*APIKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing api keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var keys []*APIKey
 	for rows.Next() {

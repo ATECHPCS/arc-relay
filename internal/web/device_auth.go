@@ -175,7 +175,7 @@ func (h *Handlers) handleDeviceAuthStart(w http.ResponseWriter, r *http.Request)
 	verificationURL := fmt.Sprintf("%s/auth/device?code=%s", baseURL, req.UserCode)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"device_code":      req.DeviceCode,
 		"user_code":        req.UserCode,
 		"verification_url": verificationURL,
@@ -202,7 +202,7 @@ func (h *Handlers) handleDeviceAuthToken(w http.ResponseWriter, r *http.Request)
 	req := h.deviceAuth.consume(body.DeviceCode)
 	if req == nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"error": "expired_token"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "expired_token"})
 		return
 	}
 
@@ -210,11 +210,11 @@ func (h *Handlers) handleDeviceAuthToken(w http.ResponseWriter, r *http.Request)
 
 	switch req.Status {
 	case "approved":
-		json.NewEncoder(w).Encode(map[string]string{"api_key": req.APIKey})
+		_ = json.NewEncoder(w).Encode(map[string]string{"api_key": req.APIKey})
 	case "denied":
-		json.NewEncoder(w).Encode(map[string]string{"error": "access_denied"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "access_denied"})
 	default: // pending
-		json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
 	}
 }
 
@@ -364,7 +364,7 @@ func (h *Handlers) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	baseURL := h.cfg.PublicBaseURL()
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, `#!/bin/bash
+	_, _ = fmt.Fprintf(w, `#!/bin/bash
 set -e
 
 RELAY_URL=%q

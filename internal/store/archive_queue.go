@@ -74,7 +74,7 @@ func (s *ArchiveQueueStore) DequeueDue(limit int) ([]*ArchiveQueueItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var items []*ArchiveQueueItem
 	for rows.Next() {
@@ -154,7 +154,7 @@ func (s *ArchiveQueueStore) Status() (*ArchiveQueueStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var status string
 		var count int
@@ -204,7 +204,7 @@ func (s *ArchiveQueueStore) StatusForServer(serverID string) (*ArchiveQueueStatu
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var status string
 		var count int
