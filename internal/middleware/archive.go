@@ -53,10 +53,10 @@ type archiveMeta struct {
 // Archive sends MCP request/response data to a configured HTTP endpoint
 // via the shared ArchiveDispatcher. It is observe-only and never blocks MCP traffic.
 type Archive struct {
-	cfg            ArchiveConfig
-	eventLogger    EventLogger
-	dispatcher     *ArchiveDispatcher
-	recipientKey   *[32]byte // cached decoded NaCl key (nil if encryption disabled)
+	cfg          ArchiveConfig
+	eventLogger  EventLogger
+	dispatcher   *ArchiveDispatcher
+	recipientKey *[32]byte // cached decoded NaCl key (nil if encryption disabled)
 }
 
 // NewArchiveFromConfig creates an Archive from JSON config.

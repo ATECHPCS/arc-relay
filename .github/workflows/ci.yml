@@ -69,7 +69,15 @@ jobs:
         run: staticcheck ./...
 
       - name: Gofmt check
-        run: test -z "$(gofmt -l .)"
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::The following files are not gofmt'd:"
+            echo "$unformatted"
+            echo ""
+            gofmt -d .
+            exit 1
+          fi
 
   security:
     runs-on: ubuntu-latest
