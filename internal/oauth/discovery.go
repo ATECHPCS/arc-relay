@@ -30,31 +30,48 @@ type ClientRegistration struct {
 	ClientSecret string `json:"client_secret"`
 }
 
-// discoveryClient is an HTTP client for OAuth discovery that blocks redirects
-// to private/loopback addresses to prevent redirect-based SSRF.
+// ssrfSafeDialer wraps the default dialer to check resolved IPs at connection
+// time, preventing DNS rebinding attacks (TOCTOU bypass of pre-request checks).
+var ssrfSafeDialer = &net.Dialer{Timeout: 10 * time.Second}
+
+func ssrfSafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address: %w", err)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("dns resolution failed: %w", err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no addresses found for host %q", host)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip.IP) {
+			return nil, fmt.Errorf("connection to private/loopback address blocked")
+		}
+	}
+	// Dial the first resolved address to avoid re-resolving (all IPs verified safe above)
+	return ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+}
+
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// discoveryClient is an HTTP client for OAuth discovery with defence-in-depth
+// against SSRF: a custom DialContext rejects private IPs at connection time
+// (closing the DNS rebinding TOCTOU window), and CheckRedirect limits hops.
 var discoveryClient = &http.Client{
 	Timeout: 10 * time.Second,
+	Transport: func() *http.Transport {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.DialContext = ssrfSafeDialContext
+		return t
+	}(),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
-		}
-		host := req.URL.Hostname()
-		if ip := net.ParseIP(host); ip != nil {
-			if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-				return fmt.Errorf("redirect to private/loopback address blocked")
-			}
-		} else {
-			// Resolve hostname and check all IPs
-			ips, err := net.LookupHost(host)
-			if err == nil {
-				for _, ipStr := range ips {
-					if resolved := net.ParseIP(ipStr); resolved != nil {
-						if resolved.IsLoopback() || resolved.IsPrivate() || resolved.IsLinkLocalUnicast() || resolved.IsLinkLocalMulticast() || resolved.IsUnspecified() {
-							return fmt.Errorf("redirect to host resolving to private address blocked")
-						}
-					}
-				}
-			}
 		}
 		return nil
 	},
