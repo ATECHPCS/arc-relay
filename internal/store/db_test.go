@@ -35,7 +35,9 @@ func TestMigrateIdempotent(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 
 	var count1 int
-	db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count1)
+	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count1); err != nil {
+		t.Fatal(err)
+	}
 
 	// The DB is already migrated; testutil.OpenTestDB creates a fresh one each time.
 	// Verify re-opening with migrations is safe by confirming count is stable.
@@ -77,7 +79,9 @@ func TestForeignKeysEnabled(t *testing.T) {
 	}
 
 	var tierCount int
-	db.QueryRow("SELECT COUNT(*) FROM endpoint_access_tiers WHERE server_id = 'srv-1'").Scan(&tierCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM endpoint_access_tiers WHERE server_id = 'srv-1'").Scan(&tierCount); err != nil {
+		t.Fatal(err)
+	}
 	if tierCount != 0 {
 		t.Errorf("cascade delete: endpoint_access_tiers count = %d, want 0", tierCount)
 	}

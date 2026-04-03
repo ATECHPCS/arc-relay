@@ -100,7 +100,7 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 		return fmt.Errorf("parsing stdio config: %w", err)
 	}
 
-	m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
+	_ = m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
 
 	// Auto-build image from package if Build config is set
 	if cfg.Build != nil {
@@ -117,7 +117,7 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 	// Ensure image exists (pull from registry for non-build images, verify for build images)
 	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
 	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("pulling image: %w", err)
 	}
 
@@ -131,22 +131,22 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 		Port:       0, // stdio, no port
 	})
 	if err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("starting container: %w", err)
 	}
 
 	// Attach to stdin/stdout
 	stdin, stdout, err := m.docker.AttachStdio(ctx, containerID)
 	if err != nil {
-		m.docker.StopContainer(ctx, containerID)
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		_ = m.docker.StopContainer(ctx, containerID)
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("attaching to container: %w", err)
 	}
 
 	bridge := NewStdioBridge(stdin, stdout)
 	m.backends[srv.ID] = bridge
 	m.containers[srv.ID] = containerID
-	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
+	_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Started stdio server %s (container %s)", srv.Name, containerID[:12])
 	m.enumerateAsync(srv.ID, srv.Name)
@@ -162,18 +162,18 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	// External HTTP server (no Docker management)
 	if cfg.URL != "" {
 		m.backends[srv.ID] = NewHTTPProxy(cfg.URL)
-		m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 		log.Printf("Connected to external HTTP server %s at %s", srv.Name, cfg.URL)
 		m.enumerateAsync(srv.ID, srv.Name)
 		return nil
 	}
 
 	// Docker-managed HTTP server
-	m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
+	_ = m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
 
 	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
 	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("pulling image: %w", err)
 	}
 
@@ -184,22 +184,22 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 		Port:  cfg.Port,
 	})
 	if err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("starting container: %w", err)
 	}
 
 	// Get the mapped host port
 	hostPort, err := m.docker.GetHostPort(ctx, containerID, cfg.Port)
 	if err != nil {
-		m.docker.StopContainer(ctx, containerID)
-		m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+		_ = m.docker.StopContainer(ctx, containerID)
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("getting host port: %w", err)
 	}
 
 	targetURL := fmt.Sprintf("http://127.0.0.1:%s", hostPort)
 	m.backends[srv.ID] = NewHTTPProxy(targetURL)
 	m.containers[srv.ID] = containerID
-	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
+	_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Started HTTP server %s (container %s, port %s)", srv.Name, containerID[:12], hostPort)
 	m.enumerateAsync(srv.ID, srv.Name)
@@ -215,13 +215,13 @@ func (m *Manager) startRemote(ctx context.Context, srv *store.Server) error {
 	// For OAuth servers, check that tokens exist before starting
 	if cfg.Auth.Type == "oauth" && cfg.Auth.AccessToken == "" {
 		if m.OAuthManager == nil || !m.OAuthManager.HasTokens(srv.ID) {
-			m.servers.UpdateStatus(srv.ID, store.StatusError, "OAuth not yet authorized — click Authorize on the server detail page")
+			_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "OAuth not yet authorized — click Authorize on the server detail page")
 			return fmt.Errorf("OAuth not yet authorized for server %s", srv.Name)
 		}
 	}
 
 	m.backends[srv.ID] = NewRemoteProxy(srv.ID, cfg, m.OAuthManager)
-	m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
+	_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
 	log.Printf("Connected to remote server %s at %s", srv.Name, cfg.URL)
 	m.enumerateAsync(srv.ID, srv.Name)
@@ -255,20 +255,20 @@ func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg
 
 	dockerfile, err := dockermgr.GenerateDockerfile(build.Runtime, build.Package, build.Version, build.GitURL, build.Dockerfile)
 	if err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
 		return fmt.Errorf("generating Dockerfile: %w", err)
 	}
 
 	log.Printf("Building image %s for server %s...", tag, srv.Name)
 	if err := m.docker.BuildImage(ctx, dockerfile, tag, force); err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
 		return fmt.Errorf("building image: %w", err)
 	}
 
 	// Persist the built image tag back to config
 	cfg.Image = tag
 	updatedConfig, _ := json.Marshal(cfg)
-	m.servers.UpdateConfig(srv.ID, updatedConfig)
+	_ = m.servers.UpdateConfig(srv.ID, updatedConfig)
 
 	log.Printf("Built image %s for server %s", tag, srv.Name)
 	return nil
@@ -281,7 +281,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 
 	// Validate URL scheme — only allow https://
 	if err := validateGitURL(build.GitURL); err != nil {
-		m.servers.UpdateStatus(srv.ID, store.StatusError, "Invalid git URL: "+err.Error())
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Invalid git URL: "+err.Error())
 		return fmt.Errorf("invalid git URL: %w", err)
 	}
 
@@ -289,7 +289,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 	if err != nil {
 		return fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Build git clone command with security hardening
 	args := []string{"clone", "--depth", "1"}
@@ -307,7 +307,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("git clone failed: %s", strings.TrimSpace(string(output)))
-		m.servers.UpdateStatus(srv.ID, store.StatusError, errMsg)
+		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, errMsg)
 		return fmt.Errorf("%s: %w", errMsg, err)
 	}
 
@@ -317,7 +317,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 		// Build using repo's own Dockerfile with full repo as context
 		log.Printf("Building image %s from repo Dockerfile for server %s...", tag, srv.Name)
 		if err := m.docker.BuildImageFromContext(ctx, tmpDir, "Dockerfile", tag, noCache); err != nil {
-			m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
+			_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
 			return fmt.Errorf("building image from context: %w", err)
 		}
 	} else {
@@ -325,11 +325,11 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 		log.Printf("No Dockerfile in repo, using generated template for server %s", srv.Name)
 		dockerfile, err := dockermgr.GenerateDockerfile(build.Runtime, "", "", build.GitURL, "")
 		if err != nil {
-			m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
+			_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
 			return fmt.Errorf("generating Dockerfile: %w", err)
 		}
 		if err := m.docker.BuildImage(ctx, dockerfile, tag, noCache); err != nil {
-			m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
+			_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
 			return fmt.Errorf("building image: %w", err)
 		}
 	}
@@ -337,7 +337,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 	// Persist the built image tag back to config
 	cfg.Image = tag
 	updatedConfig, _ := json.Marshal(cfg)
-	m.servers.UpdateConfig(srv.ID, updatedConfig)
+	_ = m.servers.UpdateConfig(srv.ID, updatedConfig)
 
 	log.Printf("Built image %s for server %s", tag, srv.Name)
 	return nil
@@ -441,7 +441,7 @@ func (m *Manager) StopServer(ctx context.Context, serverID string) error {
 	// Close the bridge if it's a stdio bridge
 	if backend, ok := m.backends[serverID]; ok {
 		if bridge, ok := backend.(*StdioBridge); ok {
-			bridge.Close()
+			_ = bridge.Close()
 		}
 	}
 	delete(m.backends, serverID)
@@ -455,8 +455,8 @@ func (m *Manager) StopServer(ctx context.Context, serverID string) error {
 		delete(m.containers, serverID)
 	}
 
-	m.servers.UpdateStatus(serverID, store.StatusStopped, "")
-	m.servers.UpdateHealth(serverID, store.HealthUnknown, "")
+	_ = m.servers.UpdateStatus(serverID, store.StatusStopped, "")
+	_ = m.servers.UpdateHealth(serverID, store.HealthUnknown, "")
 	return nil
 }
 
@@ -486,7 +486,7 @@ func (m *Manager) RebuildAndRestart(ctx context.Context, srv *store.Server) erro
 	if err := m.RebuildImage(ctx, srv); err != nil {
 		return fmt.Errorf("rebuild failed: %w", err)
 	}
-	m.StopServer(ctx, srv.ID)
+	_ = m.StopServer(ctx, srv.ID)
 	// Re-fetch to get updated config (image tag may have changed)
 	updated, err := m.servers.Get(srv.ID)
 	if err != nil || updated == nil {
@@ -498,7 +498,7 @@ func (m *Manager) RebuildAndRestart(ctx context.Context, srv *store.Server) erro
 // RecreateContainer stops the current container and starts a fresh one.
 // Used for image-based servers where the image was updated externally.
 func (m *Manager) RecreateContainer(ctx context.Context, srv *store.Server) error {
-	m.StopServer(ctx, srv.ID)
+	_ = m.StopServer(ctx, srv.ID)
 	updated, err := m.servers.Get(srv.ID)
 	if err != nil || updated == nil {
 		return fmt.Errorf("failed to refresh server: %w", err)
@@ -537,7 +537,7 @@ func (m *Manager) RecreateWithProgress(ctx context.Context, srv *store.Server, p
 	}
 
 	progress("Stopping container...")
-	m.StopServer(ctx, srv.ID)
+	_ = m.StopServer(ctx, srv.ID)
 
 	updated, err := m.servers.Get(srv.ID)
 	if err != nil || updated == nil {

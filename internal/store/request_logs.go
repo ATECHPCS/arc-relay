@@ -80,7 +80,7 @@ func (s *RequestLogStore) Recent(limit int) ([]*RequestLog, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying recent logs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return scanLogs(rows)
 }
@@ -99,7 +99,7 @@ func (s *RequestLogStore) ByServer(serverID string, limit int) ([]*RequestLog, e
 	if err != nil {
 		return nil, fmt.Errorf("querying server logs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return scanLogs(rows)
 }
@@ -130,7 +130,7 @@ func (s *RequestLogStore) Stats() (*LogStats, error) {
 	if err != nil {
 		return stats, nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var sc ServerRequestCount
@@ -153,7 +153,7 @@ func (s *RequestLogStore) EndpointCounts(serverID string) ([]EndpointCallCount, 
 	if err != nil {
 		return nil, fmt.Errorf("querying endpoint counts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var counts []EndpointCallCount
 	for rows.Next() {
@@ -220,7 +220,7 @@ func (s *RequestLogStore) FilteredLogs(f LogFilter) ([]*RequestLog, int, error) 
 	if err != nil {
 		return nil, 0, fmt.Errorf("querying filtered logs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	logs, err := scanLogs(rows)
 	return logs, total, err
@@ -237,7 +237,7 @@ func (s *RequestLogStore) DistinctUsers() ([]struct{ ID, Username string }, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var users []struct{ ID, Username string }
 	for rows.Next() {
@@ -255,7 +255,7 @@ func (s *RequestLogStore) ServerTotalCounts() (map[string]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying server total counts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	counts := make(map[string]int)
 	for rows.Next() {

@@ -83,7 +83,7 @@ func (s *ProfileStore) List() ([]*AgentProfile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing profiles: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var profiles []*AgentProfile
 	for rows.Next() {
@@ -120,7 +120,7 @@ func (s *ProfileStore) GetPermissions(profileID string) ([]ProfilePermission, er
 	if err != nil {
 		return nil, fmt.Errorf("getting permissions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var perms []ProfilePermission
 	for rows.Next() {
@@ -143,7 +143,7 @@ func (s *ProfileStore) GetPermissionsForServer(profileID, serverID string) ([]Pr
 	if err != nil {
 		return nil, fmt.Errorf("getting server permissions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var perms []ProfilePermission
 	for rows.Next() {
@@ -188,7 +188,7 @@ func (s *ProfileStore) BulkSetPermissions(profileID, serverID string, perms []Pr
 		DELETE FROM profile_permissions WHERE profile_id = ? AND server_id = ?`,
 		profileID, serverID,
 	); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("clearing permissions: %w", err)
 	}
 
@@ -199,7 +199,7 @@ func (s *ProfileStore) BulkSetPermissions(profileID, serverID string, perms []Pr
 			VALUES (?, ?, ?, ?)`,
 			profileID, serverID, p.EndpointType, p.EndpointName,
 		); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("inserting permission: %w", err)
 		}
 	}
@@ -276,7 +276,7 @@ func (s *ProfileStore) ServerIDsForProfile(profileID string) (map[string]bool, e
 	if err != nil {
 		return nil, fmt.Errorf("getting server IDs for profile: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	ids := make(map[string]bool)
 	for rows.Next() {

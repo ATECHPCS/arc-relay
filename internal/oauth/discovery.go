@@ -132,7 +132,7 @@ func RegisterClient(ctx context.Context, registrationEndpoint, callbackURL strin
 	if err != nil {
 		return nil, fmt.Errorf("registration request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -174,7 +174,7 @@ func probeProtectedResource(ctx context.Context, origin string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", nil // no OAuth, not an error
@@ -217,7 +217,7 @@ func probeAuthorizationServer(ctx context.Context, authServer string) (*OAuthDis
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil

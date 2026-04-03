@@ -20,7 +20,7 @@ func openTestDB(t *testing.T) *DB {
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
@@ -82,8 +82,10 @@ func TestGetTier(t *testing.T) {
 	access := NewAccessStore(db)
 
 	// Create a server for FK constraint
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("default is write", func(t *testing.T) {
 		tier := access.GetTier("srv-1", "tool", "nonexistent")
@@ -93,7 +95,9 @@ func TestGetTier(t *testing.T) {
 	})
 
 	t.Run("returns stored value", func(t *testing.T) {
-		access.SetTier("srv-1", "tool", "get_users", "read")
+		if err := access.SetTier("srv-1", "tool", "get_users", "read"); err != nil {
+			t.Fatal(err)
+		}
 		tier := access.GetTier("srv-1", "tool", "get_users")
 		if tier != "read" {
 			t.Errorf("GetTier() = %q, want %q", tier, "read")
@@ -105,8 +109,10 @@ func TestSetTier(t *testing.T) {
 	db := openTestDB(t)
 	access := NewAccessStore(db)
 
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	// Insert
 	if err := access.SetTier("srv-1", "tool", "my_tool", "read"); err != nil {
@@ -136,8 +142,10 @@ func TestSyncAfterEnumerate(t *testing.T) {
 	db := openTestDB(t)
 	access := NewAccessStore(db)
 
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-1', 'test', 'Test', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	classify := func(epType, name, desc string) string {
 		if name == "get_users" {
@@ -173,7 +181,9 @@ func TestSyncAfterEnumerate(t *testing.T) {
 	}
 
 	// Manually override one tier
-	access.SetTier("srv-1", "tool", "get_users", "admin")
+	if err := access.SetTier("srv-1", "tool", "get_users", "admin"); err != nil {
+		t.Fatal(err)
+	}
 
 	// Re-sync: should preserve manual override, update auto-classified, remove stale
 	newEndpoints := []EndpointInfo{

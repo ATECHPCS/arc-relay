@@ -249,7 +249,9 @@ func (d *ArchiveDispatcher) sendOne(item *store.ArchiveQueueItem) bool {
 	req, err := http.NewRequest("POST", item.URL, bytes.NewReader([]byte(item.Payload)))
 	if err != nil {
 		log.Printf("archive dispatcher: failed to create request: %v", err)
-		d.store.MarkHold(item.ID, "invalid request: "+err.Error())
+		if err2 := d.store.MarkHold(item.ID, "invalid request: "+err.Error()); err2 != nil {
+			log.Printf("archive dispatcher: mark hold: %v", err2)
+		}
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -270,27 +272,35 @@ func (d *ArchiveDispatcher) sendOne(item *store.ArchiveQueueItem) bool {
 		// Network/timeout errors are transient
 		errMsg := fmt.Sprintf("network error: %v", err)
 		nextAttempt := d.nextAttemptTime(item.Attempts)
-		d.store.Reschedule(item.ID, nextAttempt, errMsg)
+		if err2 := d.store.Reschedule(item.ID, nextAttempt, errMsg); err2 != nil {
+			log.Printf("archive dispatcher: reschedule: %v", err2)
+		}
 		return false
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode < 300 {
 		// Success
-		d.store.MarkDelivered(item.ID)
+		if err := d.store.MarkDelivered(item.ID); err != nil {
+			log.Printf("archive dispatcher: mark delivered: %v", err)
+		}
 		return true
 	}
 
 	errMsg := fmt.Sprintf("HTTP %d", resp.StatusCode)
 	if isTransient(resp.StatusCode) {
 		nextAttempt := d.nextAttemptTime(item.Attempts)
-		d.store.Reschedule(item.ID, nextAttempt, errMsg)
+		if err := d.store.Reschedule(item.ID, nextAttempt, errMsg); err != nil {
+			log.Printf("archive dispatcher: reschedule: %v", err)
+		}
 		return false
 	}
 
 	// Permanent failure
-	d.store.MarkHold(item.ID, errMsg)
+	if err := d.store.MarkHold(item.ID, errMsg); err != nil {
+		log.Printf("archive dispatcher: mark hold: %v", err)
+	}
 	return false
 }
 
@@ -333,8 +343,8 @@ func (d *ArchiveDispatcher) SendTest(cfg ArchiveConfig) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("connection failed: %w", err)
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 300 {
 		return resp.StatusCode, fmt.Errorf("server returned HTTP %d", resp.StatusCode)

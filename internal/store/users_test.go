@@ -175,8 +175,12 @@ func TestUserList(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	users := store.NewUserStore(db)
 
-	users.Create("user1", "pass", "user")
-	users.Create("user2", "pass", "admin")
+	if _, err := users.Create("user1", "pass", "user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := users.Create("user2", "pass", "admin"); err != nil {
+		t.Fatal(err)
+	}
 
 	list, err := users.List()
 	if err != nil {
@@ -191,8 +195,13 @@ func TestUserDeleteCascadesAPIKeys(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	users := store.NewUserStore(db)
 
-	user, _ := users.Create("deleteme", "pass", "user")
-	users.CreateAPIKey(user.ID, "my-key", nil)
+	user, err := users.Create("deleteme", "pass", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := users.CreateAPIKey(user.ID, "my-key", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify key exists
 	keys, _ := users.ListAPIKeys(user.ID)
@@ -212,7 +221,9 @@ func TestUserDeleteCascadesAPIKeys(t *testing.T) {
 
 	// API keys should be cascade-deleted
 	var keyCount int
-	db.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", user.ID).Scan(&keyCount)
+	if err := db.QueryRow("SELECT COUNT(*) FROM api_keys WHERE user_id = ?", user.ID).Scan(&keyCount); err != nil {
+		t.Fatal(err)
+	}
 	if keyCount != 0 {
 		t.Errorf("API keys should be cascade-deleted, got %d remaining", keyCount)
 	}
@@ -246,7 +257,9 @@ func TestEnsureAdmin(t *testing.T) {
 		db := testutil.OpenTestDB(t)
 		users := store.NewUserStore(db)
 
-		users.Create("existing", "pass", "user")
+		if _, err := users.Create("existing", "pass", "user"); err != nil {
+			t.Fatal(err)
+		}
 
 		if err := users.EnsureAdmin("admin-pass"); err != nil {
 			t.Fatalf("EnsureAdmin() error = %v", err)

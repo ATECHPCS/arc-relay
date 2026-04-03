@@ -91,21 +91,27 @@ func TestFilteredLogsByServer(t *testing.T) {
 
 	insertTestServerAndUser(t, db, "srv-1", "server1", "user-1", "alice")
 	// Insert a second server
-	db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
-		VALUES ('srv-2', 'server2', 'Server2', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	if _, err := db.Exec(`INSERT INTO servers (id, name, display_name, server_type, config, status, created_at, updated_at)
+		VALUES ('srv-2', 'server2', 'Server2', 'stdio', '{}', 'stopped', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3 logs for srv-1, 2 for srv-2
 	for i := 0; i < 3; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 			Method: "tools/call", EndpointName: "a", DurationMs: 10, Status: "success",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < 2; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-2",
 			Method: "tools/call", EndpointName: "b", DurationMs: 10, Status: "success",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	results, total, err := logs.FilteredLogs(store.LogFilter{ServerID: "srv-1", Limit: 50})
@@ -131,16 +137,20 @@ func TestFilteredLogsByUser(t *testing.T) {
 
 	// 2 logs for user-1, 3 for user-2
 	for i := 0; i < 2; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 			Method: "tools/call", EndpointName: "a", DurationMs: 10, Status: "success",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < 3; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: u2.ID, ServerID: "srv-1",
 			Method: "tools/call", EndpointName: "b", DurationMs: 10, Status: "success",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	results, total, err := logs.FilteredLogs(store.LogFilter{UserID: "user-1", Limit: 50})
@@ -163,16 +173,20 @@ func TestFilteredLogsByStatus(t *testing.T) {
 
 	// 3 success, 2 error
 	for i := 0; i < 3; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 			Method: "tools/call", EndpointName: "a", DurationMs: 10, Status: "success",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for i := 0; i < 2; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 			Method: "tools/call", EndpointName: "b", DurationMs: 10, Status: "error", ErrorMsg: "fail",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	results, total, err := logs.FilteredLogs(store.LogFilter{Status: "error", Limit: 50})
@@ -195,14 +209,18 @@ func TestDistinctUsers(t *testing.T) {
 	users := store.NewUserStore(db)
 	u2, _ := users.Create("bob", "pass", "user")
 
-	logs.Create(&store.RequestLog{
+	if err := logs.Create(&store.RequestLog{
 		Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 		Method: "tools/call", EndpointName: "a", DurationMs: 10, Status: "success",
-	})
-	logs.Create(&store.RequestLog{
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logs.Create(&store.RequestLog{
 		Timestamp: time.Now(), UserID: u2.ID, ServerID: "srv-1",
 		Method: "tools/call", EndpointName: "b", DurationMs: 10, Status: "success",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	distinct, err := logs.DistinctUsers()
 	if err != nil {
@@ -221,15 +239,19 @@ func TestLogStats(t *testing.T) {
 
 	// Create 3 success and 1 error within the last 24h
 	for i := 0; i < 3; i++ {
-		logs.Create(&store.RequestLog{
+		if err := logs.Create(&store.RequestLog{
 			Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 			Method: "tools/call", EndpointName: "a", DurationMs: 50, Status: "success",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	logs.Create(&store.RequestLog{
+	if err := logs.Create(&store.RequestLog{
 		Timestamp: time.Now(), UserID: "user-1", ServerID: "srv-1",
 		Method: "tools/call", EndpointName: "b", DurationMs: 50, Status: "error", ErrorMsg: "fail",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	stats, err := logs.Stats()
 	if err != nil {

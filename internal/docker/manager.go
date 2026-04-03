@@ -49,7 +49,7 @@ func NewManager(socket, networkName string) (*Manager, error) {
 	} else {
 		log.Printf("Warning: Docker ping failed (%v), using default API version", err)
 	}
-	probe.Close()
+	_ = probe.Close()
 
 	cli, err := dclient.New(opts...)
 	if err != nil {
@@ -87,8 +87,8 @@ func (m *Manager) PullImage(ctx context.Context, ref string) error {
 	if err != nil {
 		return fmt.Errorf("pulling image %s: %w", ref, err)
 	}
-	defer resp.Close()
-	io.Copy(io.Discard, resp)
+	defer func() { _ = resp.Close() }()
+	_, _ = io.Copy(io.Discard, resp)
 	return nil
 }
 
@@ -154,7 +154,7 @@ func (m *Manager) StartContainer(ctx context.Context, cfg ContainerConfig) (stri
 
 	// Remove any leftover container with the same name (e.g. from a previous run
 	// that wasn't cleaned up, or from a relay restart).
-	m.cli.ContainerRemove(ctx, containerName, dclient.ContainerRemoveOptions{Force: true})
+	_, _ = m.cli.ContainerRemove(ctx, containerName, dclient.ContainerRemoveOptions{Force: true})
 
 	createResult, err := m.cli.ContainerCreate(ctx, dclient.ContainerCreateOptions{
 		Config:           containerCfg,
@@ -167,7 +167,7 @@ func (m *Manager) StartContainer(ctx context.Context, cfg ContainerConfig) (stri
 	}
 
 	if _, err := m.cli.ContainerStart(ctx, createResult.ID, dclient.ContainerStartOptions{}); err != nil {
-		m.cli.ContainerRemove(ctx, createResult.ID, dclient.ContainerRemoveOptions{Force: true})
+		_, _ = m.cli.ContainerRemove(ctx, createResult.ID, dclient.ContainerRemoveOptions{Force: true})
 		return "", fmt.Errorf("starting container %s: %w", containerName, err)
 	}
 
@@ -205,7 +205,7 @@ func (m *Manager) AttachStdio(ctx context.Context, containerID string) (io.Write
 		if err != nil {
 			log.Printf("docker demux error for %s: %v", containerID[:12], err)
 		}
-		stdoutW.Close()
+		_ = stdoutW.Close()
 	}()
 
 	return resp.Conn, stdoutR, nil
@@ -297,7 +297,7 @@ func (m *Manager) BuildImage(ctx context.Context, dockerfile string, tag string,
 	if err != nil {
 		return fmt.Errorf("building image %s: %w", tag, err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	// Read the build output to completion and check for errors
 	if err := parseBuildOutput(result.Body); err != nil {
@@ -320,7 +320,7 @@ func (m *Manager) BuildImageFromContext(ctx context.Context, contextDir, dockerf
 	go func() {
 		tw := tar.NewWriter(pw)
 		err := tarDirectory(tw, contextDir, ignorePatterns)
-		tw.Close()
+		_ = tw.Close()
 		pw.CloseWithError(err)
 	}()
 
@@ -333,7 +333,7 @@ func (m *Manager) BuildImageFromContext(ctx context.Context, contextDir, dockerf
 	if err != nil {
 		return fmt.Errorf("building image %s: %w", tag, err)
 	}
-	defer result.Body.Close()
+	defer func() { _ = result.Body.Close() }()
 
 	if err := parseBuildOutput(result.Body); err != nil {
 		return fmt.Errorf("building image %s: %w", tag, err)
@@ -545,7 +545,7 @@ func tarDirectory(tw *tar.Writer, root string, ignorePatterns []string) error {
 		if err != nil {
 			return fmt.Errorf("opening %s: %w", relPath, err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		_, err = io.Copy(tw, f)
 		return err
 	})
@@ -557,7 +557,7 @@ func parseDockerignore(contextDir string) []string {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var patterns []string
 	scanner := bufio.NewScanner(f)

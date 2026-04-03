@@ -52,7 +52,7 @@ func (c *Client) ListServers() ([]Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to relay at %s: %w", c.BaseURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

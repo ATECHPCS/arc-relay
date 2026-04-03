@@ -45,7 +45,7 @@ func (p *HTTPProxy) SendNotification(n *mcp.Notification) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -73,7 +73,7 @@ func (p *HTTPProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response, 
 	if err != nil {
 		return nil, fmt.Errorf("sending request to %s: %w", p.targetURL, err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("backend returned status %d", httpResp.StatusCode)

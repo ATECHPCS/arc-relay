@@ -52,7 +52,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Initialize stores
 	crypto := store.NewConfigEncryptor(cfg.Encryption.Key)
@@ -166,7 +166,7 @@ func main() {
 		db.StopBackup()
 		proxyMgr.StopAll(ctx)
 		if dockerMgr != nil {
-			dockerMgr.Close()
+			_ = dockerMgr.Close()
 		}
 		// Close DB explicitly before exiting so WAL is checkpointed cleanly.
 		if err := db.Close(); err != nil {

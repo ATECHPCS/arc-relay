@@ -30,23 +30,23 @@ func Open(path string, migrationsFS fs.FS) (*DB, error) {
 	}
 
 	if err := sqlDB.Ping(); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
 	// Refuse to start on a corrupt database - continuing writes makes recovery harder.
 	var result string
 	if err := sqlDB.QueryRow("PRAGMA integrity_check").Scan(&result); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("database integrity check: %w", err)
 	} else if result != "ok" {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("database integrity check failed: %s (recover with: sqlite3 db '.recover' | sqlite3 new.db)", result)
 	}
 
 	db := &DB{DB: sqlDB, path: path, stopCh: make(chan struct{})}
 	if err := db.migrate(migrationsFS); err != nil {
-		sqlDB.Close()
+		_ = sqlDB.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
 	}
 
@@ -99,7 +99,7 @@ func (db *DB) runBackup() {
 
 	// Remove stale temp file from a previous interrupted backup, since VACUUM INTO
 	// requires the destination not to exist.
-	os.Remove(tmp)
+	_ = os.Remove(tmp)
 
 	// Write to temp file first so a failed backup doesn't discard the previous good copy.
 	escaped := strings.ReplaceAll(tmp, "'", "''")
@@ -166,12 +166,12 @@ func (db *DB) migrate(migrationsFS fs.FS) error {
 		}
 
 		if _, err := tx.Exec(string(content)); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("executing migration %s: %w", name, err)
 		}
 
 		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", name); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 			return fmt.Errorf("recording migration %s: %w", name, err)
 		}
 

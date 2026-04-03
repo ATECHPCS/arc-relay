@@ -44,7 +44,7 @@ func createTestServer(t *testing.T, servers *store.ServerStore, name string, sty
 	if err := servers.Create(srv); err != nil {
 		t.Fatalf("creating test server: %v", err)
 	}
-	servers.UpdateStatus(srv.ID, store.StatusError, "test error")
+	_ = servers.UpdateStatus(srv.ID, store.StatusError, "test error")
 	srv, _ = servers.Get(srv.ID)
 	return srv
 }

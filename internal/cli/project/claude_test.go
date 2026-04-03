@@ -28,7 +28,9 @@ func TestClaudeCodeTargetDetect(t *testing.T) {
 
 	t.Run("exists", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0644)
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte("{}"), 0644); err != nil {
+			t.Fatal(err)
+		}
 		if !target.Detect(dir) {
 			t.Error("expected Detect to return true when .mcp.json exists")
 		}
@@ -44,7 +46,9 @@ func TestClaudeCodeTargetDetect(t *testing.T) {
 
 func TestClaudeCodeTargetReadEmpty(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0644)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	target := &ClaudeCodeTarget{}
 	servers, err := target.Read(dir, testRelayURL)
@@ -90,7 +94,9 @@ func TestClaudeCodeTargetReadRelayServers(t *testing.T) {
     }
   }
 }`
-	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	target := &ClaudeCodeTarget{}
 	servers, err := target.Read(dir, testRelayURL)
@@ -148,7 +154,9 @@ func TestClaudeCodeTargetWriteNewFile(t *testing.T) {
 	}
 
 	var entry mcpServerEntry
-	json.Unmarshal(mcpServers["sentry"], &entry)
+	if err := json.Unmarshal(mcpServers["sentry"], &entry); err != nil {
+		t.Fatalf("parsing sentry entry: %v", err)
+	}
 
 	if entry.Type != "http" {
 		t.Errorf("type = %q, want %q", entry.Type, "http")
@@ -173,7 +181,9 @@ func TestClaudeCodeTargetWritePreservesExisting(t *testing.T) {
   },
   "someOtherKey": "preserve-me"
 }`
-	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(existing), 0644)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(existing), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	target := &ClaudeCodeTarget{}
 	servers := []ManagedServer{
@@ -191,7 +201,9 @@ func TestClaudeCodeTargetWritePreservesExisting(t *testing.T) {
 	}
 
 	var raw map[string]json.RawMessage
-	json.Unmarshal(data, &raw)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("parsing .mcp.json: %v", err)
+	}
 
 	// Check that someOtherKey is preserved
 	if _, ok := raw["someOtherKey"]; !ok {
@@ -200,7 +212,9 @@ func TestClaudeCodeTargetWritePreservesExisting(t *testing.T) {
 
 	// Check that manual-server is preserved
 	var mcpServers map[string]json.RawMessage
-	json.Unmarshal(raw["mcpServers"], &mcpServers)
+	if err := json.Unmarshal(raw["mcpServers"], &mcpServers); err != nil {
+		t.Fatalf("parsing mcpServers: %v", err)
+	}
 
 	if _, ok := mcpServers["manual-server"]; !ok {
 		t.Error("expected manual-server to be preserved")
@@ -227,10 +241,14 @@ func TestClaudeCodeTargetWriteMultipleServers(t *testing.T) {
 
 	data, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
 	var raw map[string]json.RawMessage
-	json.Unmarshal(data, &raw)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
 
 	var mcpServers map[string]json.RawMessage
-	json.Unmarshal(raw["mcpServers"], &mcpServers)
+	if err := json.Unmarshal(raw["mcpServers"], &mcpServers); err != nil {
+		t.Fatal(err)
+	}
 
 	if len(mcpServers) != 3 {
 		t.Errorf("expected 3 servers, got %d", len(mcpServers))
@@ -246,15 +264,23 @@ func TestClaudeCodeTargetWriteIdempotent(t *testing.T) {
 	}
 
 	// Write twice
-	target.Write(dir, testRelayURL, "key", servers)
-	target.Write(dir, testRelayURL, "key", servers)
+	if err := target.Write(dir, testRelayURL, "key", servers); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Write(dir, testRelayURL, "key", servers); err != nil {
+		t.Fatal(err)
+	}
 
 	data, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
 	var raw map[string]json.RawMessage
-	json.Unmarshal(data, &raw)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
 
 	var mcpServers map[string]json.RawMessage
-	json.Unmarshal(raw["mcpServers"], &mcpServers)
+	if err := json.Unmarshal(raw["mcpServers"], &mcpServers); err != nil {
+		t.Fatal(err)
+	}
 
 	if len(mcpServers) != 1 {
 		t.Errorf("expected 1 server after idempotent write, got %d", len(mcpServers))
@@ -272,7 +298,9 @@ func TestClaudeCodeTargetReadDifferentRelay(t *testing.T) {
     }
   }
 }`
-	os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	target := &ClaudeCodeTarget{}
 	// Read with a different relay URL — should not match

@@ -57,7 +57,7 @@ func (s *MiddlewareStore) GetForServer(serverID string) ([]*MiddlewareConfig, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	globals := make(map[string]*MiddlewareConfig)
 	serverConfigs := make(map[string]*MiddlewareConfig)
@@ -259,7 +259,7 @@ func (s *MiddlewareStore) RecentEvents(serverID string, limit int) ([]*Middlewar
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []*MiddlewareEvent
 	for rows.Next() {
@@ -282,7 +282,7 @@ func (s *MiddlewareStore) EventCounts(serverID string, hours int) (map[string]in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	counts := make(map[string]int)
 	for rows.Next() {

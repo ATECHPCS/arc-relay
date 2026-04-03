@@ -84,5 +84,5 @@ func (s *OAuthTokenStore) Validate(rawToken string) (*User, error) {
 
 // Cleanup removes all expired OAuth tokens.
 func (s *OAuthTokenStore) Cleanup() {
-	s.db.Exec(`DELETE FROM oauth_tokens WHERE expires_at < ?`, time.Now())
+	_, _ = s.db.Exec(`DELETE FROM oauth_tokens WHERE expires_at < ?`, time.Now())
 }

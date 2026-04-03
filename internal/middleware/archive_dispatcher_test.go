@@ -290,7 +290,7 @@ func TestDispatcher_BackoffSchedule(t *testing.T) {
 func TestDispatcher_SendTest_DoesNotEnqueue(t *testing.T) {
 	d, qs, ts := newDispatcher(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]interface{}
-		json.NewDecoder(r.Body).Decode(&body)
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		if body["phase"] != "test" {
 			t.Error("expected test phase payload")
 		}
@@ -351,13 +351,15 @@ func TestDispatcher_StartupReplay(t *testing.T) {
 
 	// Pre-seed queue before dispatcher starts
 	for i := 0; i < 3; i++ {
-		qs.Enqueue(&store.ArchiveQueueItem{
+		if err := qs.Enqueue(&store.ArchiveQueueItem{
 			ServerID:     "srv-1",
 			Payload:      `{"pre":"seeded"}`,
 			URL:          ts.URL,
 			AuthType:     "none",
 			APIKeyHeader: "X-API-Key",
-		})
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	d := middleware.NewArchiveDispatcher(qs, nil)

@@ -267,7 +267,7 @@ func tryInviteToken(baseURL, token string) string {
 		fmt.Printf(" failed\n")
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	var result struct {
@@ -491,7 +491,7 @@ func installProjectClaude(projectDir string) bool {
 		fmt.Fprintf(os.Stderr, "   Warning: could not write %s: %v\n", claudePath, err)
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if _, err := f.WriteString("\n" + projectClaudeSnippet); err != nil {
 		fmt.Fprintf(os.Stderr, "   Warning: could not write %s: %v\n", claudePath, err)
@@ -927,7 +927,7 @@ func tryDeviceAuth(baseURL string) string {
 	if err != nil {
 		return "" // Server not reachable or doesn't support device auth
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		return "" // Endpoint not available, fall back to manual

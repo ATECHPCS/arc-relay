@@ -91,11 +91,11 @@ func (hm *HealthMonitor) CheckHealth(ctx context.Context, serverID string) (stor
 	}
 
 	if err := hm.pingServer(ctx, backend); err != nil {
-		hm.servers.UpdateHealth(serverID, store.HealthUnhealthy, err.Error())
+		_ = hm.servers.UpdateHealth(serverID, store.HealthUnhealthy, err.Error())
 		return store.HealthUnhealthy, err.Error()
 	}
 
-	hm.servers.UpdateHealth(serverID, store.HealthHealthy, "")
+	_ = hm.servers.UpdateHealth(serverID, store.HealthHealthy, "")
 	return store.HealthHealthy, ""
 }
 
@@ -113,7 +113,7 @@ func (hm *HealthMonitor) checkAll(ctx context.Context) {
 			hm.tryRecover(ctx, srv)
 		} else if srv.Status == store.StatusStopped && srv.Health != store.HealthUnknown {
 			// Reset health to unknown when stopped
-			hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
+			_ = hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
 		}
 	}
 }
@@ -121,8 +121,8 @@ func (hm *HealthMonitor) checkAll(ctx context.Context) {
 func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 	backend, ok := hm.proxyMgr.GetBackend(srv.ID)
 	if !ok {
-		hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
-		hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
+		_ = hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
+		_ = hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
 		hm.resetFailCount(srv.ID)
 		log.Printf("Health monitor: server %s has no backend, marking stopped", srv.Name)
 		return
@@ -134,11 +134,11 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 		count := hm.failCounts[srv.ID]
 		hm.mu.Unlock()
 
-		hm.servers.UpdateHealth(srv.ID, store.HealthUnhealthy, err.Error())
+		_ = hm.servers.UpdateHealth(srv.ID, store.HealthUnhealthy, err.Error())
 
 		if count >= failThreshold {
 			log.Printf("Health monitor: server %s failed %d consecutive probes, marking error: %v", srv.Name, count, err)
-			hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
+			_ = hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		} else {
 			log.Printf("Health monitor: server %s probe failed (%d/%d): %v", srv.Name, count, failThreshold, err)
 		}
@@ -147,7 +147,7 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 		if srv.Health != store.HealthHealthy {
 			log.Printf("Health monitor: server %s is healthy", srv.Name)
 		}
-		hm.servers.UpdateHealth(srv.ID, store.HealthHealthy, "")
+		_ = hm.servers.UpdateHealth(srv.ID, store.HealthHealthy, "")
 	}
 }
 

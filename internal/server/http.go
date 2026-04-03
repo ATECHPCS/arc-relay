@@ -79,7 +79,7 @@ func (s *Server) routes() {
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
 	// Web UI
@@ -212,7 +212,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	method := ""
 	if m, ok := raw["method"]; ok {
-		json.Unmarshal(m, &method)
+		_ = json.Unmarshal(m, &method)
 	}
 
 	// Check if this is a notification (no "id" field)
@@ -224,8 +224,8 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			SendNotification(n *mcp.Notification) error
 		}); ok {
 			var notif mcp.Notification
-			json.Unmarshal(body, &notif)
-			notifier.SendNotification(&notif)
+			_ = json.Unmarshal(body, &notif)
+			_ = notifier.SendNotification(&notif)
 		}
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -252,7 +252,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 				go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "denied", "access denied")
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(denied)
+			_ = json.NewEncoder(w).Encode(denied)
 			return
 		}
 	}
@@ -284,7 +284,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 				}
 				errResp := mcp.NewErrorResponse(mcpReq.ID, mcp.ErrCodeInternal, err.Error())
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(errResp)
+				_ = json.NewEncoder(w).Encode(errResp)
 				return
 			}
 			mcpReq = *modifiedReq
@@ -301,7 +301,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		errResp := mcp.NewErrorResponse(mcpReq.ID, mcp.ErrCodeInternal, "proxy error: "+err.Error())
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(errResp)
+		_ = json.NewEncoder(w).Encode(errResp)
 		return
 	}
 
@@ -314,7 +314,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 			}
 			errResp := mcp.NewErrorResponse(mcpReq.ID, mcp.ErrCodeInternal, err.Error())
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(errResp)
+			_ = json.NewEncoder(w).Encode(errResp)
 			return
 		}
 	}
@@ -329,7 +329,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // logRequest writes a request log entry in the background.
@@ -519,7 +519,7 @@ func (s *Server) listServers(w http.ResponseWriter, r *http.Request) {
 	if servers == nil {
 		servers = []*store.Server{}
 	}
-	json.NewEncoder(w).Encode(servers)
+	_ = json.NewEncoder(w).Encode(servers)
 }
 
 func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
@@ -552,7 +552,7 @@ func (s *Server) createServer(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(srv)
+	_ = json.NewEncoder(w).Encode(srv)
 }
 
 // canAccessServerAPI checks if the API user has access to the given server.
@@ -655,7 +655,7 @@ func (s *Server) getServer(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(srv)
+	_ = json.NewEncoder(w).Encode(srv)
 }
 
 func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string) {
@@ -696,7 +696,7 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(srv)
+	_ = json.NewEncoder(w).Encode(srv)
 }
 
 func (s *Server) deleteServer(w http.ResponseWriter, r *http.Request, id string) {
@@ -704,7 +704,7 @@ func (s *Server) deleteServer(w http.ResponseWriter, r *http.Request, id string)
 		return
 	}
 
-	s.proxy.StopServer(r.Context(), id)
+	_ = s.proxy.StopServer(r.Context(), id)
 	if err := s.servers.Delete(id); err != nil {
 		http.Error(w, `{"error":"failed to delete server"}`, http.StatusInternalServerError)
 		return
@@ -740,7 +740,7 @@ func (s *Server) startServer(w http.ResponseWriter, r *http.Request, id string) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
 }
 
 func (s *Server) stopServer(w http.ResponseWriter, r *http.Request, id string) {
@@ -759,7 +759,7 @@ func (s *Server) stopServer(w http.ResponseWriter, r *http.Request, id string) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
 }
 
 func (s *Server) enumerateServer(w http.ResponseWriter, r *http.Request, id string) {
@@ -775,7 +775,7 @@ func (s *Server) enumerateServer(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(endpoints)
+	_ = json.NewEncoder(w).Encode(endpoints)
 }
 
 func (s *Server) checkServerHealth(w http.ResponseWriter, r *http.Request, id string) {
@@ -793,7 +793,7 @@ func (s *Server) checkServerHealth(w http.ResponseWriter, r *http.Request, id st
 	health, healthErr := s.healthMon.CheckHealth(r.Context(), id)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":          srv.Status,
 		"health":          health,
 		"health_check_at": time.Now().Format(time.RFC3339),
@@ -814,5 +814,5 @@ func (s *Server) getEndpoints(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(endpoints)
+	_ = json.NewEncoder(w).Encode(endpoints)
 }

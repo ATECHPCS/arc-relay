@@ -215,7 +215,9 @@ func TestRetryHeld_ResetsHeldRows(t *testing.T) {
 	if err := qs.Enqueue(item); err != nil {
 		t.Fatal(err)
 	}
-	qs.MarkHold(item.ID, "permanent error")
+	if err := qs.MarkHold(item.ID, "permanent error"); err != nil {
+		t.Fatal(err)
+	}
 
 	count, err := qs.RetryHeld()
 	if err != nil {
@@ -249,15 +251,25 @@ func TestStatus_ReturnsCorrectCounts(t *testing.T) {
 
 	// Add items in various states
 	item1 := newQueueItem("srv-1")
-	qs.Enqueue(item1)
+	if err := qs.Enqueue(item1); err != nil {
+		t.Fatal(err)
+	}
 
 	item2 := newQueueItem("srv-1")
-	qs.Enqueue(item2)
-	qs.MarkHold(item2.ID, "bad request")
+	if err := qs.Enqueue(item2); err != nil {
+		t.Fatal(err)
+	}
+	if err := qs.MarkHold(item2.ID, "bad request"); err != nil {
+		t.Fatal(err)
+	}
 
 	item3 := newQueueItem("srv-2")
-	qs.Enqueue(item3)
-	qs.Reschedule(item3.ID, time.Now().Add(1*time.Hour), "timeout")
+	if err := qs.Enqueue(item3); err != nil {
+		t.Fatal(err)
+	}
+	if err := qs.Reschedule(item3.ID, time.Now().Add(1*time.Hour), "timeout"); err != nil {
+		t.Fatal(err)
+	}
 
 	st, _ = qs.Status()
 	if st.PendingCount != 2 { // item1 (due) + item3 (pending but future)
@@ -275,9 +287,15 @@ func TestStatusForServer_FiltersCorrectly(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	qs := store.NewArchiveQueueStore(db)
 
-	qs.Enqueue(newQueueItem("srv-1"))
-	qs.Enqueue(newQueueItem("srv-1"))
-	qs.Enqueue(newQueueItem("srv-2"))
+	if err := qs.Enqueue(newQueueItem("srv-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := qs.Enqueue(newQueueItem("srv-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := qs.Enqueue(newQueueItem("srv-2")); err != nil {
+		t.Fatal(err)
+	}
 
 	st1, _ := qs.StatusForServer("srv-1")
 	if st1.PendingCount != 2 {
@@ -296,11 +314,17 @@ func TestPrune_RemovesOldItems(t *testing.T) {
 
 	// Insert an item with old timestamp
 	item := newQueueItem("srv-1")
-	qs.Enqueue(item)
-	db.Exec(`UPDATE archive_queue SET created_at = datetime('now', '-8 days') WHERE id = ?`, item.ID)
+	if err := qs.Enqueue(item); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE archive_queue SET created_at = datetime('now', '-8 days') WHERE id = ?`, item.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	// Insert a recent item
-	qs.Enqueue(newQueueItem("srv-1"))
+	if err := qs.Enqueue(newQueueItem("srv-1")); err != nil {
+		t.Fatal(err)
+	}
 
 	pruned, err := qs.Prune(7 * 24 * time.Hour)
 	if err != nil {
