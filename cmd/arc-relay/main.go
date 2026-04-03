@@ -13,14 +13,14 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/config"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/docker"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/proxy"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/server"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/migrations"
+	"github.com/comma-compliance/arc-relay/internal/config"
+	"github.com/comma-compliance/arc-relay/internal/docker"
+	"github.com/comma-compliance/arc-relay/internal/middleware"
+	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/server"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/migrations"
 )
 
 func main() {
@@ -74,7 +74,7 @@ func main() {
 		log.Println("========================================")
 		log.Println("WARNING: No admin password configured!")
 		log.Printf("Generated random admin password: %s", adminPw)
-		log.Println("Set MCP_WRANGLER_ADMIN_PASSWORD to use a fixed password.")
+		log.Println("Set ARC_RELAY_ADMIN_PASSWORD to use a fixed password.")
 		log.Println("========================================")
 	}
 	if err := userStore.EnsureAdmin(adminPw); err != nil {

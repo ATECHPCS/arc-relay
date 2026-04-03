@@ -3,7 +3,7 @@ package store_test
 import (
 	"testing"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 func TestOpenMemory(t *testing.T) {

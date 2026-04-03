@@ -72,8 +72,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/jeremiahchurch/mcp-wrangler:${{ steps.version.outputs.version }}
-            ${{ steps.version.outputs.is_prerelease == 'false' && 'ghcr.io/jeremiahchurch/mcp-wrangler:latest' || '' }}
+            ghcr.io/comma-compliance/arc-relay:${{ steps.version.outputs.version }}
+            ${{ steps.version.outputs.is_prerelease == 'false' && 'ghcr.io/comma-compliance/arc-relay:latest' || '' }}
           labels: |
-            org.opencontainers.image.source=https://github.com/JeremiahChurch/mcp-wrangler
+            org.opencontainers.image.source=https://github.com/comma-compliance/arc-relay
             org.opencontainers.image.version=${{ steps.version.outputs.version }}

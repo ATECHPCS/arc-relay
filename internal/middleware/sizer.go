@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // SizerConfig configures the content sizer middleware.

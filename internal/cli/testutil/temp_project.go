@@ -38,7 +38,7 @@ func TempProjectWithGit(t *testing.T, mcpJSON, gitignore string) string {
 	return dir
 }
 
-// TempConfigDir creates a temp directory suitable for use as the mcp-sync
+// TempConfigDir creates a temp directory suitable for use as the arc-sync
 // config directory and returns the path.
 func TempConfigDir(t *testing.T) string {
 	t.Helper()

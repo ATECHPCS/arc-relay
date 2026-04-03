@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/config"
+	"github.com/comma-compliance/arc-relay/internal/cli/config"
 )
 
 type testServer struct {
@@ -22,7 +22,7 @@ type testServer struct {
 	Status      string `json:"status"`
 }
 
-func setupWranglerMock(t *testing.T, servers []testServer, token string) *httptest.Server {
+func setupRelayMock(t *testing.T, servers []testServer, token string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/servers" {
@@ -41,15 +41,15 @@ func setupWranglerMock(t *testing.T, servers []testServer, token string) *httpte
 	}))
 }
 
-func setupTest(t *testing.T, servers []testServer, mcpJSON string) (configDir, projectDir string, wranglerURL string) {
+func setupTest(t *testing.T, servers []testServer, mcpJSON string) (configDir, projectDir string, relayURL string) {
 	t.Helper()
 
 	token := "test-key"
-	ts := setupWranglerMock(t, servers, token)
+	ts := setupRelayMock(t, servers, token)
 	t.Cleanup(ts.Close)
 
 	configDir = t.TempDir()
-	cfg := &config.Config{WranglerURL: ts.URL, APIKey: token}
+	cfg := &config.Config{RelayURL: ts.URL, APIKey: token}
 	if err := config.SaveConfig(configDir, cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
@@ -109,8 +109,8 @@ func TestSyncSkipsAlreadyConfigured(t *testing.T) {
 	}
 
 	// Pre-configure sentry
-	configDir, projectDir, wranglerURL := setupTest(t, servers, "")
-	existing := fmt.Sprintf(`{"mcpServers":{"sentry":{"type":"http","url":"%s/mcp/sentry","headers":{"Authorization":"Bearer test-key"}}}}`, wranglerURL)
+	configDir, projectDir, relayURL := setupTest(t, servers, "")
+	existing := fmt.Sprintf(`{"mcpServers":{"sentry":{"type":"http","url":"%s/mcp/sentry","headers":{"Authorization":"Bearer test-key"}}}}`, relayURL)
 	os.WriteFile(filepath.Join(projectDir, ".mcp.json"), []byte(existing), 0644)
 
 	var output bytes.Buffer

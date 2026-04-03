@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/google/uuid"
 )
 

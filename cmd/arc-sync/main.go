@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/config"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/project"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/safety"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/sync"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/wrangler"
+	"github.com/comma-compliance/arc-relay/internal/cli/config"
+	"github.com/comma-compliance/arc-relay/internal/cli/project"
+	"github.com/comma-compliance/arc-relay/internal/cli/relay"
+	"github.com/comma-compliance/arc-relay/internal/cli/safety"
+	"github.com/comma-compliance/arc-relay/internal/cli/sync"
 )
 
 //go:embed skill.md
@@ -51,7 +51,7 @@ func main() {
 	case "setup-project":
 		runSetupProject()
 	case "--version", "version":
-		fmt.Printf("mcp-sync %s\n", version)
+		fmt.Printf("arc-sync %s\n", version)
 	case "--help", "help", "-h":
 		printUsage()
 	default:
@@ -62,11 +62,11 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`Usage: mcp-sync [command]
+	fmt.Println(`Usage: arc-sync [command]
 
 Commands:
-  (none)        Interactive sync — add wrangler servers to current project
-  init          Configure wrangler URL and API key
+  (none)        Interactive sync — add relay servers to current project
+  init          Configure relay URL and API key
   list          Show all available servers and project status
   add <name>    Add a specific server to the current project
   remove <name> Remove a server from the current project (and skip it)
@@ -74,7 +74,7 @@ Commands:
   status        Show configuration and project details
   setup-claude  Install Claude Code skill and instructions
   setup-project Add MCP instructions to .claude/CLAUDE.md for team sharing
-  server        Manage servers on the wrangler instance (add, remove, start, stop)
+  server        Manage servers on the relay instance (add, remove, start, stop)
 
 Flags (for sync/add):
   --non-interactive, -y    Auto-accept all new servers
@@ -84,11 +84,11 @@ Flags (for sync/add):
   --config <path>          Override config directory
 
 Environment variables:
-  MCP_SYNC_URL       Wrangler URL (overrides config file)
-  MCP_SYNC_API_KEY   API key (overrides config file)
-  MCP_SYNC_CONFIG    Config directory path
+  ARC_SYNC_URL       Relay URL (overrides config file)
+  ARC_SYNC_API_KEY   API key (overrides config file)
+  ARC_SYNC_CONFIG    Config directory path
 
-Run 'mcp-sync server --help' for server management commands.`)
+Run 'arc-sync server --help' for server management commands.`)
 }
 
 func getConfigDir() string {
@@ -99,7 +99,7 @@ func getConfigDir() string {
 		}
 	}
 	// Check env
-	if dir := os.Getenv("MCP_SYNC_CONFIG"); dir != "" {
+	if dir := os.Getenv("ARC_SYNC_CONFIG"); dir != "" {
 		return dir
 	}
 	// Default
@@ -161,7 +161,7 @@ func runInit() {
 	configDir := getConfigDir()
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Support: mcp-sync init <url> [--token <token>]
+	// Support: arc-sync init <url> [--token <token>]
 	var url string
 	inviteToken := getFlagValue(os.Args[2:], "--token")
 	for _, arg := range os.Args[2:] {
@@ -172,7 +172,7 @@ func runInit() {
 	}
 
 	if url == "" {
-		fmt.Print("MCP Wrangler URL: ")
+		fmt.Print("Arc Relay URL: ")
 		if !scanner.Scan() {
 			return
 		}
@@ -182,7 +182,7 @@ func runInit() {
 			os.Exit(1)
 		}
 	} else {
-		fmt.Printf("MCP Wrangler URL: %s\n", url)
+		fmt.Printf("Arc Relay URL: %s\n", url)
 	}
 
 	// Normalize URL
@@ -217,7 +217,7 @@ func runInit() {
 
 	// Validate the credentials work
 	fmt.Printf("Verifying connection...")
-	client := wrangler.NewClient(url, key)
+	client := relay.NewClient(url, key)
 	_, err := client.ListServers()
 	if err != nil {
 		fmt.Printf(" failed\n")
@@ -228,8 +228,8 @@ func runInit() {
 	fmt.Printf(" OK\n")
 
 	cfg := &config.Config{
-		WranglerURL: url,
-		APIKey:      key,
+		RelayURL: url,
+		APIKey:   key,
 	}
 
 	if err := config.SaveConfig(configDir, cfg); err != nil {
@@ -243,8 +243,8 @@ func runInit() {
 	fmt.Println("   This is the same approach used by gh, aws, and docker CLIs.")
 	fmt.Println()
 	fmt.Println("   To use environment variables instead (recommended for CI):")
-	fmt.Printf("     export MCP_SYNC_URL=%q\n", url)
-	fmt.Printf("     export MCP_SYNC_API_KEY=%q\n", key)
+	fmt.Printf("     export ARC_SYNC_URL=%q\n", url)
+	fmt.Printf("     export ARC_SYNC_API_KEY=%q\n", key)
 	fmt.Println()
 
 	// Offer Claude Code integration
@@ -254,7 +254,7 @@ func runInit() {
 	offerProjectSetup(scanner)
 
 	fmt.Println("Next steps:")
-	fmt.Println("   cd <your-project> && mcp-sync     # sync wrangler servers to your project")
+	fmt.Println("   cd <your-project> && arc-sync     # sync relay servers to your project")
 }
 
 // tryInviteToken exchanges an invite token for an API key.
@@ -297,15 +297,15 @@ func runSetupClaude() {
 }
 
 // claudeInstructionsSnippet is appended to ~/.claude/CLAUDE.md to steer Claude
-// toward using mcp-sync for MCP server management instead of editing .mcp.json directly.
+// toward using arc-sync for MCP server management instead of editing .mcp.json directly.
 const claudeInstructionsSnippet = `
 ## MCP Server Management
-MCP servers are managed by MCP Wrangler via mcp-sync. Do not edit .mcp.json manually.
-Use mcp-sync commands: list, add <name>, remove <name>, server add/remove/start/stop.
-Run "mcp-sync list" to see available servers. Run "mcp-sync" to sync new servers.
+MCP servers are managed by Arc Relay via arc-sync. Do not edit .mcp.json manually.
+Use arc-sync commands: list, add <name>, remove <name>, server add/remove/start/stop.
+Run "arc-sync list" to see available servers. Run "arc-sync" to sync new servers.
 `
 
-// claudeInstructionsMarker identifies the mcp-sync section in CLAUDE.md.
+// claudeInstructionsMarker identifies the arc-sync section in CLAUDE.md.
 const claudeInstructionsMarker = "## MCP Server Management"
 
 func offerClaudeIntegration(scanner *bufio.Scanner) {
@@ -316,7 +316,7 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 
 	claudeDir := filepath.Join(homeDir, ".claude")
 	claudeMDPath := filepath.Join(claudeDir, "CLAUDE.md")
-	skillDir := filepath.Join(claudeDir, "skills", "mcp-sync")
+	skillDir := filepath.Join(claudeDir, "skills", "arc-sync")
 	skillPath := filepath.Join(skillDir, "SKILL.md")
 
 	// Check what's already installed
@@ -337,13 +337,13 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 	}
 
 	fmt.Println("Claude Code integration:")
-	fmt.Println("   Claude works better when it knows to use mcp-sync for MCP servers")
+	fmt.Println("   Claude works better when it knows to use arc-sync for MCP servers")
 	fmt.Println("   instead of editing .mcp.json directly. This installs:")
 	if !hasInstructions {
-		fmt.Println("     • ~/.claude/CLAUDE.md  — instructions for Claude to use mcp-sync")
+		fmt.Println("     • ~/.claude/CLAUDE.md  — instructions for Claude to use arc-sync")
 	}
 	if !hasSkill {
-		fmt.Println("     • ~/.claude/skills/mcp-sync/SKILL.md  — the /mcp-sync skill")
+		fmt.Println("     • ~/.claude/skills/arc-sync/SKILL.md  — the /arc-sync skill")
 	}
 	fmt.Println()
 	fmt.Print("   Install Claude Code integration? [Y/n] ")
@@ -354,9 +354,9 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 	if answer != "" && answer != "y" && answer != "yes" {
 		fmt.Println("   Skipped. You can install manually later:")
-		fmt.Println("     mkdir -p ~/.claude/skills/mcp-sync")
-		fmt.Println("     curl -fsSL https://raw.githubusercontent.com/JeremiahChurch/mcp-wrangler/main/skills/mcp-sync/SKILL.md \\")
-		fmt.Println("       -o ~/.claude/skills/mcp-sync/SKILL.md")
+		fmt.Println("     mkdir -p ~/.claude/skills/arc-sync")
+		fmt.Println("     curl -fsSL https://raw.githubusercontent.com/comma-compliance/arc-relay/main/skills/arc-sync/SKILL.md \\")
+		fmt.Println("       -o ~/.claude/skills/arc-sync/SKILL.md")
 		fmt.Println()
 		return
 	}
@@ -391,9 +391,9 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 		if err := installSkillFromEmbed(skillDir, skillPath); err != nil {
 			fmt.Fprintf(os.Stderr, "   Warning: could not install skill: %v\n", err)
 			fmt.Println("   Install manually:")
-			fmt.Println("     mkdir -p ~/.claude/skills/mcp-sync")
-			fmt.Println("     curl -fsSL https://raw.githubusercontent.com/JeremiahChurch/mcp-wrangler/main/skills/mcp-sync/SKILL.md \\")
-			fmt.Println("       -o ~/.claude/skills/mcp-sync/SKILL.md")
+			fmt.Println("     mkdir -p ~/.claude/skills/arc-sync")
+			fmt.Println("     curl -fsSL https://raw.githubusercontent.com/comma-compliance/arc-relay/main/skills/arc-sync/SKILL.md \\")
+			fmt.Println("       -o ~/.claude/skills/arc-sync/SKILL.md")
 		} else {
 			fmt.Printf("   ✓ Installed skill to %s\n", skillPath)
 			installed++
@@ -407,11 +407,11 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 
 // projectClaudeSnippet is the content added to a project's .claude/CLAUDE.md.
 const projectClaudeSnippet = `## MCP Servers
-This project uses MCP Wrangler for shared tool access.
-- If mcp-sync is not installed, run: mcp-sync init (or ask your admin for an install command)
-- Use the mcp-sync skill for all server management (adding, removing, listing)
-- Do NOT edit .mcp.json manually - use mcp-sync commands instead
-- Run "mcp-sync list" to see available servers, "mcp-sync" to sync
+This project uses Arc Relay for shared tool access.
+- If arc-sync is not installed, run: arc-sync init (or ask your admin for an install command)
+- Use the arc-sync skill for all server management (adding, removing, listing)
+- Do NOT edit .mcp.json manually - use arc-sync commands instead
+- Run "arc-sync list" to see available servers, "arc-sync" to sync
 `
 
 const projectClaudeMarker = "## MCP Servers"
@@ -459,7 +459,7 @@ func offerProjectSetup(scanner *bufio.Scanner) {
 	}
 	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
 	if answer != "" && answer != "y" && answer != "yes" {
-		fmt.Println("   Skipped. Run 'mcp-sync setup-project' later to set up.")
+		fmt.Println("   Skipped. Run 'arc-sync setup-project' later to set up.")
 		fmt.Println()
 		return
 	}
@@ -535,7 +535,7 @@ func runList() {
 		os.Exit(1)
 	}
 
-	client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
+	client := relay.NewClient(creds.RelayURL, creds.APIKey)
 	servers, err := client.ListServers()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -543,7 +543,7 @@ func runList() {
 	}
 
 	target := &project.ClaudeCodeTarget{}
-	configured, err := target.Read(projectDir, creds.WranglerURL)
+	configured, err := target.Read(projectDir, creds.RelayURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading project config: %v\n", err)
 		os.Exit(1)
@@ -585,7 +585,7 @@ func runList() {
 		return
 	}
 
-	fmt.Printf("MCP Wrangler: %s\n", creds.WranglerURL)
+	fmt.Printf("Arc Relay: %s\n", creds.RelayURL)
 	fmt.Printf("Project:      %s\n\n", projectDir)
 
 	if len(servers) == 0 {
@@ -611,7 +611,7 @@ func runList() {
 
 func runAdd() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: mcp-sync add <server-name>")
+		fmt.Fprintln(os.Stderr, "Usage: arc-sync add <server-name>")
 		os.Exit(1)
 	}
 	serverName := os.Args[2]
@@ -625,14 +625,14 @@ func runAdd() {
 		os.Exit(1)
 	}
 
-	client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
+	client := relay.NewClient(creds.RelayURL, creds.APIKey)
 	servers, err := client.ListRunningServers()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	var found *wrangler.Server
+	var found *relay.Server
 	for i := range servers {
 		if servers[i].Name == serverName {
 			found = &servers[i]
@@ -642,7 +642,7 @@ func runAdd() {
 
 	if found == nil {
 		fmt.Fprintf(os.Stderr, "Error: server %q not found or not running\n", serverName)
-		fmt.Fprintln(os.Stderr, "Run 'mcp-sync list' to see available servers")
+		fmt.Fprintln(os.Stderr, "Run 'arc-sync list' to see available servers")
 		os.Exit(1)
 	}
 
@@ -679,7 +679,7 @@ func runAdd() {
 	warnings := safety.CheckGitignore(projectDir, ".mcp.json")
 	fmt.Print(safety.FormatWarnings(warnings))
 
-	if err := target.Write(projectDir, creds.WranglerURL, creds.APIKey, toAdd); err != nil {
+	if err := target.Write(projectDir, creds.RelayURL, creds.APIKey, toAdd); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -690,7 +690,7 @@ func runAdd() {
 	if !hasProjectClaude(projectDir) {
 		if _, err := os.Stat(filepath.Join(projectDir, ".git")); err == nil {
 			fmt.Println()
-			fmt.Println("   Tip: Run 'mcp-sync setup-project' to add Claude Code instructions")
+			fmt.Println("   Tip: Run 'arc-sync setup-project' to add Claude Code instructions")
 			fmt.Println("   to this repo so teammates get guided setup automatically.")
 		}
 	}
@@ -698,7 +698,7 @@ func runAdd() {
 
 func runRemove() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: mcp-sync remove <server-name>")
+		fmt.Fprintln(os.Stderr, "Usage: arc-sync remove <server-name>")
 		os.Exit(1)
 	}
 	serverName := os.Args[2]
@@ -732,7 +732,7 @@ func runRemove() {
 	}
 
 	fmt.Printf("✓  Removed %s from .mcp.json (skipped for future syncs)\n", serverName)
-	fmt.Printf("   To re-add later: mcp-sync reset && mcp-sync add %s\n", serverName)
+	fmt.Printf("   To re-add later: arc-sync reset && arc-sync add %s\n", serverName)
 }
 
 func runReset() {
@@ -777,7 +777,7 @@ func runStatus() {
 			HealthError   string `json:"health_error,omitempty"`
 		}
 		type statusInfo struct {
-			WranglerURL     string         `json:"wrangler_url,omitempty"`
+			RelayURL        string         `json:"relay_url,omitempty"`
 			AuthSource      string         `json:"auth_source,omitempty"`
 			ProjectDir      string         `json:"project_dir"`
 			ConfigDir       string         `json:"config_dir"`
@@ -795,17 +795,17 @@ func runStatus() {
 		if err != nil {
 			info.Error = err.Error()
 		} else {
-			info.WranglerURL = creds.WranglerURL
+			info.RelayURL = creds.RelayURL
 			info.AuthSource = creds.Source
 
 			target := &project.ClaudeCodeTarget{}
-			configured, _ := target.Read(projectDir, creds.WranglerURL)
+			configured, _ := target.Read(projectDir, creds.RelayURL)
 			info.ConfiguredCount = len(configured)
 
 			state, _ := config.LoadState(configDir)
 			info.SkippedCount = len(state.GetSkipped(projectDir))
 
-			client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
+			client := relay.NewClient(creds.RelayURL, creds.APIKey)
 			if allServers, srvErr := client.ListServers(); srvErr == nil {
 				for _, s := range allServers {
 					info.Servers = append(info.Servers, serverHealth{
@@ -824,13 +824,13 @@ func runStatus() {
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Wrangler:     not configured (%v)\n", err)
+		fmt.Fprintf(os.Stderr, "Relay:     not configured (%v)\n", err)
 		fmt.Fprintf(os.Stderr, "Config:       %s\n", config.ConfigPath(configDir))
-		fmt.Fprintf(os.Stderr, "\nRun 'mcp-sync init' to set up.\n")
+		fmt.Fprintf(os.Stderr, "\nRun 'arc-sync init' to set up.\n")
 		os.Exit(1)
 	}
 
-	fmt.Printf("Wrangler:     %s\n", creds.WranglerURL)
+	fmt.Printf("Relay:     %s\n", creds.RelayURL)
 	fmt.Printf("Auth:         %s\n", creds.Source)
 	fmt.Printf("Config:       %s\n", config.ConfigPath(configDir))
 	fmt.Printf("State:        %s\n\n", config.StatePath(configDir))
@@ -848,8 +848,8 @@ func runStatus() {
 	fmt.Println("Targets detected:")
 	for _, t := range allTargets {
 		if t.Detect(projectDir) {
-			configured, _ := t.Read(projectDir, creds.WranglerURL)
-			fmt.Printf("  ✓ %-12s %-25s (%d wrangler server(s) configured)\n",
+			configured, _ := t.Read(projectDir, creds.RelayURL)
+			fmt.Printf("  ✓ %-12s %-25s (%d relay server(s) configured)\n",
 				t.Name(), t.ConfigFileName(), len(configured))
 		} else {
 			fmt.Printf("  ✗ %-12s %-25s (not found)\n", t.Name(), t.ConfigFileName())
@@ -875,11 +875,11 @@ func runStatus() {
 	homeDir, _ := os.UserHomeDir()
 	if homeDir != "" {
 		// Global skill
-		skillPath := filepath.Join(homeDir, ".claude", "skills", "mcp-sync", "SKILL.md")
+		skillPath := filepath.Join(homeDir, ".claude", "skills", "arc-sync", "SKILL.md")
 		if _, err := os.Stat(skillPath); err == nil {
 			fmt.Println("  ✓  Global skill:      installed")
 		} else {
-			fmt.Println("  ✗  Global skill:      not found  (run: mcp-sync setup-claude)")
+			fmt.Println("  ✗  Global skill:      not found  (run: arc-sync setup-claude)")
 		}
 
 		// Global CLAUDE.md
@@ -887,7 +887,7 @@ func runStatus() {
 		if data, err := os.ReadFile(claudeMDPath); err == nil && strings.Contains(string(data), claudeInstructionsMarker) {
 			fmt.Println("  ✓  Global CLAUDE.md:  installed")
 		} else {
-			fmt.Println("  ✗  Global CLAUDE.md:  not found  (run: mcp-sync setup-claude)")
+			fmt.Println("  ✗  Global CLAUDE.md:  not found  (run: arc-sync setup-claude)")
 		}
 	}
 
@@ -895,7 +895,7 @@ func runStatus() {
 	if hasProjectClaude(projectDir) {
 		fmt.Println("  ✓  Project CLAUDE.md: installed")
 	} else {
-		fmt.Println("  ✗  Project CLAUDE.md: not found  (run: mcp-sync setup-project)")
+		fmt.Println("  ✗  Project CLAUDE.md: not found  (run: arc-sync setup-project)")
 	}
 
 	// Show skipped
@@ -907,14 +907,14 @@ func runStatus() {
 }
 
 // healthDisplay returns a short display string for a server's health status.
-func healthDisplay(s wrangler.Server) string {
+func healthDisplay(s relay.Server) string {
 	if s.Health == "" {
 		return "-"
 	}
 	return s.Health
 }
 
-// tryDeviceAuth attempts the device authorization flow with the wrangler.
+// tryDeviceAuth attempts the device authorization flow with the relay.
 // Returns the API key if successful, or empty string to fall back to manual entry.
 // The device auth flow works like GitHub CLI's "gh auth login":
 //  1. POST /api/auth/device — get a device code and user URL
@@ -1008,26 +1008,26 @@ func tryDeviceAuth(baseURL string) string {
 // --- Server management subcommands ---
 
 func printServerUsage() {
-	fmt.Println(`Usage: mcp-sync server <command> [options]
+	fmt.Println(`Usage: arc-sync server <command> [options]
 
-Manage MCP servers on the wrangler instance itself.
+Manage MCP servers on the relay instance itself.
 Requires your API key to have write/admin access.
 
 Commands:
-  add       Create a new server on the wrangler
-  remove    Delete a server from the wrangler
+  add       Create a new server on the relay
+  remove    Delete a server from the relay
   start     Start a server
   stop      Stop a server
 
 Add syntax (mirrors 'claude mcp add'):
-  mcp-sync server add <name> --type remote <url>
-  mcp-sync server add <name> --type remote <url> --auth bearer --token <token>
-  mcp-sync server add <name> --type remote <url> --auth api-key --header-name X-API-Key --token <key>
-  mcp-sync server add <name> --type stdio --image <docker-image> [-- <command> [args...]]
-  mcp-sync server add <name> --type stdio --build python --package <pip-package>
-  mcp-sync server add <name> --type stdio --build node --package <npm-package>
-  mcp-sync server add <name> --type http --image <docker-image> --port <port>
-  mcp-sync server add <name> --type http --url <external-url>
+  arc-sync server add <name> --type remote <url>
+  arc-sync server add <name> --type remote <url> --auth bearer --token <token>
+  arc-sync server add <name> --type remote <url> --auth api-key --header-name X-API-Key --token <key>
+  arc-sync server add <name> --type stdio --image <docker-image> [-- <command> [args...]]
+  arc-sync server add <name> --type stdio --build python --package <pip-package>
+  arc-sync server add <name> --type stdio --build node --package <npm-package>
+  arc-sync server add <name> --type http --image <docker-image> --port <port>
+  arc-sync server add <name> --type http --url <external-url>
 
 Options for add:
   --display-name <name>    Human-readable display name (defaults to server name)
@@ -1035,9 +1035,9 @@ Options for add:
   --start                  Start the server immediately after creating it
 
 Other commands:
-  mcp-sync server remove <name-or-id>
-  mcp-sync server start <name-or-id>
-  mcp-sync server stop <name-or-id>`)
+  arc-sync server remove <name-or-id>
+  arc-sync server start <name-or-id>
+  arc-sync server stop <name-or-id>`)
 }
 
 func runServer() {
@@ -1068,7 +1068,7 @@ func runServerAdd() {
 	// Parse args after "server add"
 	args := os.Args[3:]
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: mcp-sync server add <name> --type <type> [options]")
+		fmt.Fprintln(os.Stderr, "Usage: arc-sync server add <name> --type <type> [options]")
 		os.Exit(1)
 	}
 
@@ -1094,7 +1094,7 @@ func runServerAdd() {
 		os.Exit(1)
 	}
 
-	client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
+	client := relay.NewClient(creds.RelayURL, creds.APIKey)
 
 	var cfgJSON []byte
 
@@ -1115,7 +1115,7 @@ func runServerAdd() {
 		os.Exit(1)
 	}
 
-	req := &wrangler.CreateServerRequest{
+	req := &relay.CreateServerRequest{
 		Name:        name,
 		DisplayName: displayName,
 		ServerType:  serverType,
@@ -1124,11 +1124,11 @@ func runServerAdd() {
 
 	if hasFlagInArgs(args, "--dry-run") {
 		data, _ := json.MarshalIndent(req, "", "  ")
-		fmt.Printf("DRY RUN — would create server on %s:\n%s\n", creds.WranglerURL, string(data))
+		fmt.Printf("DRY RUN — would create server on %s:\n%s\n", creds.RelayURL, string(data))
 		return
 	}
 
-	fmt.Printf("Creating server %q on %s...\n", name, creds.WranglerURL)
+	fmt.Printf("Creating server %q on %s...\n", name, creds.RelayURL)
 	detail, err := client.CreateServer(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -1147,7 +1147,7 @@ func runServerAdd() {
 		}
 	}
 
-	fmt.Printf("\nTo sync this server to your project: mcp-sync add %s\n", name)
+	fmt.Printf("\nTo sync this server to your project: arc-sync add %s\n", name)
 }
 
 func buildRemoteConfig(args []string) ([]byte, error) {
@@ -1165,7 +1165,7 @@ func buildRemoteConfig(args []string) ([]byte, error) {
 		authType = "none"
 	}
 
-	auth := wrangler.RemoteAuth{Type: authType}
+	auth := relay.RemoteAuth{Type: authType}
 
 	switch authType {
 	case "bearer":
@@ -1189,12 +1189,12 @@ func buildRemoteConfig(args []string) ([]byte, error) {
 		return nil, fmt.Errorf("unknown auth type %q (use none, bearer, or api-key)", authType)
 	}
 
-	cfg := wrangler.RemoteConfig{URL: url, Auth: auth}
+	cfg := relay.RemoteConfig{URL: url, Auth: auth}
 	return json.Marshal(cfg)
 }
 
 func buildStdioConfig(args []string) ([]byte, error) {
-	cfg := wrangler.StdioConfig{
+	cfg := relay.StdioConfig{
 		Env: parseEnvFlags(args),
 	}
 
@@ -1208,7 +1208,7 @@ func buildStdioConfig(args []string) ([]byte, error) {
 		if buildRuntime != "python" && buildRuntime != "node" {
 			return nil, fmt.Errorf("--build runtime must be python or node, got %q", buildRuntime)
 		}
-		cfg.Build = &wrangler.StdioBuildConfig{
+		cfg.Build = &relay.StdioBuildConfig{
 			Runtime: buildRuntime,
 			Package: pkg,
 			Version: getFlagValue(args, "--version"),
@@ -1240,7 +1240,7 @@ func buildStdioConfig(args []string) ([]byte, error) {
 }
 
 func buildHTTPConfig(args []string) ([]byte, error) {
-	cfg := wrangler.HTTPConfig{
+	cfg := relay.HTTPConfig{
 		Env: parseEnvFlags(args),
 	}
 
@@ -1268,7 +1268,7 @@ func buildHTTPConfig(args []string) ([]byte, error) {
 
 func runServerRemove() {
 	if len(os.Args) < 4 {
-		fmt.Fprintln(os.Stderr, "Usage: mcp-sync server remove <name-or-id>")
+		fmt.Fprintln(os.Stderr, "Usage: arc-sync server remove <name-or-id>")
 		os.Exit(1)
 	}
 	nameOrID := os.Args[3]
@@ -1280,7 +1280,7 @@ func runServerRemove() {
 		os.Exit(1)
 	}
 
-	client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
+	client := relay.NewClient(creds.RelayURL, creds.APIKey)
 
 	// Try to find the server by name first
 	serverID := nameOrID
@@ -1296,7 +1296,7 @@ func runServerRemove() {
 		}
 	}
 
-	fmt.Printf("Removing server %q from %s...\n", nameOrID, creds.WranglerURL)
+	fmt.Printf("Removing server %q from %s...\n", nameOrID, creds.RelayURL)
 	if err := client.DeleteServer(serverID); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -1307,7 +1307,7 @@ func runServerRemove() {
 
 func runServerStartStop(action string) {
 	if len(os.Args) < 4 {
-		fmt.Fprintf(os.Stderr, "Usage: mcp-sync server %s <name-or-id>\n", action)
+		fmt.Fprintf(os.Stderr, "Usage: arc-sync server %s <name-or-id>\n", action)
 		os.Exit(1)
 	}
 	nameOrID := os.Args[3]
@@ -1319,7 +1319,7 @@ func runServerStartStop(action string) {
 		os.Exit(1)
 	}
 
-	client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
+	client := relay.NewClient(creds.RelayURL, creds.APIKey)
 
 	// Resolve name to ID
 	serverID := nameOrID

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/middleware"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/middleware"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 // noTickTicker returns a ticker factory that never fires (tests use Wake to trigger).

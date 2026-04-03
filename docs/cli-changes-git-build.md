@@ -1,4 +1,4 @@
-# mcp-sync CLI Changes for Git Build Support
+# arc-sync CLI Changes for Git Build Support
 
 ## 1. Increase HTTP timeout for server actions
 
@@ -61,12 +61,12 @@ type StdioBuildConfig struct {
 
 ## 3. Add `--git-url` and `--git-ref` flags to `server add`
 
-**File:** `cmd/mcp-sync/main.go`
+**File:** `cmd/arc-sync/main.go`
 
 In the help text for `server add`, add:
 ```
-  mcp-sync server add <name> --type stdio --build python --git-url https://github.com/user/repo
-  mcp-sync server add <name> --type stdio --build python --git-url https://github.com/user/repo --git-ref v1.0.0
+  arc-sync server add <name> --type stdio --build python --git-url https://github.com/user/repo
+  arc-sync server add <name> --type stdio --build python --git-url https://github.com/user/repo --git-ref v1.0.0
 ```
 
 In the options section:
@@ -81,7 +81,7 @@ In `buildStdioConfig()`, parse the new flags and populate the config. When `--gi
 
 The slack server failed because the package name was wrong. The correct name is:
 ```
-mcp-sync server add slack \
+arc-sync server add slack \
     --type stdio \
     --build node \
     --package @modelcontextprotocol/server-slack \

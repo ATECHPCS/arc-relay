@@ -1,6 +1,6 @@
 package project
 
-// ManagedServer represents an MCP server entry managed by the wrangler.
+// ManagedServer represents an MCP server entry managed by the relay.
 type ManagedServer struct {
 	Name    string
 	URL     string
@@ -20,15 +20,15 @@ type Target interface {
 	// or if the project dir is a suitable location for this target.
 	Detect(projectDir string) bool
 
-	// Read reads the target's config file and returns the list of wrangler-managed
-	// servers currently configured. The wranglerBaseURL is used to identify which
-	// entries belong to the wrangler.
-	Read(projectDir, wranglerBaseURL string) ([]ManagedServer, error)
+	// Read reads the target's config file and returns the list of relay-managed
+	// servers currently configured. The relayBaseURL is used to identify which
+	// entries belong to the relay.
+	Read(projectDir, relayBaseURL string) ([]ManagedServer, error)
 
 	// Write adds the given servers to the target's config file, preserving all
-	// existing entries. The wranglerBaseURL and apiKey are used to construct the
+	// existing entries. The relayBaseURL and apiKey are used to construct the
 	// server entries.
-	Write(projectDir, wranglerBaseURL, apiKey string, servers []ManagedServer) error
+	Write(projectDir, relayBaseURL, apiKey string, servers []ManagedServer) error
 
 	// Remove removes the named servers from the target's config file, preserving
 	// all other entries. Returns the list of names that were actually removed.

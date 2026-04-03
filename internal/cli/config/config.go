@@ -9,21 +9,21 @@ import (
 )
 
 const (
-	configDirName  = "mcp-sync"
+	configDirName  = "arc-sync"
 	configFileName = "config.json"
 )
 
-// Config holds the wrangler connection details.
+// Config holds the relay connection details.
 type Config struct {
-	WranglerURL string `json:"wrangler_url"`
-	APIKey      string `json:"api_key"`
+	RelayURL string `json:"relay_url"`
+	APIKey   string `json:"api_key"`
 }
 
 // Credentials holds resolved credentials with metadata about where they came from.
 type Credentials struct {
-	WranglerURL string
-	APIKey      string
-	Source      string // "environment", "config file", "flags"
+	RelayURL string
+	APIKey   string
+	Source   string // "environment", "config file", "flags"
 }
 
 // DefaultConfigDir returns the default config directory path for the current platform.
@@ -47,7 +47,7 @@ func LoadConfig(configDir string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no configuration found — run 'mcp-sync init' to get started, or 'mcp-sync --help' for usage")
+			return nil, fmt.Errorf("no configuration found — run 'arc-sync init' to get started, or 'arc-sync --help' for usage")
 		}
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
@@ -57,8 +57,8 @@ func LoadConfig(configDir string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 
-	if cfg.WranglerURL == "" {
-		return nil, fmt.Errorf("config %s: wrangler_url is required", path)
+	if cfg.RelayURL == "" {
+		return nil, fmt.Errorf("config %s: relay_url is required", path)
 	}
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("config %s: api_key is required", path)
@@ -91,13 +91,13 @@ func SaveConfig(configDir string, cfg *Config) error {
 // ResolveCredentials resolves credentials from environment variables first, then
 // config file. Returns the resolved credentials with their source.
 func ResolveCredentials(configDir string) (*Credentials, error) {
-	url := os.Getenv("MCP_SYNC_URL")
-	key := os.Getenv("MCP_SYNC_API_KEY")
+	url := os.Getenv("ARC_SYNC_URL")
+	key := os.Getenv("ARC_SYNC_API_KEY")
 	if url != "" && key != "" {
 		return &Credentials{
-			WranglerURL: url,
-			APIKey:      key,
-			Source:      "environment",
+			RelayURL: url,
+			APIKey:   key,
+			Source:   "environment",
 		}, nil
 	}
 
@@ -107,9 +107,9 @@ func ResolveCredentials(configDir string) (*Credentials, error) {
 	}
 
 	return &Credentials{
-		WranglerURL: cfg.WranglerURL,
-		APIKey:      cfg.APIKey,
-		Source:      fmt.Sprintf("config file (%s)", ConfigPath(configDir)),
+		RelayURL: cfg.RelayURL,
+		APIKey:   cfg.APIKey,
+		Source:   fmt.Sprintf("config file (%s)", ConfigPath(configDir)),
 	}, nil
 }
 

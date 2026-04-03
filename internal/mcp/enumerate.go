@@ -111,7 +111,7 @@ func doInitialize(ctx context.Context, sender Sender) (*InitializeResult, error)
 	params := InitializeParams{
 		ProtocolVersion: "2024-11-05",
 		Capabilities:    map[string]any{},
-		ClientInfo:      ServerInfo{Name: "mcp-wrangler", Version: "0.1.0"},
+		ClientInfo:      ServerInfo{Name: "arc-relay", Version: "0.1.0"},
 	}
 
 	req, err := NewRequest(id, "initialize", params)

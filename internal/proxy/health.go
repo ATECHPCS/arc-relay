@@ -10,8 +10,8 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 const (

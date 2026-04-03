@@ -7,7 +7,7 @@
   <h2>Device Authorization</h2>
   <div class="alert alert-danger">{{.Error}}</div>
   <p style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-muted);">
-    Run <code>mcp-sync init</code> in your terminal to start a new authorization flow.
+    Run <code>arc-sync init</code> in your terminal to start a new authorization flow.
   </p>
 </div>
 
@@ -37,7 +37,7 @@
 <div class="card">
   <h2>Authorize Device</h2>
   <p style="margin-bottom: 1rem;">
-    A CLI tool is requesting access to your MCP Wrangler account.
+    A CLI tool is requesting access to your Arc Relay account.
   </p>
 
   <div style="background: var(--bg-dark, #f8f9fa); border: 2px solid var(--border, #dee2e6); border-radius: 8px; padding: 1.5rem; text-align: center; margin-bottom: 1.5rem;">
@@ -46,7 +46,7 @@
   </div>
 
   <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 1rem;">
-    Approving will create an API key named <strong>mcp-sync device auth</strong> for user <strong>{{.User.Username}}</strong>.
+    Approving will create an API key named <strong>arc-sync device auth</strong> for user <strong>{{.User.Username}}</strong>.
   </p>
 
   <form method="POST" action="/auth/device">
@@ -63,7 +63,7 @@
 <div class="card">
   <h2>Device Authorization</h2>
   <p style="color: var(--text-muted);">
-    No authorization request found. Run <code>mcp-sync init</code> in your terminal to start the flow.
+    No authorization request found. Run <code>arc-sync init</code> in your terminal to start the flow.
   </p>
 </div>
 {{end}}

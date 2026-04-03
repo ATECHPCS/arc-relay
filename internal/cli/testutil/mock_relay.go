@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 )
 
-// Server mirrors the wrangler API server response shape.
+// Server mirrors the relay API server response shape.
 type Server struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -15,10 +15,10 @@ type Server struct {
 	Status      string `json:"status"`
 }
 
-// NewMockWrangler returns an httptest.Server that responds to GET /api/servers
+// NewMockRelay returns an httptest.Server that responds to GET /api/servers
 // with the provided server list. It validates the Bearer token if expectedToken
 // is non-empty.
-func NewMockWrangler(servers []Server, expectedToken string) *httptest.Server {
+func NewMockRelay(servers []Server, expectedToken string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/servers" {
 			http.NotFound(w, r)

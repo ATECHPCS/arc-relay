@@ -91,7 +91,7 @@
   <div style="background: var(--bg-dark, #f8f9fa); border: 1px solid var(--border, #dee2e6); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
     <strong style="font-size: 0.9rem;">Setup</strong>
     <span style="font-size: 0.7rem; background: #6c757d; color: #fff; padding: 0.1rem 0.4rem; border-radius: 10px; margin-left: 0.5rem;">CLI</span>
-    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0 0;">Copy the command below and run it in your terminal. Use <code>codex mcp login</code> for OAuth, or set <code>MCP_WRANGLER_TOKEN</code> for API key auth.</p>
+    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0 0;">Copy the command below and run it in your terminal. Use <code>codex mcp login</code> for OAuth, or set <code>ARC_RELAY_TOKEN</code> for API key auth.</p>
   </div>
   <div style="display: flex; flex-direction: column; gap: 0.5rem;">
   {{range .Servers}}
@@ -114,7 +114,7 @@
   <div style="background: var(--bg-dark, #f8f9fa); border: 1px solid var(--border, #dee2e6); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
     <strong style="font-size: 0.9rem;">Setup</strong>
     <span style="font-size: 0.7rem; background: #6c757d; color: #fff; padding: 0.1rem 0.4rem; border-radius: 10px; margin-left: 0.5rem;">CLI</span>
-    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0 0;">Use <strong>mcp-sync</strong> for the best experience. It manages .mcp.json automatically.</p>
+    <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0.5rem 0 0;">Use <strong>arc-sync</strong> for the best experience. It manages .mcp.json automatically.</p>
     <pre style="background: #e9ecef; padding: 0.6rem; border-radius: 6px; font-size: 0.75rem; margin: 0.5rem 0 0; overflow-x: auto;"><code>curl -fsSL {{.BaseURL}}/install.sh | bash</code></pre>
   </div>
   <div style="display: flex; flex-direction: column; gap: 0.5rem;">
@@ -125,7 +125,7 @@
         <span style="width: 7px; height: 7px; border-radius: 50%; background: #198754; display: inline-block;"></span>
       </div>
       <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <code id="code-cmd-{{.Name}}" style="flex: 1; font-size: 0.72rem; color: var(--text-muted);">mcp-sync add {{.Name}}</code>
+        <code id="code-cmd-{{.Name}}" style="flex: 1; font-size: 0.72rem; color: var(--text-muted);">arc-sync add {{.Name}}</code>
         <button onclick="copyEl('code-cmd-{{.Name}}', this)" class="btn btn-sm" style="white-space: nowrap; padding: 0.3rem 0.75rem; font-size: 0.78rem;">Copy</button>
       </div>
     </div>
@@ -143,12 +143,9 @@
 <div style="margin-top: 2rem; border-top: 2px solid var(--border, #dee2e6); padding-top: 1.5rem;">
   <h3 style="margin-bottom: 0.25rem;">Compliance Archive</h3>
   <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-    Archive MCP tool calls for compliance, audit, and security review. Enable the archive middleware on each server to stream requests and responses to Comma Compliance.
+    Archive MCP tool calls for compliance, audit, and security review. Enable the archive middleware on each server to stream requests and responses to a configured webhook endpoint.
   </p>
   <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-    <a href="https://app.commacompliance.com/archive/setup?source=mcp_wrangler&wrangler_url={{.BaseURL}}" class="btn btn-primary" style="font-size: 0.85rem; padding: 0.5rem 1rem; text-decoration: none;">
-      Set up with Comma Compliance
-    </a>
     {{if .IsAdmin}}
     <button onclick="testArchiveConnect()" id="connect-test-btn" class="btn" style="font-size: 0.85rem; padding: 0.5rem 1rem; border: 1px solid var(--border, #dee2e6); background: var(--bg, #fff); cursor: pointer; border-radius: 4px;">
       Test Connection

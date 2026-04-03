@@ -150,10 +150,10 @@ func (m *Manager) StartContainer(ctx context.Context, cfg ContainerConfig) (stri
 		}
 	}
 
-	containerName := "mcp-wrangler-" + cfg.Name
+	containerName := "arc-relay-" + cfg.Name
 
 	// Remove any leftover container with the same name (e.g. from a previous run
-	// that wasn't cleaned up, or from a wrangler restart).
+	// that wasn't cleaned up, or from a relay restart).
 	m.cli.ContainerRemove(ctx, containerName, dclient.ContainerRemoveOptions{Force: true})
 
 	createResult, err := m.cli.ContainerCreate(ctx, dclient.ContainerCreateOptions{

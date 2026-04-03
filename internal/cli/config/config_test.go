@@ -10,8 +10,8 @@ import (
 func TestSaveAndLoadConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &Config{
-		WranglerURL: "http://10.10.69.50:8080",
-		APIKey:      "test-token-123",
+		RelayURL: "http://10.10.69.50:8080",
+		APIKey:   "test-token-123",
 	}
 
 	if err := SaveConfig(dir, cfg); err != nil {
@@ -23,8 +23,8 @@ func TestSaveAndLoadConfig(t *testing.T) {
 		t.Fatalf("LoadConfig: %v", err)
 	}
 
-	if loaded.WranglerURL != cfg.WranglerURL {
-		t.Errorf("WranglerURL = %q, want %q", loaded.WranglerURL, cfg.WranglerURL)
+	if loaded.RelayURL != cfg.RelayURL {
+		t.Errorf("RelayURL = %q, want %q", loaded.RelayURL, cfg.RelayURL)
 	}
 	if loaded.APIKey != cfg.APIKey {
 		t.Errorf("APIKey = %q, want %q", loaded.APIKey, cfg.APIKey)
@@ -37,7 +37,7 @@ func TestSaveConfigPermissions(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	cfg := &Config{WranglerURL: "http://example.com", APIKey: "key"}
+	cfg := &Config{RelayURL: "http://example.com", APIKey: "key"}
 
 	if err := SaveConfig(dir, cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -76,13 +76,13 @@ func TestLoadConfigMissingURL(t *testing.T) {
 
 	_, err := LoadConfig(dir)
 	if err == nil {
-		t.Fatal("expected error for missing wrangler_url, got nil")
+		t.Fatal("expected error for missing relay_url, got nil")
 	}
 }
 
 func TestLoadConfigMissingKey(t *testing.T) {
 	dir := t.TempDir()
-	data := `{"wrangler_url": "http://example.com"}`
+	data := `{"relay_url": "http://example.com"}`
 	os.WriteFile(filepath.Join(dir, configFileName), []byte(data), 0600)
 
 	_, err := LoadConfig(dir)
@@ -102,8 +102,8 @@ func TestLoadConfigMalformedJSON(t *testing.T) {
 }
 
 func TestResolveCredentialsFromEnv(t *testing.T) {
-	t.Setenv("MCP_SYNC_URL", "http://env-wrangler:8080")
-	t.Setenv("MCP_SYNC_API_KEY", "env-token")
+	t.Setenv("ARC_SYNC_URL", "http://env-relay:8080")
+	t.Setenv("ARC_SYNC_API_KEY", "env-token")
 
 	creds, err := ResolveCredentials(t.TempDir())
 	if err != nil {
@@ -113,8 +113,8 @@ func TestResolveCredentialsFromEnv(t *testing.T) {
 	if creds.Source != "environment" {
 		t.Errorf("Source = %q, want %q", creds.Source, "environment")
 	}
-	if creds.WranglerURL != "http://env-wrangler:8080" {
-		t.Errorf("WranglerURL = %q, want http://env-wrangler:8080", creds.WranglerURL)
+	if creds.RelayURL != "http://env-relay:8080" {
+		t.Errorf("RelayURL = %q, want http://env-relay:8080", creds.RelayURL)
 	}
 	if creds.APIKey != "env-token" {
 		t.Errorf("APIKey = %q, want env-token", creds.APIKey)
@@ -123,11 +123,11 @@ func TestResolveCredentialsFromEnv(t *testing.T) {
 
 func TestResolveCredentialsFromFile(t *testing.T) {
 	// Ensure env vars are cleared
-	t.Setenv("MCP_SYNC_URL", "")
-	t.Setenv("MCP_SYNC_API_KEY", "")
+	t.Setenv("ARC_SYNC_URL", "")
+	t.Setenv("ARC_SYNC_API_KEY", "")
 
 	dir := t.TempDir()
-	cfg := &Config{WranglerURL: "http://file-wrangler:8080", APIKey: "file-token"}
+	cfg := &Config{RelayURL: "http://file-relay:8080", APIKey: "file-token"}
 	if err := SaveConfig(dir, cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
@@ -140,18 +140,18 @@ func TestResolveCredentialsFromFile(t *testing.T) {
 	if creds.Source == "environment" {
 		t.Error("expected source to be config file, got environment")
 	}
-	if creds.WranglerURL != "http://file-wrangler:8080" {
-		t.Errorf("WranglerURL = %q, want http://file-wrangler:8080", creds.WranglerURL)
+	if creds.RelayURL != "http://file-relay:8080" {
+		t.Errorf("RelayURL = %q, want http://file-relay:8080", creds.RelayURL)
 	}
 }
 
 func TestResolveCredentialsEnvPartial(t *testing.T) {
 	// Only URL set in env, no key — should fall through to config file
-	t.Setenv("MCP_SYNC_URL", "http://partial:8080")
-	t.Setenv("MCP_SYNC_API_KEY", "")
+	t.Setenv("ARC_SYNC_URL", "http://partial:8080")
+	t.Setenv("ARC_SYNC_API_KEY", "")
 
 	dir := t.TempDir()
-	cfg := &Config{WranglerURL: "http://file:8080", APIKey: "file-key"}
+	cfg := &Config{RelayURL: "http://file:8080", APIKey: "file-key"}
 	SaveConfig(dir, cfg)
 
 	creds, err := ResolveCredentials(dir)
@@ -171,7 +171,7 @@ func TestCheckPermissionsSecure(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	cfg := &Config{WranglerURL: "http://example.com", APIKey: "key"}
+	cfg := &Config{RelayURL: "http://example.com", APIKey: "key"}
 	SaveConfig(dir, cfg)
 
 	warning := CheckPermissions(dir)
@@ -186,7 +186,7 @@ func TestCheckPermissionsInsecure(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	cfg := &Config{WranglerURL: "http://example.com", APIKey: "key"}
+	cfg := &Config{RelayURL: "http://example.com", APIKey: "key"}
 	SaveConfig(dir, cfg)
 
 	// Make insecure

@@ -2,21 +2,21 @@
 # Copy .env.example to .env and change the encryption key, session secret,
 # and admin password before deploying to any shared or production environment.
 services:
-  mcp-wrangler:
+  arc-relay:
     build: .
     ports:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - wrangler-data:/data
+      - relay-data:/data
     env_file:
       - path: .env
         required: false
     environment:
-      - MCP_WRANGLER_ENCRYPTION_KEY=${MCP_WRANGLER_ENCRYPTION_KEY:-changeme}
-      - MCP_WRANGLER_SESSION_SECRET=${MCP_WRANGLER_SESSION_SECRET:-changeme}
-      - MCP_WRANGLER_ADMIN_PASSWORD=${MCP_WRANGLER_ADMIN_PASSWORD:-changeme}
-      - MCP_WRANGLER_DB_PATH=${MCP_WRANGLER_DB_PATH:-/data/mcp-wrangler.db}
+      - ARC_RELAY_ENCRYPTION_KEY=${ARC_RELAY_ENCRYPTION_KEY:-changeme}
+      - ARC_RELAY_SESSION_SECRET=${ARC_RELAY_SESSION_SECRET:-changeme}
+      - ARC_RELAY_ADMIN_PASSWORD=${ARC_RELAY_ADMIN_PASSWORD:-changeme}
+      - ARC_RELAY_DB_PATH=${ARC_RELAY_DB_PATH:-/data/arc-relay.db}
 
 volumes:
-  wrangler-data:
+  relay-data:

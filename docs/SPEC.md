@@ -1,8 +1,8 @@
-# MCP Wrangler - Technical Specification
+# Arc Relay - Technical Specification
 
 ## Overview
 
-MCP Wrangler is a lightweight management system for deploying, proxying, and sharing MCP (Model Context Protocol) servers. It consolidates multiple MCP servers behind a single gateway with simple authentication and RBAC, making it easy to expose MCP capabilities to AI tools like Claude Desktop, Claude Code, and others.
+Arc Relay is a lightweight management system for deploying, proxying, and sharing MCP (Model Context Protocol) servers. It consolidates multiple MCP servers behind a single gateway with simple authentication and RBAC, making it easy to expose MCP capabilities to AI tools like Claude Desktop, Claude Code, and others.
 
 **Goals:** Simpler alternative to [microsoft/mcp-gateway](https://github.com/microsoft/mcp-gateway) — no Kubernetes, no Azure dependencies, no .NET. Just a single Go binary + Docker.
 
@@ -12,7 +12,7 @@ MCP Wrangler is a lightweight management system for deploying, proxying, and sha
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      MCP Wrangler                           │
+│                      Arc Relay                           │
 │                                                             │
 │  ┌──────────┐  ┌──────────────┐  ┌───────────────────────┐  │
 │  │ Web UI   │  │ Admin API    │  │ MCP Proxy Layer       │  │
@@ -52,13 +52,13 @@ MCP Wrangler is a lightweight management system for deploying, proxying, and sha
 
 ## MCP Server Types
 
-MCP Wrangler supports three server types, each with different lifecycle management:
+Arc Relay supports three server types, each with different lifecycle management:
 
 ### 1. Stdio (Docker-wrapped)
 
-The server runs as a subprocess inside a Docker container managed by MCP Wrangler. MCP Wrangler communicates with it over stdin/stdout via `docker exec` or by running a bridge process inside the container.
+The server runs as a subprocess inside a Docker container managed by Arc Relay. Arc Relay communicates with it over stdin/stdout via `docker exec` or by running a bridge process inside the container.
 
-**Lifecycle:** MCP Wrangler builds/pulls the image, starts the container, and manages the stdio bridge. The bridge translates between Streamable HTTP (exposed to clients) and stdio (to the server process).
+**Lifecycle:** Arc Relay builds/pulls the image, starts the container, and manages the stdio bridge. The bridge translates between Streamable HTTP (exposed to clients) and stdio (to the server process).
 
 **Examples:** pfSense MCP Server (Python, stdio)
 
@@ -69,9 +69,9 @@ The server runs as a subprocess inside a Docker container managed by MCP Wrangle
 
 ### 2. HTTP (Docker or external)
 
-The server exposes an HTTP endpoint (Streamable HTTP or legacy SSE). It may run in a Docker container managed by MCP Wrangler, or be an external service.
+The server exposes an HTTP endpoint (Streamable HTTP or legacy SSE). It may run in a Docker container managed by Arc Relay, or be an external service.
 
-**Lifecycle:** For Docker-managed, MCP Wrangler starts the container and proxies to its HTTP port. For external, MCP Wrangler just proxies.
+**Lifecycle:** For Docker-managed, Arc Relay starts the container and proxies to its HTTP port. For external, Arc Relay just proxies.
 
 **Examples:** Uptime Kuma MCP Server (Python, SSE/HTTP on port 8000)
 
@@ -82,9 +82,9 @@ The server exposes an HTTP endpoint (Streamable HTTP or legacy SSE). It may run 
 
 ### 3. Remote
 
-The server is hosted externally. MCP Wrangler acts as a pure proxy, forwarding MCP protocol messages.
+The server is hosted externally. Arc Relay acts as a pure proxy, forwarding MCP protocol messages.
 
-**Lifecycle:** No lifecycle management. MCP Wrangler stores connection details and credentials, proxies requests.
+**Lifecycle:** No lifecycle management. Arc Relay stores connection details and credentials, proxies requests.
 
 **Examples:**
 - Home Assistant MCP (HA add-on, private URL with embedded auth token)
@@ -139,7 +139,7 @@ CREATE TABLE servers (
 
 ### F2: List Servers & Enumerate Endpoints
 
-Once a server is running and connected, MCP Wrangler calls `tools/list`, `resources/list`, and `prompts/list` on the server and caches the results.
+Once a server is running and connected, Arc Relay calls `tools/list`, `resources/list`, and `prompts/list` on the server and caches the results.
 
 **Web UI:** Dashboard shows all servers with status, and expandable sections showing their tools, resources, and prompts.
 
@@ -162,7 +162,7 @@ CREATE TABLE endpoint_permissions (
 
 ### F3: Proxy MCP Servers
 
-Each server is exposed at `/mcp/{server-name}`. MCP Wrangler implements Streamable HTTP transport (the current MCP standard) on the client-facing side, regardless of the backend server's transport.
+Each server is exposed at `/mcp/{server-name}`. Arc Relay implements Streamable HTTP transport (the current MCP standard) on the client-facing side, regardless of the backend server's transport.
 
 **Proxy flow:**
 ```
@@ -171,7 +171,7 @@ AI Client (Claude, etc.)
     │  Streamable HTTP (POST/GET with SSE)
     │  + Auth header (Bearer token)
     ▼
-MCP Wrangler (/mcp/{server-name})
+Arc Relay (/mcp/{server-name})
     │
     ├─► Auth check (validate token, check user permissions)
     ├─► RBAC filter (strip disallowed tools/resources from responses)
@@ -181,7 +181,7 @@ MCP Wrangler (/mcp/{server-name})
     └─► [remote server] ─► HTTP proxy to remote URL (with stored credentials)
 ```
 
-**Session management:** MCP Wrangler manages sessions per client connection. For stdio backends, it maintains the subprocess session. For HTTP/remote backends, it forwards session IDs.
+**Session management:** Arc Relay manages sessions per client connection. For stdio backends, it maintains the subprocess session. For HTTP/remote backends, it forwards session IDs.
 
 **Key proxy behaviors:**
 - `initialize` requests: forwarded, response cached for endpoint enumeration
@@ -238,18 +238,18 @@ CREATE TABLE request_logs (
 );
 ```
 
-All MCP requests proxied through MCP Wrangler are logged. For stdio servers, stderr output is captured and stored separately.
+All MCP requests proxied through Arc Relay are logged. For stdio servers, stderr output is captured and stored separately.
 
 ### F6: Connection Config Generation (stretch)
 
-Generate ready-to-paste config snippets for connecting to MCP Wrangler servers:
+Generate ready-to-paste config snippets for connecting to Arc Relay servers:
 
 **Claude Desktop (`claude_desktop_config.json`):**
 ```json
 {
   "mcpServers": {
     "pfsense-prod": {
-      "url": "http://mcp-wrangler.local:8080/mcp/pfsense-prod",
+      "url": "http://arc-relay.local:8080/mcp/pfsense-prod",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }
@@ -260,7 +260,7 @@ Generate ready-to-paste config snippets for connecting to MCP Wrangler servers:
 
 **Claude Code:**
 ```bash
-claude mcp add --transport http pfsense-prod http://mcp-wrangler.local:8080/mcp/pfsense-prod --header "Authorization: Bearer <your-api-key>"
+claude mcp add --transport http pfsense-prod http://arc-relay.local:8080/mcp/pfsense-prod --header "Authorization: Bearer <your-api-key>"
 ```
 
 ### F7: Access Logs & Analytics (stretch)
@@ -275,12 +275,12 @@ Web UI dashboards showing:
 
 ## Stdio-to-HTTP Bridge Design
 
-This is the most complex piece. MCP Wrangler needs to translate between Streamable HTTP (what clients connect with) and stdio (what the server subprocess speaks).
+This is the most complex piece. Arc Relay needs to translate between Streamable HTTP (what clients connect with) and stdio (what the server subprocess speaks).
 
 ### Approach: Bridge Process per Connection
 
 ```
-Client ──HTTP──► MCP Wrangler ──stdin/stdout──► Docker Container
+Client ──HTTP──► Arc Relay ──stdin/stdout──► Docker Container
                      │                              │
                      │  Manages session              │  Runs MCP server
                      │  Translates HTTP↔stdio        │  (e.g., pfsense-mcp)
@@ -289,11 +289,11 @@ Client ──HTTP──► MCP Wrangler ──stdin/stdout──► Docker Conta
 
 **Implementation:**
 1. Docker container runs the MCP server process (e.g., `python -m pfsense_mcp`)
-2. MCP Wrangler attaches to the container's stdin/stdout via Docker API (`ContainerAttach`)
+2. Arc Relay attaches to the container's stdin/stdout via Docker API (`ContainerAttach`)
 3. For each client session:
    - Client POSTs a JSON-RPC message to `/mcp/{server-name}`
-   - MCP Wrangler writes the message + newline to the container's stdin
-   - MCP Wrangler reads the response from stdout (newline-delimited JSON-RPC)
+   - Arc Relay writes the message + newline to the container's stdin
+   - Arc Relay reads the response from stdout (newline-delimited JSON-RPC)
    - Response is returned to client as JSON or SSE stream
 
 **Concurrency consideration:** Stdio is inherently single-session. Options:
@@ -407,9 +407,9 @@ Client ──HTTP──► MCP Wrangler ──stdin/stdout──► Docker Conta
 ## Project Structure
 
 ```
-mcp-wrangler/
+arc-relay/
 ├── cmd/
-│   └── mcp-wrangler/
+│   └── arc-relay/
 │       └── main.go              # Entry point
 ├── internal/
 │   ├── config/
@@ -463,13 +463,13 @@ host = "0.0.0.0"
 port = 8080
 
 [database]
-path = "/data/mcp-wrangler.db"
+path = "/data/arc-relay.db"
 
 [docker]
 # Docker socket path (default for Linux)
 socket = "unix:///var/run/docker.sock"
 # Network for managed containers
-network = "mcp-wrangler"
+network = "arc-relay"
 
 [encryption]
 # Key for encrypting stored credentials (generate with: openssl rand -hex 32)
@@ -490,7 +490,7 @@ admin_password = "changeme"
 # docker-compose.yml
 version: "3.8"
 services:
-  mcp-wrangler:
+  arc-relay:
     build: .
     ports:
       - "8080:8080"
@@ -498,9 +498,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker-in-Docker for managed servers
       - wrangler-data:/data
     environment:
-      - MCP_WRANGLER_ENCRYPTION_KEY=changeme
-      - MCP_WRANGLER_SESSION_SECRET=changeme
-      - MCP_WRANGLER_ADMIN_PASSWORD=changeme
+      - ARC_RELAY_ENCRYPTION_KEY=changeme
+      - ARC_RELAY_SESSION_SECRET=changeme
+      - ARC_RELAY_ADMIN_PASSWORD=changeme
 
 volumes:
   wrangler-data:
@@ -548,7 +548,7 @@ volumes:
 
 ### Phase 6: Auto-Build Stdio Images from Packages
 
-Most MCP servers are distributed as npm or pip packages, not Docker images. Users shouldn't need to find or build Docker images manually. MCP Wrangler should auto-generate and build Docker images from package metadata.
+Most MCP servers are distributed as npm or pip packages, not Docker images. Users shouldn't need to find or build Docker images manually. Arc Relay should auto-generate and build Docker images from package metadata.
 
 #### Problem
 
@@ -650,7 +650,7 @@ When `Build` is set and `Image` is empty, Wrangler builds the image before start
 
 ### Phase 7: Proxy Middleware — Traffic Interception & Processing
 
-MCP Wrangler sits at the chokepoint between AI clients and MCP servers. This position enables powerful traffic processing: sanitization, compliance enforcement, context optimization, and observability — without modifying any server or client.
+Arc Relay sits at the chokepoint between AI clients and MCP servers. This position enables powerful traffic processing: sanitization, compliance enforcement, context optimization, and observability — without modifying any server or client.
 
 #### Architecture
 
@@ -660,7 +660,7 @@ AI Client
     │  JSON-RPC request
     ▼
 ┌─────────────────────────────────────────────────┐
-│  MCP Wrangler Proxy                             │
+│  Arc Relay Proxy                             │
 │                                                 │
 │  ┌─────────────────────────────────────────┐    │
 │  │         Middleware Pipeline              │    │
@@ -800,90 +800,13 @@ CREATE TABLE middleware_configs (
 - Configure patterns, thresholds, actions
 - View middleware-generated alerts/logs
 
-#### Comma Compliance Integration (Phase 8)
-
-MCP Wrangler provides the open-source traffic interception infrastructure. [Comma Compliance](https://commacompliance.com) provides the intelligence layer — policy engines, compliance rule libraries, audit trails, and enterprise reporting.
-
-**Integration model: MCP Wrangler as the enforcement point, Comma Compliance as the policy source.**
-
-```
-┌──────────────────────┐         ┌──────────────────────────┐
-│   MCP Wrangler       │         │   Comma Compliance       │
-│   (open source)      │◄───────►│   (commercial SaaS)      │
-│                      │         │                          │
-│  • Traffic proxy     │  Sync   │  • Policy engine         │
-│  • Middleware engine  │◄───────►│  • Compliance rules      │
-│  • Pattern matching   │  API   │  • Industry templates    │
-│  • Block/redact/alert│         │  • Audit trail           │
-│  • Local enforcement  │────────►│  • Analytics dashboard   │
-│                      │  Events │  • Incident management   │
-│  Free, self-hosted   │         │  • SOC2/HIPAA/PCI reports│
-└──────────────────────┘         └──────────────────────────┘
-```
-
-**How it works:**
-
-1. **Policy sync**: Comma Compliance pushes compliance policies to MCP Wrangler via API. Policies are expressed as middleware configurations (patterns, rules, actions). Wrangler stores them locally and enforces them even if the Comma Compliance service is unreachable.
-
-2. **Event streaming**: MCP Wrangler streams audit events to Comma Compliance — what was accessed, what was redacted, what was blocked, by whom, when. No raw content is sent unless the policy explicitly requires it (configurable).
-
-3. **Compliance middleware**: A special `comma-compliance` middleware that:
-   - Fetches and caches policies from the Comma Compliance API
-   - Evaluates each request/response against the active policy set
-   - Reports violations and enforcement actions back to the service
-   - Falls back to cached policies if the service is unreachable
-
-```go
-// CommaComplianceMiddleware bridges MCP Wrangler to the Comma Compliance service.
-type CommaComplianceMiddleware struct {
-    apiURL    string
-    apiKey    string
-    policies  *PolicyCache   // locally cached, synced periodically
-    eventChan chan AuditEvent // buffered channel for async event delivery
-}
-```
-
-**Configuration:**
-
-```toml
-[comma_compliance]
-enabled = false
-api_url = "https://api.commacompliance.com/v1"
-api_key = ""
-org_id = ""
-sync_interval = "5m"        # how often to pull policy updates
-event_buffer_size = 1000    # buffer events if service is temporarily unreachable
-send_content = false        # never send raw tool content by default
-```
-
-**Web UI integration:**
-- Settings page: "Comma Compliance" section with API key entry and connection status
-- Server detail: "Compliance" badge showing policy coverage
-- Dashboard: compliance summary (violations, blocks, alerts in last 24h)
-
-**Business model alignment:**
-- MCP Wrangler is free, open-source, self-hosted — drives adoption
-- Basic middleware (sanitizer, sizer, alerter) works standalone — immediate value
-- Comma Compliance adds enterprise features: managed policies, audit trails, compliance reporting, multi-tenant management
-- Organizations start with MCP Wrangler, graduate to Comma Compliance when they need compliance automation
-- The open-source middleware interface means competitors can also build on the platform, but Comma Compliance has the first-mover advantage and deepest integration
-
-**Open questions for Comma Compliance integration:**
-- Should MCP Wrangler phone home to Comma Compliance for telemetry/usage stats? (Probably not — keep open source clean)
-- Should the Comma Compliance middleware be a separate binary/plugin, or compiled into MCP Wrangler behind a build tag?
-- How do we handle the free→paid upgrade path in the UI? Subtle "upgrade" prompts? Feature comparison?
-- Should Comma Compliance policies be able to override local middleware config? (Enterprise admin override vs. local autonomy)
-- Multi-tenant: one MCP Wrangler instance serving multiple orgs, each with their own Comma Compliance policy set?
-- What compliance frameworks do we target first? SOC2, HIPAA, PCI-DSS, GDPR?
-- Should the event stream include token counts for billing/usage tracking?
-
 ### Phase 9: Platform Abstraction & Agent Traffic Proxy
 
-Three interrelated changes that evolve MCP Wrangler from a Docker-specific MCP proxy into a broader AI agent traffic management platform. Each sub-phase was pressure-tested for architectural flaws and descoped where the original plan was overambitious.
+Three interrelated changes that evolve Arc Relay from a Docker-specific MCP proxy into a broader AI agent traffic management platform. Each sub-phase was pressure-tested for architectural flaws and descoped where the original plan was overambitious.
 
 #### 9A: External Identity Providers (OIDC)
 
-**Problem:** Every MCP Wrangler instance manages its own user database. In teams, this means another password to manage. Enterprise deployments need SSO.
+**Problem:** Every Arc Relay instance manages its own user database. In teams, this means another password to manage. Enterprise deployments need SSO.
 
 **Solution:** Federated login via OpenID Connect (covers Google Workspace, Microsoft Entra/M365, Okta, Auth0, Keycloak, and any OIDC-compliant IdP). No SAML — orgs that need SAML can use an OIDC broker (Keycloak, Dex, Authentik, Azure AD as broker) and Wrangler stays an OIDC Relying Party only. This avoids owning XML signatures, clock skew, metadata parsing, and SAML session index handling.
 
@@ -893,7 +816,7 @@ Three interrelated changes that evolve MCP Wrangler from a Docker-specific MCP p
 User clicks "Log in with Google" (or M365, etc.)
     │
     ▼
-MCP Wrangler redirects to IdP authorize endpoint
+Arc Relay redirects to IdP authorize endpoint
     │  (with state, nonce, redirect_uri)
     ▼
 User authenticates at IdP
@@ -1015,7 +938,7 @@ Ship with:
 - Login page shows configured IdP buttons + optional local login form
 - API keys are independent of session lifecycle (but fail if user is disabled)
 - Consider `api_keys.expires_at` for time-limited keys
-- Device auth flow (mcp-sync) still works — user approves via browser using whatever login method they have
+- Device auth flow (arc-sync) still works — user approves via browser using whatever login method they have
 - Admin can disable local auth entirely (force SSO)
 
 **New endpoints:**
@@ -1031,7 +954,7 @@ Ship with:
 
 #### 9B: Container Runtime Abstraction
 
-**Problem:** MCP Wrangler is hardwired to the Docker socket. This limits deployment to machines with Docker installed and prevents using managed container services.
+**Problem:** Arc Relay is hardwired to the Docker socket. This limits deployment to machines with Docker installed and prevents using managed container services.
 
 **Descoped reality check:** Supporting ACI/ECS/K8s is not "a runtime adapter" — it's a product line (credentials, networking, RBAC, cost controls, drift handling, image registries). Cloud runtimes also can't do Docker-style exec-attach for stdio servers, and networking/addressing varies wildly between providers. The original plan for a true "sidecar" was architecturally flawed — a sidecar process in another container *cannot* read the main container's stdin/stdout.
 
@@ -1133,9 +1056,9 @@ When there's validated demand, cloud runtimes would need:
 
 #### 9C: HTTP Proxy Mode — Agent Traffic Interception
 
-**Problem:** MCP Wrangler sees MCP tool calls but is blind to everything else an AI agent does on the network — `curl`, `npm install`, `git clone`, `pip install`, API calls from generated code. There's no unified view of agent network activity.
+**Problem:** Arc Relay sees MCP tool calls but is blind to everything else an AI agent does on the network — `curl`, `npm install`, `git clone`, `pip install`, API calls from generated code. There's no unified view of agent network activity.
 
-**Opportunity:** [Claude Code's sandbox](https://code.claude.com/docs/en/sandboxing) routes all network traffic through a configurable proxy (`sandbox.network.httpProxyPort`). If that proxy is MCP Wrangler, you get a single enforcement point for both MCP and HTTP traffic.
+**Opportunity:** [Claude Code's sandbox](https://code.claude.com/docs/en/sandboxing) routes all network traffic through a configurable proxy (`sandbox.network.httpProxyPort`). If that proxy is Arc Relay, you get a single enforcement point for both MCP and HTTP traffic.
 
 > **Hard prerequisite:** Prototype this with Claude Code's actual sandbox before committing to implementation. The sandbox may run its own internal proxy with chaining behavior that limits what an external proxy can do. If `npm install` / `git clone` can't reliably route through our proxy, this phase collapses.
 
@@ -1165,7 +1088,7 @@ Same admin UI, unified audit trail.
 
 **How it works:**
 
-MCP Wrangler runs an HTTP forward proxy bound to `127.0.0.1` on a separate port (default 8081). Claude Code's sandbox configuration points at it:
+Arc Relay runs an HTTP forward proxy bound to `127.0.0.1` on a separate port (default 8081). Claude Code's sandbox configuration points at it:
 
 ```json
 {
@@ -1301,7 +1224,7 @@ Many developers are already behind a corporate proxy. The Wrangler proxy must su
 5. Web UI for proxy rules and log viewing
 6. Alerter integration (domain pattern alerts shared with MCP alerter)
 7. Upstream proxy chaining support
-8. mcp-sync integration for auto-configuring sandbox settings (stretch)
+8. arc-sync integration for auto-configuring sandbox settings (stretch)
 
 ---
 
@@ -1313,7 +1236,7 @@ These three pieces aren't just parallel features — they compound:
 - **9A + 9B**: SSO users get scoped access → OIDC claims determine access levels → future cloud runtimes could route by role (dev → local Docker, prod → managed)
 - **9B + 9C**: Container runtime interface → proxy manager decoupled from Docker → when cloud backends land, the HTTP proxy provides the same network visibility regardless of where containers run
 
-The combination evolves MCP Wrangler from "Docker MCP proxy" toward "AI agent traffic gateway."
+The combination evolves Arc Relay from "Docker MCP proxy" toward "AI agent traffic gateway."
 
 #### Sequencing and risk
 
@@ -1336,7 +1259,7 @@ Rationale:
 
 **Status:** Bug — needs fix
 
-The server detail page connection examples (`claude mcp add`, Claude Desktop JSON) hardcode `http://` prefix. When `MCP_WRANGLER_BASE_URL` is set (e.g., `https://mcp.home.jeremiah.church`), the examples should use that URL directly instead of `http://{{.Host}}`.
+The server detail page connection examples (`claude mcp add`, Claude Desktop JSON) hardcode `http://` prefix. When `ARC_RELAY_BASE_URL` is set (e.g., `https://relay.example.com`), the examples should use that URL directly instead of `http://{{.Host}}`.
 
 **Fix:** Pass `BaseURL` (from `cfg.PublicBaseURL()`) to the template instead of `r.Host`. Update `server_detail.html` to use `{{.BaseURL}}` as the full URL prefix.
 
@@ -1358,21 +1281,14 @@ For POC: AES-256-GCM encryption with a key from config/env var. Credentials are 
 Pre-built images only (`docker pull`) for the POC. Building from source (Dockerfiles, repos) adds significant complexity and can be added later. See Phase 6 for the auto-build plan.
 
 ### MCP Protocol Version Compatibility
-The current MCP spec (2025-03-26) uses Streamable HTTP. Older servers may use the deprecated SSE transport. MCP Wrangler should attempt Streamable HTTP first, fall back to SSE per the spec's backwards compatibility guidance.
+The current MCP spec (2025-03-26) uses Streamable HTTP. Older servers may use the deprecated SSE transport. Arc Relay should attempt Streamable HTTP first, fall back to SSE per the spec's backwards compatibility guidance.
 
 ### Middleware Performance
 The middleware pipeline adds latency to every proxied request. Design considerations:
 - Middleware should be fast (microseconds, not milliseconds) for pattern matching
 - Regex patterns should be pre-compiled at config load time
 - Content summarization (via LLM) should be async/optional — never block by default
-- Middleware that calls external services (webhooks, Comma Compliance API) should be non-blocking
-
-### Open Source Governance
-MCP Wrangler under Comma Compliance org branding:
-- License: MIT or Apache 2.0 (permissive, encourages adoption)
-- GitHub org: `comma-compliance/mcp-wrangler` (or keep `JeremiahChurch` and add org attribution?)
-- README: "Built by [Comma Compliance](https://commacompliance.com)" with clear separation between open-source core and commercial offering
-- Contributor agreement: standard CLA or DCO?
+- Middleware that calls external services (webhooks) should be non-blocking
 
 ---
 

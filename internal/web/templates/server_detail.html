@@ -703,15 +703,15 @@ function updateTier(el) {
 <div class="card">
   <h2>Connection Examples</h2>
   <p style="margin-bottom: 0.75rem; font-size: 0.9rem; color: var(--text-muted)">
-    Connect AI tools to this MCP server through MCP Wrangler.
+    Connect AI tools to this MCP server through Arc Relay.
   </p>
 
-  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">mcp-sync CLI (Recommended)</h3>
+  <h3 style="font-size: 0.9rem; margin-bottom: 0.3rem;">arc-sync CLI (Recommended)</h3>
   <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
     The easiest way to connect. Handles config files, auth headers, and per-project management automatically.
   </p>
   <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
-    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; flex:1; margin:0;"><code id="sync-cmd">mcp-sync add {{.Server.Name}}</code></pre>
+    <pre style="background: #e9ecef; padding: 0.75rem; border-radius: 6px; font-size: 0.8rem; overflow-x: auto; flex:1; margin:0;"><code id="sync-cmd">arc-sync add {{.Server.Name}}</code></pre>
     <button type="button" class="btn btn-outline btn-sm" onclick="copyText('sync-cmd')" title="Copy command">Copy</button>
   </div>
   <details style="margin-bottom: 1rem;">
@@ -720,7 +720,7 @@ function updateTier(el) {
 curl -fsSL {{.BaseURL}}/install.sh | bash
 
 # Or install manually, then init with browser-based auth
-mcp-sync init {{.BaseURL}}</code></pre>
+arc-sync init {{.BaseURL}}</code></pre>
   </details>
 
   <details style="margin-bottom: 0.75rem;">

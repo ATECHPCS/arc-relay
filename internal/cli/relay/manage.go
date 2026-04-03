@@ -1,4 +1,4 @@
-package wrangler
+package relay
 
 import (
 	"bytes"
@@ -24,7 +24,7 @@ func parseErrorBody(body []byte) string {
 }
 
 // handleErrorResponse returns an appropriate error for non-success HTTP responses.
-// It parses the response body for structured error messages from the wrangler.
+// It parses the response body for structured error messages from the relay.
 func handleErrorResponse(resp *http.Response, body []byte, context string) error {
 	detail := parseErrorBody(body)
 
@@ -54,15 +54,15 @@ func handleErrorResponse(resp *http.Response, body []byte, context string) error
 		return fmt.Errorf("bad request")
 	default:
 		if detail != "" {
-			return fmt.Errorf("wrangler returned HTTP %d: %s", resp.StatusCode, detail)
+			return fmt.Errorf("relay returned HTTP %d: %s", resp.StatusCode, detail)
 		}
-		return fmt.Errorf("wrangler returned HTTP %d", resp.StatusCode)
+		return fmt.Errorf("relay returned HTTP %d", resp.StatusCode)
 	}
 }
 
-// CreateServer creates a new server on the wrangler instance.
+// CreateServer creates a new server on the relay instance.
 // Requires the API key to have admin or write access.
-// Corresponds to POST /api/servers on the wrangler.
+// Corresponds to POST /api/servers on the relay.
 func (c *Client) CreateServer(req *CreateServerRequest) (*ServerDetail, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -79,7 +79,7 @@ func (c *Client) CreateServer(req *CreateServerRequest) (*ServerDetail, error) {
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to wrangler at %s: %w", c.BaseURL, err)
+		return nil, fmt.Errorf("connecting to relay at %s: %w", c.BaseURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -100,8 +100,8 @@ func (c *Client) CreateServer(req *CreateServerRequest) (*ServerDetail, error) {
 	return &detail, nil
 }
 
-// DeleteServer deletes a server from the wrangler instance.
-// Corresponds to DELETE /api/servers/{id} on the wrangler.
+// DeleteServer deletes a server from the relay instance.
+// Corresponds to DELETE /api/servers/{id} on the relay.
 func (c *Client) DeleteServer(serverID string) error {
 	url := c.BaseURL + "/api/servers/" + serverID
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
@@ -112,7 +112,7 @@ func (c *Client) DeleteServer(serverID string) error {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("connecting to wrangler: %w", err)
+		return fmt.Errorf("connecting to relay: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -124,14 +124,14 @@ func (c *Client) DeleteServer(serverID string) error {
 	return handleErrorResponse(resp, body, fmt.Sprintf("server %q", serverID))
 }
 
-// StartServer starts a server on the wrangler instance.
-// Corresponds to POST /api/servers/{id}/start on the wrangler.
+// StartServer starts a server on the relay instance.
+// Corresponds to POST /api/servers/{id}/start on the relay.
 func (c *Client) StartServer(serverID string) error {
 	return c.serverAction(serverID, "start")
 }
 
-// StopServer stops a server on the wrangler instance.
-// Corresponds to POST /api/servers/{id}/stop on the wrangler.
+// StopServer stops a server on the relay instance.
+// Corresponds to POST /api/servers/{id}/stop on the relay.
 func (c *Client) StopServer(serverID string) error {
 	return c.serverAction(serverID, "stop")
 }
@@ -146,7 +146,7 @@ func (c *Client) serverAction(serverID, action string) error {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("connecting to wrangler: %w", err)
+		return fmt.Errorf("connecting to relay: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -159,7 +159,7 @@ func (c *Client) serverAction(serverID, action string) error {
 }
 
 // GetServer fetches a single server's details by ID.
-// Corresponds to GET /api/servers/{id} on the wrangler.
+// Corresponds to GET /api/servers/{id} on the relay.
 func (c *Client) GetServer(serverID string) (*ServerDetail, error) {
 	url := c.BaseURL + "/api/servers/" + serverID
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -170,7 +170,7 @@ func (c *Client) GetServer(serverID string) (*ServerDetail, error) {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to wrangler: %w", err)
+		return nil, fmt.Errorf("connecting to relay: %w", err)
 	}
 	defer resp.Body.Close()
 

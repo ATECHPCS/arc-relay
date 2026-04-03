@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // SanitizerConfig configures the sanitizer middleware.

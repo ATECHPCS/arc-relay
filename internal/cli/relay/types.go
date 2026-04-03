@@ -1,9 +1,9 @@
-package wrangler
+package relay
 
 import "encoding/json"
 
-// CreateServerRequest is the payload for creating a server on the wrangler.
-// Mirrors the wrangler's store.Server model.
+// CreateServerRequest is the payload for creating a server on the relay.
+// Mirrors the relay's store.Server model.
 type CreateServerRequest struct {
 	Name        string          `json:"name"`
 	DisplayName string          `json:"display_name"`
@@ -50,7 +50,7 @@ type RemoteAuth struct {
 	HeaderName string `json:"header_name,omitempty"` // for api_key type
 }
 
-// ServerDetail is the full server response from the wrangler API,
+// ServerDetail is the full server response from the relay API,
 // including the config blob.
 type ServerDetail struct {
 	ID          string          `json:"id"`

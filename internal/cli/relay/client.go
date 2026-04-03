@@ -1,4 +1,4 @@
-package wrangler
+package relay
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Server represents an MCP server from the wrangler API.
+// Server represents an MCP server from the relay API.
 type Server struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
@@ -21,14 +21,14 @@ type Server struct {
 	HealthError   string `json:"health_error,omitempty"`    // error message when unhealthy
 }
 
-// Client is an API client for an MCP Wrangler instance.
+// Client is an API client for an Arc Relay instance.
 type Client struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
 }
 
-// NewClient creates a new wrangler API client.
+// NewClient creates a new relay API client.
 func NewClient(baseURL, apiKey string) *Client {
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
@@ -39,7 +39,7 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-// ListServers fetches all servers from the wrangler API.
+// ListServers fetches all servers from the relay API.
 func (c *Client) ListServers() ([]Server, error) {
 	url := c.BaseURL + "/api/servers"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -50,7 +50,7 @@ func (c *Client) ListServers() ([]Server, error) {
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to wrangler at %s: %w", c.BaseURL, err)
+		return nil, fmt.Errorf("connecting to relay at %s: %w", c.BaseURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -67,7 +67,7 @@ func (c *Client) ListServers() ([]Server, error) {
 	case http.StatusForbidden:
 		return nil, fmt.Errorf("access denied (403) — your API key may lack permissions")
 	default:
-		return nil, fmt.Errorf("wrangler returned HTTP %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("relay returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
 	var servers []Server
@@ -99,13 +99,13 @@ func (c *Client) ServerProxyURL(serverName string) string {
 	return c.BaseURL + "/mcp/" + serverName
 }
 
-// IsWranglerURL checks if a URL belongs to this wrangler instance's proxy.
-func (c *Client) IsWranglerURL(url string) bool {
+// IsRelayURL checks if a URL belongs to this relay instance's proxy.
+func (c *Client) IsRelayURL(url string) bool {
 	return strings.HasPrefix(url, c.BaseURL+"/mcp/")
 }
 
-// ServerNameFromURL extracts the server name from a wrangler proxy URL.
-// Returns empty string if the URL is not a wrangler proxy URL.
+// ServerNameFromURL extracts the server name from a relay proxy URL.
+// Returns empty string if the URL is not a relay proxy URL.
 func (c *Client) ServerNameFromURL(url string) string {
 	prefix := c.BaseURL + "/mcp/"
 	if !strings.HasPrefix(url, prefix) {

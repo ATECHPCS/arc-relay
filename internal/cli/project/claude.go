@@ -42,7 +42,7 @@ type mcpServerEntry struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-func (c *ClaudeCodeTarget) Read(projectDir, wranglerBaseURL string) ([]ManagedServer, error) {
+func (c *ClaudeCodeTarget) Read(projectDir, relayBaseURL string) ([]ManagedServer, error) {
 	path := filepath.Join(projectDir, claudeConfigFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -57,7 +57,7 @@ func (c *ClaudeCodeTarget) Read(projectDir, wranglerBaseURL string) ([]ManagedSe
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 
-	wranglerPrefix := strings.TrimRight(wranglerBaseURL, "/") + "/mcp/"
+	relayPrefix := strings.TrimRight(relayBaseURL, "/") + "/mcp/"
 
 	var managed []ManagedServer
 	for name, raw := range parsed.MCPServers {
@@ -65,7 +65,7 @@ func (c *ClaudeCodeTarget) Read(projectDir, wranglerBaseURL string) ([]ManagedSe
 		if err := json.Unmarshal(raw, &entry); err != nil {
 			continue // skip entries we can't parse
 		}
-		if strings.HasPrefix(entry.URL, wranglerPrefix) {
+		if strings.HasPrefix(entry.URL, relayPrefix) {
 			managed = append(managed, ManagedServer{
 				Name: name,
 				URL:  entry.URL,
@@ -76,7 +76,7 @@ func (c *ClaudeCodeTarget) Read(projectDir, wranglerBaseURL string) ([]ManagedSe
 	return managed, nil
 }
 
-func (c *ClaudeCodeTarget) Write(projectDir, wranglerBaseURL, apiKey string, servers []ManagedServer) error {
+func (c *ClaudeCodeTarget) Write(projectDir, relayBaseURL, apiKey string, servers []ManagedServer) error {
 	path := filepath.Join(projectDir, claudeConfigFile)
 
 	// Load existing file or start fresh
@@ -103,7 +103,7 @@ func (c *ClaudeCodeTarget) Write(projectDir, wranglerBaseURL, apiKey string, ser
 		mcpServers = make(map[string]json.RawMessage)
 	}
 
-	// Add/update wrangler-managed servers
+	// Add/update relay-managed servers
 	for _, s := range servers {
 		entry := mcpServerEntry{
 			Type: "http",

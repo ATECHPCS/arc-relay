@@ -1,6 +1,20 @@
 # Changelog
 
-All notable changes to MCP Wrangler are documented here.
+All notable changes to Arc Relay (formerly MCP Wrangler) are documented here.
+
+## [1.0.0] - 2026-04-01
+
+### Changed
+- **Renamed from MCP Wrangler to Arc Relay** - new module path `github.com/comma-compliance/arc-relay`
+- Binary names: `arc-relay` (server), `arc-sync` (CLI, formerly `mcp-sync`)
+- Environment variables: `ARC_RELAY_*` (server), `ARC_SYNC_*` (CLI)
+- Config directory: `~/.config/arc-sync/` (CLI)
+- Docker image: `ghcr.io/comma-compliance/arc-relay`
+- License changed from AGPL-3.0 to MIT
+
+### Added
+- **NaCl Box encryption** for archive webhook payloads (X25519 + XSalsa20-Poly1305)
+- OSS documentation: AGENTS.md, CODE_OF_CONDUCT.md, SECURITY.md, GitHub issue/PR templates
 
 ## [0.3.0] - 2026-03-08
 

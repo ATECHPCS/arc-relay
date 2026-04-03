@@ -33,7 +33,7 @@
         {{if .IsEdit}}<input type="hidden" id="original_name" value="{{.Server.Name}}">{{end}}
         <div class="help">URL-safe identifier used in proxy path: /mcp/{name}. Lowercase, hyphens only.</div>
         {{if .IsEdit}}<div id="slug-rename-warning" class="alert alert-danger" style="display:none; margin-top:0.5rem;">
-          Changing the slug will break existing client configurations. All connected clients will need to run <code>mcp-sync</code> to update.
+          Changing the slug will break existing client configurations. All connected clients will need to run <code>arc-sync</code> to update.
         </div>{{end}}
       </div>
       <div class="form-group">
@@ -87,7 +87,7 @@
           <div class="form-group">
             <label for="build_package">Package Name</label>
             <input type="text" id="build_package" name="build_package" value="{{.BuildPackage}}"
-                   placeholder="pfsense-mcp-server or @anthropic/mcp-server-github">
+                   placeholder="my-mcp-server or @anthropic/mcp-server-github">
           </div>
         </div>
         <div class="form-row">

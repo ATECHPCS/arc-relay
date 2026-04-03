@@ -7,10 +7,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/config"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/project"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/safety"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/cli/wrangler"
+	"github.com/comma-compliance/arc-relay/internal/cli/config"
+	"github.com/comma-compliance/arc-relay/internal/cli/project"
+	"github.com/comma-compliance/arc-relay/internal/cli/relay"
+	"github.com/comma-compliance/arc-relay/internal/cli/safety"
 )
 
 // Options configures a sync operation.
@@ -30,7 +30,7 @@ type Result struct {
 	Existed []string
 }
 
-// Run executes the sync flow: fetch wrangler servers, compare with local config,
+// Run executes the sync flow: fetch relay servers, compare with local config,
 // prompt for additions, and write updates.
 func Run(opts Options) (*Result, error) {
 	if opts.Output == nil {
@@ -51,16 +51,16 @@ func Run(opts Options) (*Result, error) {
 		fmt.Fprintln(opts.Output, warning)
 	}
 
-	// Fetch wrangler servers
-	client := wrangler.NewClient(creds.WranglerURL, creds.APIKey)
-	fmt.Fprintf(opts.Output, "Connecting to MCP Wrangler at %s...\n", creds.WranglerURL)
+	// Fetch relay servers
+	client := relay.NewClient(creds.RelayURL, creds.APIKey)
+	fmt.Fprintf(opts.Output, "Connecting to Arc Relay at %s...\n", creds.RelayURL)
 
 	allServers, err := client.ListServers()
 	if err != nil {
 		return nil, err
 	}
 
-	var running []wrangler.Server
+	var running []relay.Server
 	for _, s := range allServers {
 		if s.Status == "running" {
 			running = append(running, s)
@@ -78,7 +78,7 @@ func Run(opts Options) (*Result, error) {
 	fmt.Fprintf(opts.Output, "Current project: %s\n", opts.ProjectDir)
 
 	target := &project.ClaudeCodeTarget{}
-	existing, err := target.Read(opts.ProjectDir, creds.WranglerURL)
+	existing, err := target.Read(opts.ProjectDir, creds.RelayURL)
 	if err != nil {
 		return nil, fmt.Errorf("reading project config: %w", err)
 	}
@@ -137,12 +137,12 @@ func Run(opts Options) (*Result, error) {
 				oldNames = append(oldNames, r.OldName)
 			}
 			target.Remove(opts.ProjectDir, oldNames)
-			target.Write(opts.ProjectDir, creds.WranglerURL, creds.APIKey, renames)
+			target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, renames)
 		}
 	}
 
 	// Find new servers
-	var newServers []wrangler.Server
+	var newServers []relay.Server
 	for _, s := range running {
 		if !existingNames[s.Name] && !state.IsSkipped(opts.ProjectDir, s.Name) {
 			newServers = append(newServers, s)
@@ -264,12 +264,12 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	// Write changes
-	if err := target.Write(opts.ProjectDir, creds.WranglerURL, creds.APIKey, toAdd); err != nil {
+	if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, toAdd); err != nil {
 		return nil, fmt.Errorf("writing project config: %w", err)
 	}
 
 	// Track server IDs for rename detection
-	serversByName := make(map[string]wrangler.Server)
+	serversByName := make(map[string]relay.Server)
 	for _, s := range running {
 		serversByName[s.Name] = s
 	}
@@ -288,7 +288,7 @@ func Run(opts Options) (*Result, error) {
 
 	fmt.Fprintf(opts.Output, "\nAdded %d server(s) to .mcp.json\n", len(toAdd))
 	if len(result.Skipped) > 0 {
-		fmt.Fprintf(opts.Output, "Skipped: %s (won't be prompted again — run 'mcp-sync reset' to undo)\n",
+		fmt.Fprintf(opts.Output, "Skipped: %s (won't be prompted again — run 'arc-sync reset' to undo)\n",
 			strings.Join(result.Skipped, ", "))
 	}
 

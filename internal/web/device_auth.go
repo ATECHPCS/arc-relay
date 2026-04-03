@@ -267,14 +267,14 @@ func (h *Handlers) handleDeviceAuthPageGet(w http.ResponseWriter, r *http.Reques
 	}
 
 	if userCode == "" {
-		data["Error"] = "No device code provided. Please run mcp-sync init to start the authorization flow."
+		data["Error"] = "No device code provided. Please run arc-sync init to start the authorization flow."
 		h.render(w, r, "device_auth.html", data)
 		return
 	}
 
 	req := h.deviceAuth.getByUserCode(strings.ToUpper(userCode))
 	if req == nil {
-		data["Error"] = "This device code has expired or is invalid. Please run mcp-sync init again."
+		data["Error"] = "This device code has expired or is invalid. Please run arc-sync init again."
 		h.render(w, r, "device_auth.html", data)
 		return
 	}
@@ -331,7 +331,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	if fullUser != nil && fullUser.DefaultProfileID != nil {
 		deviceProfileID = fullUser.DefaultProfileID
 	}
-	rawKey, _, err := h.users.CreateAPIKey(user.ID, "mcp-sync device auth", deviceProfileID)
+	rawKey, _, err := h.users.CreateAPIKey(user.ID, "arc-sync device auth", deviceProfileID)
 	if err != nil {
 		log.Printf("Device auth: failed to create API key for user %s: %v", user.Username, err)
 		h.render(w, r, "device_auth.html", map[string]any{
@@ -367,7 +367,7 @@ func (h *Handlers) handleInstallScript(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `#!/bin/bash
 set -e
 
-WRANGLER_URL=%q
+RELAY_URL=%q
 
 # Detect platform
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -378,8 +378,8 @@ case "$ARCH" in
   *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-BINARY="mcp-sync-${OS}-${ARCH}"
-DOWNLOAD_URL="${WRANGLER_URL}/download/${BINARY}"
+BINARY="arc-sync-${OS}-${ARCH}"
+DOWNLOAD_URL="${RELAY_URL}/download/${BINARY}"
 
 # Determine install location
 if [ "$(id -u)" = "0" ]; then
@@ -389,10 +389,10 @@ else
   mkdir -p "$INSTALL_DIR"
 fi
 
-echo "Downloading mcp-sync for ${OS}/${ARCH}..."
-curl -fsSL "$DOWNLOAD_URL" -o "${INSTALL_DIR}/mcp-sync"
-chmod +x "${INSTALL_DIR}/mcp-sync"
-echo "Installed to ${INSTALL_DIR}/mcp-sync"
+echo "Downloading arc-sync for ${OS}/${ARCH}..."
+curl -fsSL "$DOWNLOAD_URL" -o "${INSTALL_DIR}/arc-sync"
+chmod +x "${INSTALL_DIR}/arc-sync"
+echo "Installed to ${INSTALL_DIR}/arc-sync"
 
 # Ensure install dir is in PATH
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
@@ -410,16 +410,16 @@ while [ $# -gt 0 ]; do
 done
 
 echo ""
-echo "Setting up connection to ${WRANGLER_URL}..."
+echo "Setting up connection to ${RELAY_URL}..."
 if [ -n "$INVITE_TOKEN" ]; then
-  "${INSTALL_DIR}/mcp-sync" init "${WRANGLER_URL}" --token "$INVITE_TOKEN"
+  "${INSTALL_DIR}/arc-sync" init "${RELAY_URL}" --token "$INVITE_TOKEN"
 else
-  "${INSTALL_DIR}/mcp-sync" init "${WRANGLER_URL}"
+  "${INSTALL_DIR}/arc-sync" init "${RELAY_URL}"
 fi
 `, baseURL)
 }
 
-// handleDownload serves GET /download/mcp-sync-{os}-{arch}.
+// handleDownload serves GET /download/arc-sync-{os}-{arch}.
 // Serves from local /data/downloads/ directory if the file exists,
 // otherwise falls back to GitHub releases redirect.
 func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
@@ -436,12 +436,12 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Validate binary name to prevent path traversal
 	validBinaries := map[string]bool{
-		"mcp-sync-linux-amd64":       true,
-		"mcp-sync-linux-arm64":       true,
-		"mcp-sync-darwin-arm64":      true,
-		"mcp-sync-darwin-amd64":      true,
-		"mcp-sync-windows-amd64.exe": true,
-		"mcp-sync-windows-arm64.exe": true,
+		"arc-sync-linux-amd64":       true,
+		"arc-sync-linux-arm64":       true,
+		"arc-sync-darwin-arm64":      true,
+		"arc-sync-darwin-amd64":      true,
+		"arc-sync-windows-amd64.exe": true,
+		"arc-sync-windows-arm64.exe": true,
 	}
 	if !validBinaries[binary] {
 		http.Error(w, "Unknown binary", http.StatusNotFound)
@@ -460,6 +460,6 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fall back to GitHub releases
-	githubURL := fmt.Sprintf("https://github.com/JeremiahChurch/mcp-wrangler/releases/latest/download/%s", binary)
+	githubURL := fmt.Sprintf("https://github.com/comma-compliance/arc-relay/releases/latest/download/%s", binary)
 	http.Redirect(w, r, githubURL, http.StatusFound)
 }

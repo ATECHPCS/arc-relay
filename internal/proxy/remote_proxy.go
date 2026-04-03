@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/mcp"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/oauth"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/oauth"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // RemoteProxy forwards MCP requests to a remote MCP server with auth.
@@ -134,7 +134,7 @@ func (p *RemoteProxy) reinitialize(ctx context.Context) error {
 	params, _ := json.Marshal(map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]string{"name": "mcp-wrangler", "version": "0.1.0"},
+		"clientInfo":      map[string]string{"name": "arc-relay", "version": "0.1.0"},
 	})
 	req := &mcp.Request{
 		JSONRPC: "2.0",

@@ -4,14 +4,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 func newQueueItem(serverID string) *store.ArchiveQueueItem {
 	return &store.ArchiveQueueItem{
 		ServerID:     serverID,
-		Payload:      `{"version":"v1","source":"mcp_wrangler","phase":"test"}`,
+		Payload:      `{"version":"v1","source":"arc_relay","phase":"test"}`,
 		URL:          "https://compliance.example.com/ingest",
 		AuthType:     "bearer",
 		AuthValue:    "test-token",

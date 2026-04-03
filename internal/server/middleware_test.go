@@ -6,9 +6,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/server"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/server"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 func TestUserFromContext(t *testing.T) {

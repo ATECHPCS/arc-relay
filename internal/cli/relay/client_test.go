@@ -1,4 +1,4 @@
-package wrangler
+package relay
 
 import (
 	"encoding/json"
@@ -125,7 +125,7 @@ func TestServerProxyURLTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestIsWranglerURL(t *testing.T) {
+func TestIsRelayURL(t *testing.T) {
 	client := NewClient("http://10.10.69.50:8080", "key")
 
 	tests := []struct {
@@ -140,9 +140,9 @@ func TestIsWranglerURL(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := client.IsWranglerURL(tt.url)
+		got := client.IsRelayURL(tt.url)
 		if got != tt.want {
-			t.Errorf("IsWranglerURL(%q) = %v, want %v", tt.url, got, tt.want)
+			t.Errorf("IsRelayURL(%q) = %v, want %v", tt.url, got, tt.want)
 		}
 	}
 }

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
-	"github.com/JeremiahChurch/mcp-wrangler/internal/testutil"
+	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 func insertTestServerAndUser(t *testing.T, db *store.DB, serverID, serverName, userID, username string) {

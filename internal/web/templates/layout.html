@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {{if .CSRFToken}}<meta name="csrf-token" content="{{.CSRFToken}}">{{end}}
-  <title>{{template "title" .}} - MCP Wrangler</title>
+  <title>{{template "title" .}} - Arc Relay</title>
   <style>
     :root {
       --bg: #f8f9fa; --surface: #fff; --border: #dee2e6;
@@ -232,7 +232,7 @@
 </head>
 <body>
   <div class="navbar">
-    <h1>MCP Wrangler</h1>
+    <h1>Arc Relay</h1>
     <nav>
       <a href="/" {{if eq .Nav "dashboard"}}class="active"{{end}}>Dashboard</a>
       {{if and .User (eq .User.Role "admin")}}<a href="/servers" {{if eq .Nav "servers"}}class="active"{{end}}>Servers</a>{{end}}

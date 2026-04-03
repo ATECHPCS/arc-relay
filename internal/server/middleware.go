@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/JeremiahChurch/mcp-wrangler/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 type contextKey string

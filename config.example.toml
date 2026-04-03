@@ -3,13 +3,13 @@ host = "0.0.0.0"
 port = 8080
 
 [database]
-path = "/data/mcp-wrangler.db"
+path = "/data/arc-relay.db"
 
 [docker]
 # Docker socket path (default for Linux)
 socket = "unix:///var/run/docker.sock"
 # Network for managed containers
-network = "mcp-wrangler"
+network = "arc-relay"
 
 [encryption]
 # Key for encrypting stored credentials (generate with: openssl rand -hex 32)

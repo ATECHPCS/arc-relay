@@ -1,4 +1,4 @@
-module github.com/JeremiahChurch/mcp-wrangler
+module github.com/comma-compliance/arc-relay
 
 go 1.24.0
 
