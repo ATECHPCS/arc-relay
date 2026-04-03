@@ -66,7 +66,7 @@ func printUsage() {
 
 Commands:
   (none)        Interactive sync — add relay servers to current project
-  init          Configure relay URL and API key
+  init          Configure relay URL and API key (--token with --username/--password for invites)
   list          Show all available servers and project status
   add <name>    Add a specific server to the current project
   remove <name> Remove a server from the current project (and skip it)
@@ -191,10 +191,11 @@ func runInit() {
 	var key string
 
 	if inviteToken != "" {
-		// Exchange invite token for API key
-		key = tryInviteToken(url, inviteToken)
+		// Exchange invite token for API key (requires username + password)
+		inviteUsername := getFlagValue(os.Args[2:], "--username")
+		invitePassword := getFlagValue(os.Args[2:], "--password")
+		key = tryInviteToken(url, inviteToken, inviteUsername, invitePassword)
 		if key == "" {
-			fmt.Fprintln(os.Stderr, "Error: invite token exchange failed. The token may be invalid, expired, or already used.")
 			os.Exit(1)
 		}
 	} else {
@@ -258,13 +259,54 @@ func runInit() {
 }
 
 // tryInviteToken exchanges an invite token for an API key.
-func tryInviteToken(baseURL, token string) string {
-	fmt.Printf("Exchanging invite token...")
+// The user must choose a username and password to create their account.
+// If username/password are provided as flags, those are used directly (non-interactive).
+func tryInviteToken(baseURL, token, flagUsername, flagPassword string) string {
+	scanner := bufio.NewScanner(os.Stdin)
 
-	tokenBody, _ := json.Marshal(map[string]string{"token": token})
+	username := flagUsername
+	password := flagPassword
+
+	if username == "" {
+		fmt.Print("Choose a username: ")
+		if !scanner.Scan() {
+			fmt.Fprintln(os.Stderr, "Error: username is required")
+			return ""
+		}
+		username = strings.TrimSpace(scanner.Text())
+		if username == "" {
+			fmt.Fprintln(os.Stderr, "Error: username is required")
+			return ""
+		}
+	} else {
+		fmt.Printf("Username: %s\n", username)
+	}
+
+	if password == "" {
+		fmt.Print("Choose a password (min 8 chars): ")
+		if !scanner.Scan() {
+			fmt.Fprintln(os.Stderr, "Error: password is required")
+			return ""
+		}
+		password = strings.TrimSpace(scanner.Text())
+	}
+
+	if len(password) < 8 {
+		fmt.Fprintln(os.Stderr, "Error: password must be at least 8 characters")
+		return ""
+	}
+
+	fmt.Printf("Creating account...")
+
+	tokenBody, _ := json.Marshal(map[string]string{
+		"token":    token,
+		"username": username,
+		"password": password,
+	})
 	resp, err := http.Post(baseURL+"/api/auth/invite", "application/json", bytes.NewReader(tokenBody))
 	if err != nil {
 		fmt.Printf(" failed\n")
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return ""
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -1378,6 +1420,7 @@ func getPositionalArg(args []string) string {
 	skipNext := false
 	knownFlags := map[string]bool{
 		"--type": true, "--display-name": true, "--auth": true, "--token": true,
+		"--username": true, "--password": true,
 		"--header-name": true, "--image": true, "--build": true, "--package": true,
 		"--version": true, "--git-url": true, "--entrypoint": true, "--url": true,
 		"--port": true, "--health-check": true, "--env": true, "--config": true,

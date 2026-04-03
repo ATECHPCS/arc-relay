@@ -21,7 +21,7 @@ func newTestHandlersWithInvites(t *testing.T) (*Handlers, *store.SessionStore, *
 	sessions := store.NewSessionStore(db)
 	invites := store.NewInviteStore(db)
 
-	user, err := users.Create("testuser", "pass", "admin")
+	user, err := users.Create("testadmin", "pass", "admin")
 	if err != nil {
 		t.Fatalf("creating user: %v", err)
 	}
@@ -42,12 +42,16 @@ func newTestHandlersWithInvites(t *testing.T) (*Handlers, *store.SessionStore, *
 func TestInviteExchange_ValidToken(t *testing.T) {
 	h, _, user, invites := newTestHandlersWithInvites(t)
 
-	rawToken, _, err := invites.Create(user.ID, nil, user.ID, time.Now().Add(time.Hour))
+	rawToken, _, err := invites.CreateAccountInvite("user", "write", nil, user.ID, time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatalf("creating invite token: %v", err)
 	}
 
-	body, _ := json.Marshal(map[string]string{"token": rawToken})
+	body, _ := json.Marshal(map[string]string{
+		"token":    rawToken,
+		"username": "newuser",
+		"password": "password123",
+	})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/invite", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -65,12 +69,92 @@ func TestInviteExchange_ValidToken(t *testing.T) {
 	if resp["api_key"] == "" {
 		t.Error("response missing api_key")
 	}
+
+	// Verify user was created with correct role
+	created, _ := h.users.GetByUsername("newuser")
+	if created == nil {
+		t.Fatal("user 'newuser' was not created")
+	}
+	if created.Role != "user" {
+		t.Errorf("created user role = %q, want %q", created.Role, "user")
+	}
+}
+
+func TestInviteExchange_UsernameConflict(t *testing.T) {
+	h, _, user, invites := newTestHandlersWithInvites(t)
+
+	rawToken, _, _ := invites.CreateAccountInvite("user", "write", nil, user.ID, time.Now().Add(time.Hour))
+
+	// Try to create a user with the same username as the admin
+	body, _ := json.Marshal(map[string]string{
+		"token":    rawToken,
+		"username": "testadmin",
+		"password": "password123",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/invite", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleInviteExchange(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	// Token should still be available (rollback preserved it)
+	peeked, _ := invites.Peek(rawToken)
+	if peeked == nil {
+		t.Error("invite token was consumed despite username conflict - should have been rolled back")
+	}
+}
+
+func TestInviteExchange_WeakPassword(t *testing.T) {
+	h, _, user, invites := newTestHandlersWithInvites(t)
+
+	rawToken, _, _ := invites.CreateAccountInvite("user", "write", nil, user.ID, time.Now().Add(time.Hour))
+
+	body, _ := json.Marshal(map[string]string{
+		"token":    rawToken,
+		"username": "shortpw",
+		"password": "short",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/invite", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleInviteExchange(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestInviteExchange_MissingCredentials(t *testing.T) {
+	h, _, user, invites := newTestHandlersWithInvites(t)
+
+	rawToken, _, _ := invites.CreateAccountInvite("user", "write", nil, user.ID, time.Now().Add(time.Hour))
+
+	// Token only, no username/password
+	body, _ := json.Marshal(map[string]string{"token": rawToken})
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/invite", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.handleInviteExchange(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d; body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
 }
 
 func TestInviteExchange_InvalidToken(t *testing.T) {
 	h, _, _, _ := newTestHandlersWithInvites(t)
 
-	body, _ := json.Marshal(map[string]string{"token": "bogus-invalid-token"})
+	body, _ := json.Marshal(map[string]string{
+		"token":    "bogus-invalid-token",
+		"username": "someone",
+		"password": "password123",
+	})
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/invite", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

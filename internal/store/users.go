@@ -13,15 +13,16 @@ import (
 )
 
 type User struct {
-	ID               string    `json:"id"`
-	Username         string    `json:"username"`
-	PasswordHash     string    `json:"-"`
-	Role             string    `json:"role"`
-	AccessLevel      string    `json:"access_level"`
-	DefaultProfileID *string   `json:"default_profile_id,omitempty"` // user's default profile for RBAC
-	CreatedAt        time.Time `json:"created_at"`
-	ProfileID        *string   `json:"profile_id,omitempty"`   // effective profile (resolved at auth time)
-	ProfileName      string    `json:"profile_name,omitempty"` // populated on read, not stored
+	ID                 string    `json:"id"`
+	Username           string    `json:"username"`
+	PasswordHash       string    `json:"-"`
+	Role               string    `json:"role"`
+	AccessLevel        string    `json:"access_level"`
+	DefaultProfileID   *string   `json:"default_profile_id,omitempty"` // user's default profile for RBAC
+	MustChangePassword bool      `json:"must_change_password,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	ProfileID          *string   `json:"profile_id,omitempty"`   // effective profile (resolved at auth time)
+	ProfileName        string    `json:"profile_name,omitempty"` // populated on read, not stored
 }
 
 type APIKey struct {
@@ -86,9 +87,9 @@ func (s *UserStore) CreateWithAccessLevel(username, password, role, accessLevel 
 func (s *UserStore) Authenticate(username, password string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, access_level, default_profile_id, created_at
+		SELECT id, username, password_hash, role, access_level, default_profile_id, must_change_password, created_at
 		FROM users WHERE username = ?`, username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.MustChangePassword, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -106,9 +107,9 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 func (s *UserStore) Get(id string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, access_level, default_profile_id, created_at
+		SELECT id, username, password_hash, role, access_level, default_profile_id, must_change_password, created_at
 		FROM users WHERE id = ?`, id,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.MustChangePassword, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -121,9 +122,9 @@ func (s *UserStore) Get(id string) (*User, error) {
 func (s *UserStore) GetByUsername(username string) (*User, error) {
 	user := &User{}
 	err := s.db.QueryRow(`
-		SELECT id, username, password_hash, role, access_level, default_profile_id, created_at
+		SELECT id, username, password_hash, role, access_level, default_profile_id, must_change_password, created_at
 		FROM users WHERE username = ?`, username,
-	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.CreatedAt)
+	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.MustChangePassword, &user.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -136,7 +137,7 @@ func (s *UserStore) GetByUsername(username string) (*User, error) {
 func (s *UserStore) List() ([]*User, error) {
 	rows, err := s.db.Query(`
 		SELECT u.id, u.username, u.password_hash, u.role, u.access_level,
-		       u.default_profile_id, COALESCE(ap.name, ''), u.created_at
+		       u.default_profile_id, u.must_change_password, COALESCE(ap.name, ''), u.created_at
 		FROM users u
 		LEFT JOIN agent_profiles ap ON u.default_profile_id = ap.id
 		ORDER BY u.created_at`)
@@ -149,7 +150,7 @@ func (s *UserStore) List() ([]*User, error) {
 	for rows.Next() {
 		u := &User{}
 		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.AccessLevel,
-			&u.DefaultProfileID, &u.ProfileName, &u.CreatedAt); err != nil {
+			&u.DefaultProfileID, &u.MustChangePassword, &u.ProfileName, &u.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scanning user: %w", err)
 		}
 		users = append(users, u)
@@ -170,14 +171,75 @@ func (s *UserStore) UpdateRole(id, role string) error {
 	return err
 }
 
-// SetPassword updates a user's password hash. Used for admin password resets.
+// SetPassword updates a user's password hash and clears the must_change_password flag.
 func (s *UserStore) SetPassword(id, newPassword string) error {
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("hashing password: %w", err)
 	}
-	_, err = s.db.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, string(hash), id)
+	_, err = s.db.Exec(`UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?`, string(hash), id)
 	return err
+}
+
+// SetMustChangePassword sets or clears the forced password rotation flag.
+func (s *UserStore) SetMustChangePassword(id string, must bool) error {
+	_, err := s.db.Exec(`UPDATE users SET must_change_password = ? WHERE id = ?`, must, id)
+	return err
+}
+
+// CreateWithAccessLevelTx creates a user within an existing transaction.
+func (s *UserStore) CreateWithAccessLevelTx(tx *sql.Tx, username, password, role, accessLevel string, defaultProfileID *string) (*User, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("hashing password: %w", err)
+	}
+	if role == "admin" {
+		accessLevel = "admin"
+	}
+	if accessLevel == "" {
+		accessLevel = "write"
+	}
+	user := &User{
+		ID:               uuid.New().String(),
+		Username:         username,
+		PasswordHash:     string(hash),
+		Role:             role,
+		AccessLevel:      accessLevel,
+		DefaultProfileID: defaultProfileID,
+		CreatedAt:        time.Now(),
+	}
+	_, err = tx.Exec(`
+		INSERT INTO users (id, username, password_hash, role, access_level, default_profile_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.ID, user.Username, user.PasswordHash, user.Role, user.AccessLevel, user.DefaultProfileID, user.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating user: %w", err)
+	}
+	return user, nil
+}
+
+// CreateAPIKeyTx generates a new API key within an existing transaction.
+func (s *UserStore) CreateAPIKeyTx(tx *sql.Tx, userID, name string, profileID *string) (string, *APIKey, error) {
+	rawKey := uuid.New().String()
+	keyHash := hashAPIKey(rawKey)
+	ak := &APIKey{
+		ID:        uuid.New().String(),
+		UserID:    userID,
+		KeyHash:   keyHash,
+		Name:      name,
+		ProfileID: profileID,
+		CreatedAt: time.Now(),
+	}
+	_, err := tx.Exec(`
+		INSERT INTO api_keys (id, user_id, key_hash, name, profile_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.ProfileID, ak.CreatedAt,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("creating api key: %w", err)
+	}
+	return rawKey, ak, nil
 }
 
 func (s *UserStore) Delete(id string) error {
