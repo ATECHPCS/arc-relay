@@ -422,21 +422,34 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
   echo "Add to your PATH:  export PATH=\"${INSTALL_DIR}:\$PATH\""
 fi
 
-# Pass through --token if provided
+# Pass through flags if provided
 INVITE_TOKEN=""
+INVITE_USERNAME=""
+INVITE_PASSWORD=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --token) INVITE_TOKEN="$2"; shift 2 ;;
+    --username) INVITE_USERNAME="$2"; shift 2 ;;
+    --password) INVITE_PASSWORD="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 
 echo ""
 echo "Setting up connection to ${RELAY_URL}..."
-if [ -n "$INVITE_TOKEN" ]; then
-  "${INSTALL_DIR}/arc-sync" init "${RELAY_URL}" --token "$INVITE_TOKEN"
+
+# Build args
+INIT_ARGS="init ${RELAY_URL}"
+[ -n "$INVITE_TOKEN" ]    && INIT_ARGS="${INIT_ARGS} --token ${INVITE_TOKEN}"
+[ -n "$INVITE_USERNAME" ] && INIT_ARGS="${INIT_ARGS} --username ${INVITE_USERNAME}"
+[ -n "$INVITE_PASSWORD" ] && INIT_ARGS="${INIT_ARGS} --password ${INVITE_PASSWORD}"
+
+# When piped (curl | bash), stdin is consumed by bash reading the script.
+# Redirect from /dev/tty so arc-sync can prompt interactively.
+if [ -t 0 ]; then
+  "${INSTALL_DIR}/arc-sync" ${INIT_ARGS}
 else
-  "${INSTALL_DIR}/arc-sync" init "${RELAY_URL}"
+  "${INSTALL_DIR}/arc-sync" ${INIT_ARGS} < /dev/tty
 fi
 `, baseURL)
 }

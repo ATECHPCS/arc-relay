@@ -1338,6 +1338,27 @@ func (h *Handlers) handleUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Admin access required", http.StatusForbidden)
 		return
 	}
+	// Consume one-time invite flash nonce from Post-Redirect-Get.
+	if nonce := r.URL.Query().Get("invite"); nonce != "" {
+		users, _ := h.users.List()
+		profiles, _ := h.profileStore.List()
+		pendingInvites, _ := h.inviteStore.ListPending()
+		data := map[string]any{
+			"Nav":            "users",
+			"User":           user,
+			"Users":          users,
+			"Profiles":       profiles,
+			"PendingInvites": pendingInvites,
+		}
+		if cmd, ok := h.flashKeys.LoadAndDelete("invite-cmd-" + nonce); ok {
+			data["InviteCmd"] = cmd
+		}
+		if link, ok := h.flashKeys.LoadAndDelete("invite-link-" + nonce); ok {
+			data["InviteLink"] = link
+		}
+		h.render(w, r, "users.html", data)
+		return
+	}
 	h.renderUsersList(w, r, "")
 }
 
@@ -1431,18 +1452,17 @@ func (h *Handlers) handleCreateAccountInvite(w http.ResponseWriter, r *http.Requ
 	inviteLink := fmt.Sprintf("%s/invite/%s", baseURL, rawToken)
 	installCmd := fmt.Sprintf("curl -fsSL %s/install.sh | bash -s -- --token %s", baseURL, rawToken)
 
-	users, _ := h.users.List()
-	profiles, _ := h.profileStore.List()
-	pendingInvites, _ := h.inviteStore.ListPending()
-	h.render(w, r, "users.html", map[string]any{
-		"Nav":            "users",
-		"User":           admin,
-		"Users":          users,
-		"Profiles":       profiles,
-		"PendingInvites": pendingInvites,
-		"InviteCmd":      installCmd,
-		"InviteLink":     inviteLink,
-	})
+	// Store invite details in flash and redirect (Post-Redirect-Get) to
+	// prevent duplicate invite creation on browser refresh.
+	nonce, err := generateID()
+	if err != nil {
+		log.Printf("Error generating flash nonce: %v", err)
+		http.Redirect(w, r, "/users", http.StatusFound)
+		return
+	}
+	h.flashKeys.Store("invite-cmd-"+nonce, installCmd)
+	h.flashKeys.Store("invite-link-"+nonce, inviteLink)
+	http.Redirect(w, r, "/users?invite="+nonce, http.StatusFound)
 }
 
 // handleInviteExchange handles POST /api/auth/invite - creates account and returns API key.
