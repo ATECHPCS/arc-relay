@@ -284,6 +284,13 @@ func (h *Handlers) handleDeviceAuthPageGet(w http.ResponseWriter, r *http.Reques
 		"User": user,
 	}
 
+	// After POST approval redirect, show success without re-creating anything.
+	if r.URL.Query().Get("approved") == "1" {
+		data["Approved"] = true
+		h.render(w, r, "device_auth.html", data)
+		return
+	}
+
 	if userCode == "" {
 		data["Error"] = "No device code provided. Please run arc-sync init to start the authorization flow."
 		h.render(w, r, "device_auth.html", data)
@@ -363,11 +370,8 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	h.deviceAuth.approve(deviceCode, rawKey)
 	slog.Debug("device auth: approved", "user", user.Username)
 
-	h.render(w, r, "device_auth.html", map[string]any{
-		"Nav":      "",
-		"User":     user,
-		"Approved": true,
-	})
+	// Redirect to prevent duplicate key creation on browser refresh.
+	http.Redirect(w, r, "/auth/device?approved=1", http.StatusFound)
 }
 
 // --- Install script handler ---

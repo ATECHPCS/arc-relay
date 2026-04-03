@@ -148,6 +148,7 @@ type Handlers struct {
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
 	loginLimiter    *loginRateLimiter
+	flashKeys       sync.Map // nonce -> raw API key (shown once after redirect)
 }
 
 func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore) *Handlers {
@@ -1853,9 +1854,18 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, r, "api_keys.html", map[string]any{
+	data := map[string]any{
 		"Nav": "apikeys", "User": user, "Keys": keys, "Profiles": profiles,
-	})
+	}
+	// Consume one-time flash nonce to display newly created key.
+	// LoadAndDelete ensures the key is shown only once; refreshing
+	// the redirected URL won't re-display it.
+	if nonce := r.URL.Query().Get("new"); nonce != "" {
+		if rawKey, ok := h.flashKeys.LoadAndDelete(nonce); ok {
+			data["NewKey"] = rawKey
+		}
+	}
+	h.render(w, r, "api_keys.html", data)
 }
 
 func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
@@ -1889,19 +1899,16 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/api-keys", http.StatusFound)
 			return
 		}
-		keys, _ := h.users.ListAPIKeys(user.ID)
-		// Use same profile filtering as the list view
-		var profiles []*store.AgentProfile
-		if user.Role == "admin" {
-			profiles, _ = h.profileStore.List()
-		} else if user.DefaultProfileID != nil {
-			if p, err := h.profileStore.Get(*user.DefaultProfileID); err == nil {
-				profiles = []*store.AgentProfile{p}
-			}
+		// Store key in flash and redirect (Post-Redirect-Get) to prevent
+		// duplicate key creation on browser refresh.
+		nonce, err := generateID()
+		if err != nil {
+			log.Printf("Error generating flash nonce: %v", err)
+			http.Redirect(w, r, "/api-keys", http.StatusFound)
+			return
 		}
-		h.render(w, r, "api_keys.html", map[string]any{
-			"Nav": "apikeys", "User": user, "Keys": keys, "NewKey": rawKey, "Profiles": profiles,
-		})
+		h.flashKeys.Store(nonce, rawKey)
+		http.Redirect(w, r, "/api-keys?new="+nonce, http.StatusFound)
 		return
 	}
 
