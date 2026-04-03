@@ -4,8 +4,8 @@ An open-source MCP (Model Context Protocol) control plane. Arc Relay sits betwee
 
 ```
 AI Clients                Arc Relay                    MCP Servers
- (Claude Code,     +-----------------------+      +----------------+
-  Cursor, etc.)    |  Auth & API Keys      |      | Docker stdio   |
+ (Claude Code,     +-----------------------+       +----------------+
+  Cursor, etc.)    |  Auth & API Keys      |       | Docker stdio   |
        |           |  Middleware Pipeline   |----->| Docker HTTP    |
        +---------->|    Sanitizer (PII)     |      | Remote (OAuth) |
        |  POST     |    Sizer (limits)      |<-----+----------------+
