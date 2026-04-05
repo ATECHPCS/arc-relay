@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 
@@ -105,7 +105,7 @@ func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 	// and retry. Some servers (e.g. Shortcut) invalidate the MCP session
 	// when the OAuth token changes, so we must re-initialize after refresh.
 	if statusCode == http.StatusUnauthorized && p.config.Auth.Type == "oauth" && p.oauthManager != nil {
-		log.Printf("OAuth 401 for server %s, refreshing token and re-initializing session", p.serverID)
+		slog.Warn("OAuth 401, refreshing token and re-initializing session", "server_id", p.serverID)
 		if refreshErr := p.oauthManager.ForceRefresh(ctx, p.serverID); refreshErr != nil {
 			return nil, fmt.Errorf("token refresh after 401 failed: %w", refreshErr)
 		}
@@ -116,7 +116,7 @@ func (p *RemoteProxy) Send(ctx context.Context, req *mcp.Request) (*mcp.Response
 
 		// Re-initialize to establish a fresh session with the new token
 		if initErr := p.reinitialize(ctx); initErr != nil {
-			log.Printf("Session re-initialize failed for server %s after token refresh: %v", p.serverID, initErr)
+			slog.Warn("session re-initialize failed after token refresh", "server_id", p.serverID, "err", initErr)
 		}
 
 		resp, _, err = p.doSend(ctx, req)
@@ -174,9 +174,9 @@ func (p *RemoteProxy) doSend(ctx context.Context, req *mcp.Request) (*mcp.Respon
 		p.sessionID = ""
 		p.mu.Unlock()
 		if hadSession {
-			log.Printf("OAuth token proactively refreshed for server %s, re-establishing session", p.serverID)
+			slog.Info("OAuth token proactively refreshed, re-establishing session", "server_id", p.serverID)
 			if initErr := p.reinitialize(ctx); initErr != nil {
-				log.Printf("Session re-initialize after proactive refresh failed for %s: %v", p.serverID, initErr)
+				slog.Warn("session re-initialize after proactive refresh failed", "server_id", p.serverID, "err", initErr)
 			}
 		}
 	}

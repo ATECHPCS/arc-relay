@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
@@ -162,7 +162,7 @@ func (a *Archive) enqueue(body []byte, meta *RequestMeta) {
 	if a.recipientKey != nil {
 		encrypted, err := encryptPayload(payload, *a.recipientKey)
 		if err != nil {
-			log.Printf("archive: encryption failed: %v", err)
+			slog.Error("archive: encryption failed", "error", err)
 			if a.eventLogger != nil {
 				a.eventLogger(&store.MiddlewareEvent{
 					Middleware: "archive",
@@ -175,7 +175,7 @@ func (a *Archive) enqueue(body []byte, meta *RequestMeta) {
 		payload = encrypted
 	}
 	if err := a.dispatcher.EnqueueWithServer(payload, a.cfg, meta.ServerID); err != nil {
-		log.Printf("archive: failed to enqueue: %v", err)
+		slog.Error("archive: failed to enqueue", "error", err)
 		if a.eventLogger != nil {
 			a.eventLogger(&store.MiddlewareEvent{
 				Middleware: "archive",

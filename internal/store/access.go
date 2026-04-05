@@ -2,7 +2,7 @@ package store
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // EndpointTier represents the access tier for a single endpoint.
@@ -84,7 +84,7 @@ type EndpointInfo struct {
 func (s *AccessStore) SyncAfterEnumerate(serverID string, endpoints []EndpointInfo, classifyFunc func(endpointType, name, description string) string) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		log.Printf("SyncAfterEnumerate: begin tx: %v", err)
+		slog.Warn("SyncAfterEnumerate: begin tx failed", "err", err)
 		return
 	}
 
@@ -106,7 +106,7 @@ func (s *AccessStore) SyncAfterEnumerate(serverID string, endpoints []EndpointIn
 			serverID, ep.Type, ep.Name, tier, tier,
 		)
 		if err != nil {
-			log.Printf("SyncAfterEnumerate: upsert %s/%s: %v", ep.Type, ep.Name, err)
+			slog.Warn("SyncAfterEnumerate: upsert failed", "type", ep.Type, "name", ep.Name, "err", err)
 		}
 	}
 
@@ -124,7 +124,7 @@ func (s *AccessStore) SyncAfterEnumerate(serverID string, endpoints []EndpointIn
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("SyncAfterEnumerate: commit: %v", err)
+		slog.Warn("SyncAfterEnumerate: commit failed", "err", err)
 	}
 }
 

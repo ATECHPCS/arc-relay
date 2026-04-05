@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -138,10 +138,10 @@ func Run(opts Options) (*Result, error) {
 				oldNames = append(oldNames, r.OldName)
 			}
 			if _, err := target.Remove(opts.ProjectDir, oldNames); err != nil {
-				log.Printf("sync: removing renamed entries: %v", err)
+				slog.Warn("sync: removing renamed entries failed", "err", err)
 			}
 			if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, renames); err != nil {
-				log.Printf("sync: writing renamed entries: %v", err)
+				slog.Warn("sync: writing renamed entries failed", "err", err)
 			}
 		}
 	}

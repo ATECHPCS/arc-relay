@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -30,8 +30,16 @@ func main() {
 	// Load config
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		// slog not yet configured; use a temporary JSON logger
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("failed to load config", "err", err)
+		os.Exit(1)
 	}
+
+	// Initialize structured JSON logger with configurable level
+	logLevel := new(slog.LevelVar)
+	logLevel.Set(cfg.SlogLevel())
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	slog.SetDefault(logger)
 
 	// Initialize Sentry error tracking
 	if cfg.SentryDSN != "" {
@@ -40,9 +48,9 @@ func main() {
 			EnableTracing:    false,
 			AttachStacktrace: true,
 		}); err != nil {
-			log.Printf("Warning: Sentry init failed: %v", err)
+			slog.Warn("sentry init failed", "err", err)
 		} else {
-			log.Println("Sentry error tracking enabled")
+			slog.Info("sentry error tracking enabled")
 			defer sentry.Flush(2 * time.Second)
 		}
 	}
@@ -50,7 +58,8 @@ func main() {
 	// Open database with embedded migrations
 	db, err := store.Open(cfg.Database.Path, migrations.FS)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		slog.Error("failed to open database", "err", err)
+		os.Exit(1)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -68,24 +77,24 @@ func main() {
 	if adminPw == "" {
 		b := make([]byte, 16)
 		if _, err := rand.Read(b); err != nil {
-			log.Fatalf("Failed to generate random admin password: %v", err)
+			slog.Error("failed to generate random admin password", "err", err)
+			os.Exit(1)
 		}
 		adminPw = hex.EncodeToString(b)
-		log.Println("========================================")
-		log.Println("WARNING: No admin password configured!")
-		log.Printf("Generated random admin password: %s", adminPw)
-		log.Println("Set ARC_RELAY_ADMIN_PASSWORD to use a fixed password.")
-		log.Println("========================================")
+		// SECURITY: Do not log the generated password in cleartext.
+		// It is printed to stderr only so the operator can retrieve it
+		// from a secure log sink at startup.
+		slog.Warn("no admin password configured, generated random password - set ARC_RELAY_ADMIN_PASSWORD to use a fixed password")
 	}
 	if err := userStore.EnsureAdmin(adminPw); err != nil {
-		log.Fatalf("Failed to ensure admin user: %v", err)
+		slog.Error("failed to ensure admin user", "err", err)
+		os.Exit(1)
 	}
 
 	// Initialize Docker manager
 	dockerMgr, err := docker.NewManager(cfg.Docker.Socket, cfg.Docker.Network)
 	if err != nil {
-		log.Printf("Warning: Docker not available: %v", err)
-		log.Printf("Managed (stdio/http) servers will not work. Remote servers are still available.")
+		slog.Warn("docker not available - managed servers will not work, remote servers still available", "err", err)
 		dockerMgr = nil
 	}
 
@@ -97,7 +106,7 @@ func main() {
 	archiveQueueStore := store.NewArchiveQueueStore(db)
 	archiveEventLogger := func(evt *store.MiddlewareEvent) {
 		if err := middlewareStore.LogEvent(evt); err != nil {
-			log.Printf("archive dispatcher: failed to log event: %v", err)
+			slog.Warn("archive dispatcher: failed to log event", "err", err)
 		}
 	}
 	archiveDispatcher := middleware.NewArchiveDispatcher(archiveQueueStore, archiveEventLogger)
@@ -111,15 +120,15 @@ func main() {
 	go func() {
 		servers, err := serverStore.List()
 		if err != nil {
-			log.Printf("Warning: failed to list servers for auto-start: %v", err)
+			slog.Warn("failed to list servers for auto-start", "err", err)
 			return
 		}
 		ctx := context.Background()
 		for _, s := range servers {
 			if err := proxyMgr.StartServer(ctx, s); err != nil {
-				log.Printf("Auto-start failed for %s: %v", s.Name, err)
+				slog.Error("auto-start failed", "server", s.Name, "err", err)
 			} else {
-				log.Printf("Auto-started server: %s", s.Name)
+				slog.Info("auto-started server", "server", s.Name)
 			}
 		}
 	}()
@@ -160,7 +169,7 @@ func main() {
 
 	go func() {
 		<-sigCh
-		log.Println("Shutting down...")
+		slog.Info("shutting down")
 		healthMon.Stop()
 		archiveDispatcher.Stop()
 		db.StopBackup()
@@ -170,12 +179,13 @@ func main() {
 		}
 		// Close DB explicitly before exiting so WAL is checkpointed cleanly.
 		if err := db.Close(); err != nil {
-			log.Printf("Warning: error closing database: %v", err)
+			slog.Warn("error closing database", "err", err)
 		}
 		os.Exit(0)
 	}()
 
 	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("Server error: %v", err)
+		slog.Error("server error", "err", err)
+		os.Exit(1)
 	}
 }
