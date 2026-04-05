@@ -23,8 +23,17 @@ Thumbs.db
 
 # Environment / local config
 .env
+.env.*
 config.toml
 .mcp.json
+
+# Secrets & credentials
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+secrets.*
 
 # Go
 /vendor/
@@ -32,6 +41,9 @@ config.toml
 # Build artifacts
 /dist/
 *.exe
+# Cross-compiled binaries (e.g. arc-sync-darwin-arm64)
+arc-sync-*
+arc-relay-*
 # Nightshift plan artifacts (keep out of version control)
 .nightshift-plan
 .claude/worktrees/
