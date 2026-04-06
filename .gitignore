@@ -32,8 +32,8 @@ config.toml
 *.key
 *.p12
 *.pfx
-credentials.*
-secrets.*
+/credentials.*
+/secrets.*
 
 # Go
 /vendor/
@@ -42,8 +42,8 @@ secrets.*
 /dist/
 *.exe
 # Cross-compiled binaries (e.g. arc-sync-darwin-arm64)
-arc-sync-*
-arc-relay-*
+/arc-sync-*
+/arc-relay-*
 # Nightshift plan artifacts (keep out of version control)
 .nightshift-plan
 .claude/worktrees/

@@ -31,6 +31,7 @@
 - **severity:** critical
 - **detail:** Generated random admin password is logged in plaintext via `log.Printf("Generated random admin password: %s", adminPw)`. Anyone with access to container logs, log aggregation systems, or CI output can read the credential.
 - **recommendation:** Remove the password from log output. If the operator needs it, write it to a file with restricted permissions (0600) or require it to be set via env var before startup. Never log credentials.
+- **status:** **FIXED** in PR #15 (logging-audit branch). The plaintext password log line has been removed; startup now logs only that a password was generated, without the value.
 
 #### PII-LOG-2: OAuth token response body in error messages
 
@@ -40,6 +41,7 @@
 - **severity:** critical
 - **detail:** Full HTTP response bodies from OAuth token endpoints are included in `fmt.Errorf()` return values: `"token endpoint returned %d: %s"` and `"no access_token in response: %s"`. Token endpoint responses typically contain `access_token` and `refresh_token` fields. These errors may propagate to log output or error tracking (Sentry).
 - **recommendation:** Extract only the `error` and `error_description` fields from error responses. Never include the full body in error messages when it may contain tokens.
+- **status:** Tracked for remediation.
 
 #### PII-LOG-3: Username logged across auth/authz events
 
@@ -132,6 +134,7 @@
 - **severity:** critical
 - **detail:** The `archive_queue` table has an `auth_value` TEXT column that stores bearer tokens and API keys in plaintext. These credentials are enqueued as-is from `ArchiveConfig.AuthValue` and persist in the database until successfully delivered (or indefinitely on repeated failures).
 - **recommendation:** Encrypt `auth_value` using the existing `ConfigEncryptor` before storing in the queue. Decrypt only at delivery time. Alternatively, store a reference to a secret and resolve it at send time.
+- **status:** Tracked for remediation.
 
 #### STORE-2: Server config encryption is optional (disabled without key)
 
@@ -211,7 +214,7 @@ The following security practices are correctly implemented:
 
 ## Remediation Priority
 
-1. **Immediate:** Remove admin password from log output (PII-LOG-1)
+1. ~~**Immediate:** Remove admin password from log output (PII-LOG-1)~~ - **FIXED** in PR #15
 2. **Immediate:** Sanitize OAuth token error messages (PII-LOG-2)
 3. **High:** Encrypt archive queue auth_value column (STORE-1)
 4. **High:** Warn when config encryption is disabled (STORE-2)
