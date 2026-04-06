@@ -188,7 +188,6 @@ func (h *Handlers) handleDeviceAuthStart(w http.ResponseWriter, r *http.Request)
 		_, _ = w.Write([]byte(`{"error":"internal error"}`))
 		return
 	}
-	}
 
 	baseURL := h.cfg.PublicBaseURL()
 	verificationURL := fmt.Sprintf("%s/auth/device?code=%s", baseURL, req.UserCode)
