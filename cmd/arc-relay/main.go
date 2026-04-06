@@ -27,16 +27,19 @@ func main() {
 	configPath := flag.String("config", "", "path to config file (TOML)")
 	flag.Parse()
 
+	// Initialize a default JSON logger before config loads so early errors are structured.
+	logLevel := new(slog.LevelVar)
+	logLevel.Set(slog.LevelInfo)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
+
 	// Load config
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		// slog not yet configured; use a temporary JSON logger
-		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("failed to load config", "err", err)
+		slog.Error("failed to load config", "err", err)
 		os.Exit(1)
 	}
 
-	// Initialize structured JSON logger with configurable level
-	logLevel := new(slog.LevelVar)
+	// Reinitialize logger with the configured level
 	logLevel.Set(cfg.SlogLevel())
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)

@@ -132,11 +132,26 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		if rv := recover(); rv != nil {
+			rw.status = http.StatusInternalServerError
 			hub.RecoverWithContext(r.Context(), rv)
 			sentry.Flush(2 * time.Second)
 			slog.Error("panic recovered", "method", r.Method, "path", r.URL.Path, "panic", rv)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
+
+		// Log access for every request, including panics.
+		level := slog.LevelInfo
+		if r.URL.Path == "/health" {
+			level = slog.LevelDebug
+		}
+		slog.Log(r.Context(), level, "http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"bytes", rw.bytes,
+			"remote", r.RemoteAddr,
+		)
 	}()
 
 	rw.Header().Set("X-Content-Type-Options", "nosniff")
@@ -144,15 +159,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rw.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	rw.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'")
 	s.mux.ServeHTTP(rw, r)
-
-	slog.Info("http request",
-		"method", r.Method,
-		"path", r.URL.Path,
-		"status", rw.status,
-		"duration_ms", time.Since(start).Milliseconds(),
-		"bytes", rw.bytes,
-		"remote", r.RemoteAddr,
-	)
 }
 
 func (s *Server) ListenAndServe() error {
