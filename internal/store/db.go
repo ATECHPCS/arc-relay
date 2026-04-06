@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -82,7 +82,7 @@ func (db *DB) StopBackup() {
 // Close checkpoints the WAL and then closes the database.
 func (db *DB) Close() error {
 	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		log.Printf("wal checkpoint: %v", err)
+		slog.Warn("wal checkpoint error", "err", err)
 	}
 	return db.DB.Close()
 }
@@ -104,21 +104,21 @@ func (db *DB) runBackup() {
 	// Write to temp file first so a failed backup doesn't discard the previous good copy.
 	escaped := strings.ReplaceAll(tmp, "'", "''")
 	if _, err := db.Exec(fmt.Sprintf(`VACUUM INTO '%s'`, escaped)); err != nil {
-		log.Printf("backup: VACUUM INTO failed: %v", err)
+		slog.Warn("backup VACUUM INTO failed", "err", err)
 		return
 	}
 
 	// Rotate only after the new backup succeeded.
 	if _, err := os.Stat(cur); err == nil {
 		if err := os.Rename(cur, prev); err != nil {
-			log.Printf("backup: rotate failed: %v", err)
+			slog.Warn("backup rotate failed", "err", err)
 		}
 	}
 	if err := os.Rename(tmp, cur); err != nil {
-		log.Printf("backup: finalize failed: %v", err)
+		slog.Warn("backup finalize failed", "err", err)
 		return
 	}
-	log.Printf("backup: saved %s", cur)
+	slog.Info("backup saved", "path", cur)
 }
 
 func (db *DB) migrate(migrationsFS fs.FS) error {
@@ -179,7 +179,7 @@ func (db *DB) migrate(migrationsFS fs.FS) error {
 			return fmt.Errorf("committing migration %s: %w", name, err)
 		}
 
-		log.Printf("Applied migration: %s", name)
+		slog.Info("applied migration", "version", name)
 	}
 
 	return nil

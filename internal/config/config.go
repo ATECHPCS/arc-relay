@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -14,6 +16,7 @@ type Config struct {
 	Encryption EncryptionConfig `toml:"encryption"`
 	Auth       AuthConfig       `toml:"auth"`
 	SentryDSN  string           `toml:"sentry_dsn"`
+	LogLevel   string           `toml:"log_level"`
 }
 
 type ServerConfig struct {
@@ -93,6 +96,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("ARC_RELAY_SENTRY_DSN"); v != "" {
 		cfg.SentryDSN = v
 	}
+	if v := os.Getenv("ARC_RELAY_LOG_LEVEL"); v != "" {
+		cfg.LogLevel = v
+	}
 	if v := os.Getenv("ARC_RELAY_PORT"); v != "" {
 		var port int
 		if _, err := fmt.Sscanf(v, "%d", &port); err == nil {
@@ -101,4 +107,19 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// SlogLevel parses the LogLevel string into a slog.Level.
+// Defaults to Info if unset or unrecognized.
+func (c *Config) SlogLevel() slog.Level {
+	switch strings.ToLower(c.LogLevel) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

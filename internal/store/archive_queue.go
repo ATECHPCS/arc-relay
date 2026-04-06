@@ -51,7 +51,11 @@ func NewArchiveQueueStore(db *DB) *ArchiveQueueStore {
 // Enqueue inserts a new payload into the queue for immediate delivery.
 func (s *ArchiveQueueStore) Enqueue(item *ArchiveQueueItem) error {
 	if item.ID == "" {
-		item.ID = generateID()
+		id, err := generateID()
+		if err != nil {
+			return err
+		}
+		item.ID = id
 	}
 	now := sqliteTime(time.Now())
 	_, err := s.db.Exec(`

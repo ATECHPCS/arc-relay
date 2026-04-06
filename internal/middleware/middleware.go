@@ -6,7 +6,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -128,7 +128,7 @@ func (r *Registry) Register(name string, factory Factory) {
 func (r *Registry) BuildPipeline(serverID string) *Pipeline {
 	configs, err := r.store.GetForServer(serverID)
 	if err != nil {
-		log.Printf("middleware: failed to load configs for server %s: %v", serverID, err)
+		slog.Error("middleware: failed to load configs for server", "server_id", serverID, "error", err)
 		return NewPipeline()
 	}
 
@@ -139,14 +139,14 @@ func (r *Registry) BuildPipeline(serverID string) *Pipeline {
 		}
 		factory, ok := r.factories[mc.Middleware]
 		if !ok {
-			log.Printf("middleware: unknown middleware %q (server %s)", mc.Middleware, serverID)
+			slog.Error("middleware: unknown middleware", "middleware", mc.Middleware, "server_id", serverID)
 			continue
 		}
 
 		logger := r.makeEventLogger(serverID)
 		m, err := factory(mc.Config, logger)
 		if err != nil {
-			log.Printf("middleware: failed to create %q for server %s: %v", mc.Middleware, serverID, err)
+			slog.Error("middleware: failed to create middleware", "middleware", mc.Middleware, "server_id", serverID, "error", err)
 			continue
 		}
 		pipeline.Add(m)
@@ -158,7 +158,7 @@ func (r *Registry) makeEventLogger(serverID string) EventLogger {
 	return func(evt *store.MiddlewareEvent) {
 		evt.ServerID = serverID
 		if err := r.store.LogEvent(evt); err != nil {
-			log.Printf("middleware: failed to log event: %v", err)
+			slog.Error("middleware: failed to log event", "error", err)
 		}
 	}
 }

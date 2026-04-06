@@ -17,7 +17,10 @@ func newTestDeviceAuthStore() *deviceAuthStore {
 func TestDeviceAuthStore_CreateAndGet(t *testing.T) {
 	s := newTestDeviceAuthStore()
 
-	req := s.create()
+	req, err := s.create()
+	if err != nil {
+		t.Fatalf("create() returned error: %v", err)
+	}
 	if req == nil {
 		t.Fatal("create() returned nil")
 	}
@@ -53,7 +56,10 @@ func TestDeviceAuthStore_CreateAndGet(t *testing.T) {
 func TestDeviceAuthStore_ApproveAndConsume(t *testing.T) {
 	s := newTestDeviceAuthStore()
 
-	req := s.create()
+	req, err := s.create()
+	if err != nil {
+		t.Fatalf("create() returned error: %v", err)
+	}
 	s.approve(req.DeviceCode, "test-key")
 
 	got := s.consume(req.DeviceCode)
@@ -71,7 +77,10 @@ func TestDeviceAuthStore_ApproveAndConsume(t *testing.T) {
 func TestDeviceAuthStore_DenyAndConsume(t *testing.T) {
 	s := newTestDeviceAuthStore()
 
-	req := s.create()
+	req, err := s.create()
+	if err != nil {
+		t.Fatalf("create() returned error: %v", err)
+	}
 	s.deny(req.DeviceCode)
 
 	got := s.consume(req.DeviceCode)
@@ -86,7 +95,10 @@ func TestDeviceAuthStore_DenyAndConsume(t *testing.T) {
 func TestDeviceAuthStore_ExpiredRequest(t *testing.T) {
 	s := newTestDeviceAuthStore()
 
-	req := s.create()
+	req, err := s.create()
+	if err != nil {
+		t.Fatalf("create() returned error: %v", err)
+	}
 
 	// Manually expire the request
 	s.mu.Lock()
@@ -102,7 +114,10 @@ func TestDeviceAuthStore_ExpiredRequest(t *testing.T) {
 func TestDeviceAuthStore_DoubleConsume(t *testing.T) {
 	s := newTestDeviceAuthStore()
 
-	req := s.create()
+	req, err := s.create()
+	if err != nil {
+		t.Fatalf("create() returned error: %v", err)
+	}
 	s.approve(req.DeviceCode, "test-key")
 
 	first := s.consume(req.DeviceCode)
@@ -122,7 +137,10 @@ func TestDeviceAuthStore_DoubleConsume(t *testing.T) {
 func TestDeviceAuthStore_ConsumePendingNotRemoved(t *testing.T) {
 	s := newTestDeviceAuthStore()
 
-	req := s.create()
+	req, err := s.create()
+	if err != nil {
+		t.Fatalf("create() returned error: %v", err)
+	}
 
 	// Consume without approve/deny - should return pending request without removing it
 	got := s.consume(req.DeviceCode)

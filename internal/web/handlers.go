@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -402,13 +402,13 @@ func (h *Handlers) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, err := generateID()
 	if err != nil {
-		log.Printf("Failed to generate session ID: %v", err)
+		slog.Error("failed to generate session ID", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 	if err := h.sessionStore.Create(sessionID, user.ID, expiresAt); err != nil {
-		log.Printf("Failed to create session: %v", err)
+		slog.Error("failed to create session", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -892,13 +892,13 @@ func (h *Handlers) handleServerEdit(w http.ResponseWriter, r *http.Request, id s
 			h.render(w, r, "server_form.html", formData)
 			return
 		}
-		log.Printf("Error updating server %s: %v", id, err)
+		slog.Error("error updating server", "server_id", id, "err", err)
 		http.Error(w, "Failed to update server", http.StatusInternalServerError)
 		return
 	}
 
 	if oldName != updated.Name {
-		log.Printf("Server %s slug renamed: %s -> %s", id, oldName, updated.Name)
+		slog.Info("server slug renamed", "server_id", id, "old_name", oldName, "new_name", updated.Name)
 	}
 
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
@@ -919,7 +919,7 @@ func (h *Handlers) handleServerStart(w http.ResponseWriter, r *http.Request, id 
 		_ = h.proxy.StopServer(r.Context(), id)
 	}
 	if err := h.proxy.StartServer(r.Context(), srv); err != nil {
-		log.Printf("Error starting server %s: %v", srv.Name, err) // #nosec G706 - server name from DB
+		slog.Error("error starting server", "server", srv.Name, "err", err) // #nosec G706 - server name from DB
 	} else if h.healthMon != nil {
 		h.healthMon.ResetRecoveryState(id)
 	}
@@ -942,7 +942,7 @@ func (h *Handlers) handleServerDelete(w http.ResponseWriter, r *http.Request, id
 	}
 	_ = h.proxy.StopServer(r.Context(), id)
 	if err := h.servers.Delete(id); err != nil {
-		log.Printf("Error deleting server %s: %v", id, err)
+		slog.Error("error deleting server", "server_id", id, "err", err)
 		http.Error(w, "Failed to delete server: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -956,7 +956,7 @@ func (h *Handlers) handleServerEnumerate(w http.ResponseWriter, r *http.Request,
 	}
 	_, err := h.proxy.EnumerateServer(r.Context(), id)
 	if err != nil {
-		log.Printf("Error enumerating server %s: %v", id, err) // #nosec G706
+		slog.Error("error enumerating server", "server_id", id, "err", err) // #nosec G706
 	}
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }
@@ -968,7 +968,7 @@ func (h *Handlers) handleServerHealthCheck(w http.ResponseWriter, r *http.Reques
 	}
 	if h.healthMon != nil {
 		health, healthErr := h.healthMon.CheckHealth(r.Context(), id)
-		log.Printf("On-demand health check for %s: %s %s", id, health, healthErr) // #nosec G706
+		slog.Info("on-demand health check", "server_id", id, "health", health, "health_err", healthErr) // #nosec G706
 	}
 	http.Redirect(w, r, fmt.Sprintf("/servers/%s", id), http.StatusFound)
 }
@@ -984,7 +984,7 @@ func (h *Handlers) handleServerRebuild(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	if err := h.proxy.RebuildImage(r.Context(), srv); err != nil {
-		log.Printf("Error rebuilding image for server %s: %v", srv.Name, err) // #nosec G706
+		slog.Error("error rebuilding image", "server", srv.Name, "err", err) // #nosec G706
 	}
 	redirectBack(w, r, fmt.Sprintf("/servers/%s", id))
 }
@@ -1000,7 +1000,7 @@ func (h *Handlers) handleServerRebuildRestart(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if err := h.proxy.RebuildAndRestart(r.Context(), srv); err != nil {
-		log.Printf("Error rebuild+restart for server %s: %v", srv.Name, err) // #nosec G706
+		slog.Error("error rebuild+restart", "server", srv.Name, "err", err) // #nosec G706
 	} else if h.healthMon != nil {
 		h.healthMon.ResetRecoveryState(id)
 	}
@@ -1025,7 +1025,7 @@ func (h *Handlers) handleServerRecreate(w http.ResponseWriter, r *http.Request, 
 		err = h.proxy.RecreateContainer(r.Context(), srv)
 	}
 	if err != nil {
-		log.Printf("Error recreating container for server %s: %v", srv.Name, err) // #nosec G706
+		slog.Error("error recreating container", "server", srv.Name, "err", err) // #nosec G706
 	} else if h.healthMon != nil {
 		h.healthMon.ResetRecoveryState(id)
 	}
@@ -1061,7 +1061,7 @@ func (h *Handlers) handleRecreateStream(w http.ResponseWriter, r *http.Request, 
 	pull := r.FormValue("pull") == "1"
 	err := h.proxy.RecreateWithProgress(r.Context(), srv, pull, send)
 	if err != nil {
-		log.Printf("Error recreating container for server %s: %v", srv.Name, err)
+		slog.Error("error recreating container", "server", srv.Name, "err", err)
 		// Sanitize error for SSE output to satisfy gosec G705 (XSS taint).
 		// SSE data is consumed by JS, not rendered as HTML, but we sanitize anyway.
 		safeErr := strings.ReplaceAll(err.Error(), "<", "&lt;")
@@ -1476,7 +1476,7 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 	// Transactional: consume token + create user + create API key atomically
 	tx, err := h.inviteStore.DB().Begin()
 	if err != nil {
-		log.Printf("Invite exchange: failed to begin transaction: %v", err)
+		slog.Error("invite exchange: failed to begin transaction", "err", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1484,7 +1484,7 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 
 	invite, err := h.inviteStore.ValidateAndConsumeTx(tx, body.Token)
 	if err != nil {
-		log.Printf("Invite exchange error: %v", err)
+		slog.Error("invite exchange error", "err", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1503,29 +1503,29 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "username already taken"})
 			return
 		}
-		log.Printf("Invite exchange: failed to create user: %v", err)
+		slog.Error("invite exchange: failed to create user", "err", err)
 		http.Error(w, `{"error":"failed to create account"}`, http.StatusInternalServerError)
 		return
 	}
 
 	rawKey, _, err := h.users.CreateAPIKeyTx(tx, user.ID, "arc-sync invite", invite.ProfileID)
 	if err != nil {
-		log.Printf("Invite exchange: failed to create API key: %v", err)
+		slog.Error("invite exchange: failed to create API key", "err", err)
 		http.Error(w, `{"error":"failed to create API key"}`, http.StatusInternalServerError)
 		return
 	}
 
 	if err := h.inviteStore.SetRedeemedUserTx(tx, invite.ID, user.ID); err != nil {
-		log.Printf("Invite exchange: failed to record redeemed user: %v", err)
+		slog.Error("invite exchange: failed to record redeemed user", "err", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("Invite exchange: failed to commit transaction: %v", err)
+		slog.Error("invite exchange: failed to commit transaction", "err", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Invite exchange: created user %q and API key via invite %s", user.Username, invite.ID)
+	slog.Info("invite exchange: created user and API key", "username", user.Username, "invite_id", invite.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"api_key": rawKey})
@@ -1542,7 +1542,7 @@ func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		invite, err := h.inviteStore.Peek(rawToken)
 		if err != nil {
-			log.Printf("Invite redeem peek error: %v", err)
+			slog.Error("invite redeem peek error", "err", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -1593,7 +1593,7 @@ func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 	// Transactional: consume token + create user atomically
 	tx, err := h.inviteStore.DB().Begin()
 	if err != nil {
-		log.Printf("Invite redeem: failed to begin transaction: %v", err)
+		slog.Error("invite redeem: failed to begin transaction", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -1601,7 +1601,7 @@ func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 
 	invite, err := h.inviteStore.ValidateAndConsumeTx(tx, rawToken)
 	if err != nil {
-		log.Printf("Invite redeem error: %v", err)
+		slog.Error("invite redeem error", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -1616,17 +1616,17 @@ func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 			renderErr("Username already taken")
 			return
 		}
-		log.Printf("Invite redeem: failed to create user: %v", err)
+		slog.Error("invite redeem: failed to create user", "err", err)
 		renderErr("Failed to create account")
 		return
 	}
 
 	if err := h.inviteStore.SetRedeemedUserTx(tx, invite.ID, user.ID); err != nil {
-		log.Printf("Invite redeem: failed to record redeemed user: %v", err)
+		slog.Error("invite redeem: failed to record redeemed user", "err", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("Invite redeem: failed to commit: %v", err)
+		slog.Error("invite redeem: failed to commit", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -1634,13 +1634,13 @@ func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 	// Create a session and log the user in
 	sessionID, err := generateID()
 	if err != nil {
-		log.Printf("Invite redeem: failed to generate session ID: %v", err)
+		slog.Error("invite redeem: failed to generate session ID", "err", err)
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 	if err := h.sessionStore.Create(sessionID, user.ID, expiresAt); err != nil {
-		log.Printf("Invite redeem: failed to create session: %v", err)
+		slog.Error("invite redeem: failed to create session", "err", err)
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
@@ -1654,7 +1654,7 @@ func (h *Handlers) handleInviteRedeem(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
-	log.Printf("Invite redeem: created user %q via invite %s (browser)", user.Username, invite.ID)
+	slog.Info("invite redeem: created user via browser", "username", user.Username, "invite_id", invite.ID)
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -1663,7 +1663,7 @@ func (h *Handlers) renderInviteRedeem(w http.ResponseWriter, data map[string]any
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	t := h.tmpls["invite_redeem.html"]
 	if err := t.ExecuteTemplate(w, "content", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("template error", "err", err)
 	}
 }
 
@@ -1726,13 +1726,13 @@ func (h *Handlers) handleChangePassword(w http.ResponseWriter, r *http.Request) 
 
 	newSessionID, err := generateID()
 	if err != nil {
-		log.Printf("Failed to generate session ID after password change: %v", err)
+		slog.Error("failed to generate session ID after password change", "err", err)
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 	expiresAt := time.Now().Add(30 * 24 * time.Hour)
 	if err := h.sessionStore.Create(newSessionID, user.ID, expiresAt); err != nil {
-		log.Printf("Failed to create session after password change: %v", err)
+		slog.Error("failed to create session after password change", "err", err)
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
@@ -1794,7 +1794,7 @@ func (h *Handlers) handleUserResetPassword(w http.ResponseWriter, r *http.Reques
 	// Invalidate all sessions for the target user
 	h.sessionStore.DeleteByUser(userID)
 
-	log.Printf("Admin %s reset password for user %s (forced change required)", getUser(r).Username, targetUser.Username)
+	slog.Debug("admin reset password for user", "admin", getUser(r).Username, "target_user", targetUser.Username)
 
 	users, _ := h.users.List()
 	profiles, _ := h.profileStore.List()
@@ -1885,7 +1885,7 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 		rawKey, _, err := h.users.CreateAPIKey(user.ID, name, profileID)
 		if err != nil {
-			log.Printf("Error creating API key: %v", err)
+			slog.Error("error creating API key", "err", err)
 			http.Redirect(w, r, "/api-keys", http.StatusFound)
 			return
 		}
@@ -2136,7 +2136,7 @@ func (h *Handlers) handleProfileSeed(w http.ResponseWriter, r *http.Request, pro
 	}
 
 	if err := h.profileStore.SeedFromTier(profileID, serverID, tier); err != nil {
-		log.Printf("Error seeding profile %s: %v", profileID, err) // #nosec G706
+		slog.Error("error seeding profile", "profile_id", profileID, "err", err) // #nosec G706
 		if r.Header.Get("Accept") == "application/json" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -2201,16 +2201,16 @@ func (h *Handlers) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if reregistered, err := h.oauth.ReRegisterIfNeeded(r.Context(), serverID, srv, &cfg, force); err != nil {
-		log.Printf("OAuth re-registration failed for %s: %v", srv.Name, err) // #nosec G706
+		slog.Error("OAuth re-registration failed", "server", srv.Name, "err", err) // #nosec G706
 		http.Error(w, fmt.Sprintf("OAuth re-registration failed: %s", err), http.StatusInternalServerError)
 		return
 	} else if reregistered {
-		log.Printf("OAuth re-registered for %s with updated redirect URI", srv.Name) // #nosec G706
+		slog.Info("OAuth re-registered with updated redirect URI", "server", srv.Name) // #nosec G706
 	}
 
 	authURL, err := h.oauth.StartAuthFlow(serverID, cfg.Auth)
 	if err != nil {
-		log.Printf("Error starting OAuth flow for %s: %v", srv.Name, err) // #nosec G706
+		slog.Error("error starting OAuth flow", "server", srv.Name, "err", err) // #nosec G706
 		http.Error(w, "Failed to start OAuth flow", http.StatusInternalServerError)
 		return
 	}
@@ -2238,11 +2238,11 @@ func (h *Handlers) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		// On duplicate callbacks (browser double-request), the state is already
 		// consumed but tokens were acquired. Redirect to dashboard gracefully.
 		if strings.Contains(err.Error(), "unknown or expired OAuth state") {
-			log.Printf("OAuth callback: duplicate or expired state (likely double-request), redirecting to dashboard")
+			slog.Warn("OAuth callback: duplicate or expired state, redirecting to dashboard")
 			http.Redirect(w, r, "/", http.StatusFound)
 			return
 		}
-		log.Printf("OAuth callback error: %v", err)
+		slog.Error("OAuth callback error", "err", err)
 		http.Error(w, fmt.Sprintf("OAuth callback failed: %s", err), http.StatusBadRequest)
 		return
 	}
@@ -2261,7 +2261,7 @@ func (h *Handlers) handleCatalogSearch(w http.ResponseWriter, r *http.Request) {
 
 	results, err := h.catalogClient.Search(r.Context(), q, 20)
 	if err != nil {
-		log.Printf("Catalog search error: %v", err)
+		slog.Warn("catalog search error", "err", err)
 		writeJSON(w, http.StatusOK, []catalog.ResolvedServer{}) // graceful degradation
 		return
 	}
@@ -2305,11 +2305,11 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 	// Validate the endpoint URL to prevent SSRF via adversarial discovery responses.
 	if discovery.RegistrationEndpoint != "" {
 		if err := validateExternalURL(discovery.RegistrationEndpoint); err != nil {
-			log.Printf("Registration endpoint blocked by SSRF check: %s", discovery.RegistrationEndpoint)
+			slog.Debug("registration endpoint blocked by SSRF check", "endpoint", discovery.RegistrationEndpoint)
 		} else {
 			reg, err := oauth.RegisterClient(r.Context(), discovery.RegistrationEndpoint, h.oauth.CallbackURL())
 			if err != nil {
-				log.Printf("Dynamic client registration failed: %v", err)
+				slog.Debug("dynamic client registration failed", "err", err)
 			} else if reg != nil {
 				discovery.ClientID = reg.ClientID
 				discovery.ClientSecret = reg.ClientSecret
@@ -2356,7 +2356,7 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, data map[string]any) {
 	t, ok := h.tmpls[name]
 	if !ok {
-		log.Printf("Template %s not found", name)
+		slog.Error("template not found", "template", name)
 		http.Error(w, "Template not found", http.StatusInternalServerError)
 		return
 	}
@@ -2371,13 +2371,13 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, name string, d
 	// Login page has no layout wrapper
 	if name == "login.html" {
 		if err := t.ExecuteTemplate(w, "content", data); err != nil {
-			log.Printf("Template error: %v", err)
+			slog.Error("template error", "err", err)
 		}
 		return
 	}
 
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
-		log.Printf("Template error rendering %s: %v", name, err)
+		slog.Error("template error", "template", name, "err", err)
 	}
 }
 
@@ -2554,7 +2554,7 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 					if disc.RegistrationEndpoint != "" {
 						// Validate registration endpoint to prevent SSRF via adversarial discovery responses
 						if err := validateExternalURL(disc.RegistrationEndpoint); err != nil {
-							log.Printf("Registration endpoint blocked by SSRF check in server form: %s", disc.RegistrationEndpoint)
+							slog.Debug("registration endpoint blocked by SSRF check in server form", "endpoint", disc.RegistrationEndpoint)
 						} else {
 							auth.RegistrationEndpoint = disc.RegistrationEndpoint
 						}

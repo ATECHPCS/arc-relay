@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -43,12 +43,18 @@ func newDeviceAuthStore() *deviceAuthStore {
 }
 
 // create generates a new device auth request and returns it.
-func (s *deviceAuthStore) create() *deviceAuthRequest {
+func (s *deviceAuthStore) create() (*deviceAuthRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	deviceCode := generateDeviceCode()
-	userCode := generateUserCode()
+	deviceCode, err := generateDeviceCode()
+	if err != nil {
+		return nil, err
+	}
+	userCode, err := generateUserCode()
+	if err != nil {
+		return nil, err
+	}
 
 	req := &deviceAuthRequest{
 		DeviceCode: deviceCode,
@@ -59,7 +65,7 @@ func (s *deviceAuthStore) create() *deviceAuthRequest {
 	}
 	s.requests[deviceCode] = req
 	s.byUser[userCode] = deviceCode
-	return req
+	return req, nil
 }
 
 // get returns the request for a device code, or nil if not found/expired.
@@ -143,21 +149,26 @@ func (s *deviceAuthStore) cleanup() {
 }
 
 // generateDeviceCode returns a crypto-random hex string.
-func generateDeviceCode() string {
+func generateDeviceCode() (string, error) {
 	b := make([]byte, 16)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating device code: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // generateUserCode returns a short, human-readable code like "ABCD-1234".
-func generateUserCode() string {
+func generateUserCode() (string, error) {
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // no I/O/0/1 to avoid confusion
 	code := make([]byte, 8)
 	for i := range code {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			return "", fmt.Errorf("generating user code: %w", err)
+		}
 		code[i] = chars[n.Int64()]
 	}
-	return string(code[:4]) + "-" + string(code[4:])
+	return string(code[:4]) + "-" + string(code[4:]), nil
 }
 
 // --- HTTP Handlers ---
@@ -169,7 +180,14 @@ func (h *Handlers) handleDeviceAuthStart(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	req := h.deviceAuth.create()
+	req, err := h.deviceAuth.create()
+	if err != nil {
+		log.Printf("Device auth: failed to create request: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal error"}`))
+		return
+	}
 
 	baseURL := h.cfg.PublicBaseURL()
 	verificationURL := fmt.Sprintf("%s/auth/device?code=%s", baseURL, req.UserCode)
@@ -333,7 +351,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	}
 	rawKey, _, err := h.users.CreateAPIKey(user.ID, "arc-sync device auth", deviceProfileID)
 	if err != nil {
-		log.Printf("Device auth: failed to create API key for user %s: %v", user.Username, err)
+		slog.Error("device auth: failed to create API key", "user", user.Username, "err", err)
 		h.render(w, r, "device_auth.html", map[string]any{
 			"Nav":   "",
 			"User":  user,
@@ -343,7 +361,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.deviceAuth.approve(deviceCode, rawKey)
-	log.Printf("Device auth: approved for user %s (key created)", user.Username)
+	slog.Debug("device auth: approved", "user", user.Username)
 
 	h.render(w, r, "device_auth.html", map[string]any{
 		"Nav":      "",

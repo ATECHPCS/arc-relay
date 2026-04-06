@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -72,7 +72,7 @@ func (hm *HealthMonitor) Start() {
 		}
 	}()
 
-	log.Printf("Health monitor started (interval: %s)", hm.interval)
+	slog.Info("health monitor started", "interval", hm.interval)
 }
 
 // Stop stops the health monitor.
@@ -102,7 +102,7 @@ func (hm *HealthMonitor) CheckHealth(ctx context.Context, serverID string) (stor
 func (hm *HealthMonitor) checkAll(ctx context.Context) {
 	servers, err := hm.servers.List()
 	if err != nil {
-		log.Printf("Health monitor: error listing servers: %v", err)
+		slog.Warn("health monitor: error listing servers", "err", err)
 		return
 	}
 
@@ -124,7 +124,7 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 		_ = hm.servers.UpdateStatus(srv.ID, store.StatusStopped, "backend not found")
 		_ = hm.servers.UpdateHealth(srv.ID, store.HealthUnknown, "")
 		hm.resetFailCount(srv.ID)
-		log.Printf("Health monitor: server %s has no backend, marking stopped", srv.Name)
+		slog.Warn("health monitor: server has no backend, marking stopped", "server", srv.Name)
 		return
 	}
 
@@ -137,15 +137,17 @@ func (hm *HealthMonitor) checkRunning(ctx context.Context, srv *store.Server) {
 		_ = hm.servers.UpdateHealth(srv.ID, store.HealthUnhealthy, err.Error())
 
 		if count >= failThreshold {
-			log.Printf("Health monitor: server %s failed %d consecutive probes, marking error: %v", srv.Name, count, err)
+			slog.Error("health monitor: server failed consecutive probes, marking error",
+				"server", srv.Name, "failures", count, "err", err)
 			_ = hm.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		} else {
-			log.Printf("Health monitor: server %s probe failed (%d/%d): %v", srv.Name, count, failThreshold, err)
+			slog.Warn("health monitor: probe failed",
+				"server", srv.Name, "failures", count, "threshold", failThreshold, "err", err)
 		}
 	} else {
 		hm.resetFailCount(srv.ID)
 		if srv.Health != store.HealthHealthy {
-			log.Printf("Health monitor: server %s is healthy", srv.Name)
+			slog.Info("health monitor: server is healthy", "server", srv.Name)
 		}
 		_ = hm.servers.UpdateHealth(srv.ID, store.HealthHealthy, "")
 	}
@@ -186,18 +188,18 @@ func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
 		// Stateless: recover inline (fast, no Docker ops)
 		hm.mu.Unlock()
 		if err := hm.proxyMgr.RetryServer(ctx, srv); err != nil {
-			log.Printf("Health monitor: recovery %d/%d failed for %s: %v",
-				attempt, maxRecoverAttempts, srv.Name, err)
+			slog.Error("health monitor: recovery failed",
+				"attempt", attempt, "max_attempts", maxRecoverAttempts, "server", srv.Name, "err", err)
 			sentry.CaptureException(fmt.Errorf("health recovery failed for %s (attempt %d/%d): %w",
 				srv.Name, attempt, maxRecoverAttempts, err))
 			if attempt >= maxRecoverAttempts {
-				log.Printf("Health monitor: giving up on %s after %d attempts - manual restart required",
-					srv.Name, maxRecoverAttempts)
+				slog.Error("health monitor: giving up, manual restart required",
+					"server", srv.Name, "attempts", maxRecoverAttempts)
 			}
 			return
 		}
 		hm.ResetRecoveryState(srv.ID)
-		log.Printf("Health monitor: auto-recovered server %s", srv.Name)
+		slog.Info("health monitor: auto-recovered server", "server", srv.Name)
 		return
 	}
 
@@ -215,23 +217,23 @@ func (hm *HealthMonitor) tryRecover(ctx context.Context, srv *store.Server) {
 		recoverCtx, cancel := context.WithTimeout(ctx, dockerRecoverTimeout)
 		defer cancel()
 
-		log.Printf("Health monitor: attempting recovery %d/%d for server %s (type: %s)",
-			attempt, maxRecoverAttempts, srv.Name, srv.ServerType)
+		slog.Info("health monitor: attempting recovery",
+			"attempt", attempt, "max_attempts", maxRecoverAttempts, "server", srv.Name, "type", srv.ServerType)
 
 		if err := hm.proxyMgr.RecreateContainer(recoverCtx, srv); err != nil {
-			log.Printf("Health monitor: recovery %d/%d failed for %s: %v",
-				attempt, maxRecoverAttempts, srv.Name, err)
+			slog.Error("health monitor: recovery failed",
+				"attempt", attempt, "max_attempts", maxRecoverAttempts, "server", srv.Name, "err", err)
 			sentry.CaptureException(fmt.Errorf("health recovery failed for %s (attempt %d/%d): %w",
 				srv.Name, attempt, maxRecoverAttempts, err))
 			if attempt >= maxRecoverAttempts {
-				log.Printf("Health monitor: giving up on %s after %d attempts - manual restart required",
-					srv.Name, maxRecoverAttempts)
+				slog.Error("health monitor: giving up, manual restart required",
+					"server", srv.Name, "attempts", maxRecoverAttempts)
 			}
 			return
 		}
 
 		hm.ResetRecoveryState(srv.ID)
-		log.Printf("Health monitor: auto-recovered server %s (type: %s)", srv.Name, srv.ServerType)
+		slog.Info("health monitor: auto-recovered server", "server", srv.Name, "type", srv.ServerType)
 	}()
 }
 

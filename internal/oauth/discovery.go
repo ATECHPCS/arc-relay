@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -92,12 +92,12 @@ func DiscoverOAuth(ctx context.Context, serverURL string) (*OAuthDiscovery, erro
 		// Fallback: try the origin itself as the authorization server.
 		// Some providers (e.g. Shortcut) only expose oauth-authorization-server
 		// without the oauth-protected-resource endpoint.
-		log.Printf("OAuth discovery: no protected-resource at %s, falling back to origin as auth server", origin)
+		slog.Debug("OAuth discovery: no protected-resource found, falling back to origin as auth server", "origin", origin)
 		authServer = origin
 	}
 
 	// Step 2: Probe /.well-known/oauth-authorization-server on the auth server
-	log.Printf("OAuth discovery: probing authorization server at %s", authServer)
+	slog.Debug("OAuth discovery: probing authorization server", "auth_server", authServer)
 	discovery, err := probeAuthorizationServer(ctx, authServer)
 	if err != nil || discovery == nil {
 		return nil, nil

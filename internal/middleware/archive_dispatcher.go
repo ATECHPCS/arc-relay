@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -174,7 +174,7 @@ func (d *ArchiveDispatcher) drainDue() {
 		if elapsed >= cbPauseDurations[pauseIdx] {
 			d.cbState = cbHalfOpen
 			state = cbHalfOpen
-			log.Printf("archive dispatcher: circuit breaker half-open, probing")
+			slog.Debug("archive dispatcher: circuit breaker half-open, probing")
 		}
 	}
 	d.mu.Unlock()
@@ -185,7 +185,7 @@ func (d *ArchiveDispatcher) drainDue() {
 
 	items, err := d.store.DequeueDue(drainBatchSize)
 	if err != nil {
-		log.Printf("archive dispatcher: dequeue error: %v", err)
+		slog.Error("archive dispatcher: dequeue error", "error", err)
 		return
 	}
 
@@ -204,7 +204,7 @@ func (d *ArchiveDispatcher) drainDue() {
 			if d.cbState == cbHalfOpen {
 				d.cbState = cbClosed
 				d.cbPauseLevel = 0
-				log.Printf("archive dispatcher: circuit breaker closed")
+				slog.Debug("archive dispatcher: circuit breaker closed")
 				if d.eventLogger != nil {
 					d.eventLogger(&store.MiddlewareEvent{
 						Middleware: "archive",
@@ -222,14 +222,14 @@ func (d *ArchiveDispatcher) drainDue() {
 				if d.cbPauseLevel < len(cbPauseDurations)-1 {
 					d.cbPauseLevel++
 				}
-				log.Printf("archive dispatcher: half-open probe failed, circuit reopened (pause level %d)", d.cbPauseLevel)
+				slog.Debug("archive dispatcher: half-open probe failed, circuit reopened", "pause_level", d.cbPauseLevel)
 				d.mu.Unlock()
 				return
 			}
 			if d.consecutiveFails >= cbFailThreshold {
 				d.cbState = cbOpen
 				d.cbOpenedAt = d.NowFunc()
-				log.Printf("archive dispatcher: circuit breaker opened after %d consecutive failures", d.consecutiveFails)
+				slog.Debug("archive dispatcher: circuit breaker opened", "consecutive_failures", d.consecutiveFails)
 				if d.eventLogger != nil {
 					d.eventLogger(&store.MiddlewareEvent{
 						Middleware: "archive",
@@ -248,9 +248,9 @@ func (d *ArchiveDispatcher) drainDue() {
 func (d *ArchiveDispatcher) sendOne(item *store.ArchiveQueueItem) bool {
 	req, err := http.NewRequest("POST", item.URL, bytes.NewReader([]byte(item.Payload)))
 	if err != nil {
-		log.Printf("archive dispatcher: failed to create request: %v", err)
+		slog.Error("archive dispatcher: failed to create request", "error", err)
 		if err2 := d.store.MarkHold(item.ID, "invalid request: "+err.Error()); err2 != nil {
-			log.Printf("archive dispatcher: mark hold: %v", err2)
+			slog.Warn("archive dispatcher: mark hold failed", "item_id", item.ID, "error", err2)
 		}
 		return false
 	}
@@ -273,7 +273,7 @@ func (d *ArchiveDispatcher) sendOne(item *store.ArchiveQueueItem) bool {
 		errMsg := fmt.Sprintf("network error: %v", err)
 		nextAttempt := d.nextAttemptTime(item.Attempts)
 		if err2 := d.store.Reschedule(item.ID, nextAttempt, errMsg); err2 != nil {
-			log.Printf("archive dispatcher: reschedule: %v", err2)
+			slog.Warn("archive dispatcher: reschedule failed", "item_id", item.ID, "error", err2)
 		}
 		return false
 	}
@@ -283,7 +283,7 @@ func (d *ArchiveDispatcher) sendOne(item *store.ArchiveQueueItem) bool {
 	if resp.StatusCode < 300 {
 		// Success
 		if err := d.store.MarkDelivered(item.ID); err != nil {
-			log.Printf("archive dispatcher: mark delivered: %v", err)
+			slog.Warn("archive dispatcher: mark delivered failed", "item_id", item.ID, "error", err)
 		}
 		return true
 	}
@@ -292,14 +292,14 @@ func (d *ArchiveDispatcher) sendOne(item *store.ArchiveQueueItem) bool {
 	if isTransient(resp.StatusCode) {
 		nextAttempt := d.nextAttemptTime(item.Attempts)
 		if err := d.store.Reschedule(item.ID, nextAttempt, errMsg); err != nil {
-			log.Printf("archive dispatcher: reschedule: %v", err)
+			slog.Warn("archive dispatcher: reschedule failed", "item_id", item.ID, "error", err)
 		}
 		return false
 	}
 
 	// Permanent failure
 	if err := d.store.MarkHold(item.ID, errMsg); err != nil {
-		log.Printf("archive dispatcher: mark hold: %v", err)
+		slog.Warn("archive dispatcher: mark hold failed", "item_id", item.ID, "error", err)
 	}
 	return false
 }
@@ -356,7 +356,7 @@ func (d *ArchiveDispatcher) SendTest(cfg ArchiveConfig) (int, error) {
 		d.cbState = cbClosed
 		d.cbPauseLevel = 0
 		d.consecutiveFails = 0
-		log.Printf("archive dispatcher: test success, circuit breaker closed")
+		slog.Debug("archive dispatcher: test success, circuit breaker closed")
 	}
 	d.mu.Unlock()
 
@@ -377,7 +377,7 @@ func (d *ArchiveDispatcher) Status() *ArchiveDispatcherStatus {
 
 	qs, err := d.store.Status()
 	if err != nil {
-		log.Printf("archive dispatcher: status query error: %v", err)
+		slog.Error("archive dispatcher: status query error", "error", err)
 		qs = &store.ArchiveQueueStatus{}
 	}
 

@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"time"
@@ -189,11 +189,11 @@ func (a *Alerter) sendWebhook(url, summary string, meta *RequestMeta) {
 
 	resp, err := a.httpClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		log.Printf("alerter: webhook failed for %s: %v", url, err)
+		slog.Warn("alerter: webhook failed", "url", url, "error", err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		log.Printf("alerter: webhook %s returned status %d", url, resp.StatusCode)
+		slog.Warn("alerter: webhook returned non-success status", "url", url, "status", resp.StatusCode)
 	}
 }
