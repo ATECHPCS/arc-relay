@@ -1456,7 +1456,7 @@ func (h *Handlers) handleCreateAccountInvite(w http.ResponseWriter, r *http.Requ
 	// prevent duplicate invite creation on browser refresh.
 	nonce, err := generateID()
 	if err != nil {
-		log.Printf("Error generating flash nonce: %v", err)
+		slog.Error("error generating flash nonce", "err", err)
 		http.Redirect(w, r, "/users", http.StatusFound)
 		return
 	}
@@ -1930,7 +1930,7 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 		// duplicate key creation on browser refresh.
 		nonce, err := generateID()
 		if err != nil {
-			log.Printf("Error generating flash nonce: %v", err)
+			slog.Error("error generating flash nonce", "err", err)
 			http.Redirect(w, r, "/api-keys", http.StatusFound)
 			return
 		}

@@ -378,7 +378,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	// Use a flash nonce to prevent forging the approved state.
 	nonce, err := generateID()
 	if err != nil {
-		log.Printf("Device auth: failed to generate flash nonce: %v", err)
+		slog.Error("device auth: failed to generate flash nonce", "err", err)
 		http.Redirect(w, r, "/auth/device", http.StatusFound)
 		return
 	}
