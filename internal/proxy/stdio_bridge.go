@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
@@ -50,7 +50,7 @@ func (b *StdioBridge) readLoop() {
 
 		var resp mcp.Response
 		if err := json.Unmarshal(line, &resp); err != nil {
-			log.Printf("stdio bridge: failed to parse response: %v (line: %s)", err, string(line))
+			slog.Warn("stdio bridge: failed to parse response", "err", err)
 			continue
 		}
 
@@ -67,12 +67,12 @@ func (b *StdioBridge) readLoop() {
 			if ok {
 				ch <- &resp
 			} else {
-				log.Printf("stdio bridge: no pending request for response id %s", idKey)
+				slog.Warn("stdio bridge: no pending request for response", "id", idKey)
 			}
 		}
 	}
 	if err := b.scanner.Err(); err != nil {
-		log.Printf("stdio bridge: read error: %v", err)
+		slog.Warn("stdio bridge: read error", "err", err)
 	}
 }
 

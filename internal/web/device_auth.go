@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -333,7 +333,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	}
 	rawKey, _, err := h.users.CreateAPIKey(user.ID, "arc-sync device auth", deviceProfileID)
 	if err != nil {
-		log.Printf("Device auth: failed to create API key for user %s: %v", user.Username, err)
+		slog.Error("device auth: failed to create API key", "user", user.Username, "err", err)
 		h.render(w, r, "device_auth.html", map[string]any{
 			"Nav":   "",
 			"User":  user,
@@ -343,7 +343,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	}
 
 	h.deviceAuth.approve(deviceCode, rawKey)
-	log.Printf("Device auth: approved for user %s (key created)", user.Username)
+	slog.Debug("device auth: approved", "user", user.Username)
 
 	h.render(w, r, "device_auth.html", map[string]any{
 		"Nav":      "",

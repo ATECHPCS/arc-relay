@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -57,7 +57,7 @@ func APIKeyAuth(users *store.UserStore, baseURL string) func(http.Handler) http.
 			token := strings.TrimPrefix(auth, "Bearer ")
 			user, err := users.ValidateAPIKey(token)
 			if err != nil {
-				log.Printf("auth: validate api key failed: path=%s remote=%s err=%v", r.URL.Path, r.RemoteAddr, err)
+				slog.Warn("auth: validate api key failed", "path", r.URL.Path, "remote", r.RemoteAddr, "err", err)
 				jsonError(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
@@ -97,7 +97,7 @@ func MCPAuth(users *store.UserStore, oauthTokens *store.OAuthTokenStore, baseURL
 			// Try API key first
 			user, err := users.ValidateAPIKey(token)
 			if err != nil {
-				log.Printf("auth: validate api key failed: path=%s remote=%s err=%v", r.URL.Path, r.RemoteAddr, err)
+				slog.Warn("auth: validate api key failed", "path", r.URL.Path, "remote", r.RemoteAddr, "err", err)
 				jsonError(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 				return
 			}
@@ -106,7 +106,7 @@ func MCPAuth(users *store.UserStore, oauthTokens *store.OAuthTokenStore, baseURL
 			if user == nil {
 				user, err = oauthTokens.Validate(token)
 				if err != nil {
-					log.Printf("auth: validate oauth token failed: path=%s remote=%s err=%v", r.URL.Path, r.RemoteAddr, err)
+					slog.Warn("auth: validate oauth token failed", "path", r.URL.Path, "remote", r.RemoteAddr, "err", err)
 					jsonError(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 					return
 				}

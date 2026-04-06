@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -261,12 +261,12 @@ func (h *Handlers) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.oauthProv.clientStore.Create(clientID, secretHash, req.ClientName, authMethod, req.RedirectURIs); err != nil {
-		log.Printf("OAuth DCR: failed to register client: %v", err)
+		slog.Error("oauth DCR: failed to register client", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to register client")
 		return
 	}
 
-	log.Printf("OAuth DCR: registered client %q (%s)", req.ClientName, clientID)
+	slog.Debug("oauth DCR: registered client", "client_name", req.ClientName, "client_id", clientID)
 
 	resp := map[string]any{
 		"client_id":                  clientID,
@@ -446,12 +446,12 @@ func (h *Handlers) handleOAuthAuthorizePost(w http.ResponseWriter, r *http.Reque
 
 	code, err := h.oauthProv.codes.create(clientID, user.ID, redirectURI, codeChallenge, scope, resource)
 	if err != nil {
-		log.Printf("OAuth authorize: failed to create auth code: %v", err)
+		slog.Error("oauth authorize: failed to create auth code", "error", err)
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("OAuth authorize: approved for user %s, client %s", user.Username, clientID)
+	slog.Debug("oauth authorize: approved", "username", user.Username, "client_id", clientID)
 
 	params.Set("code", code)
 	if state != "" {
@@ -546,19 +546,19 @@ func (h *Handlers) handleTokenAuthorizationCode(w http.ResponseWriter, r *http.R
 
 	accessToken, err := h.mintAccessToken(ac.UserID, clientID, ac.Scope, ac.Resource)
 	if err != nil {
-		log.Printf("OAuth token: failed to mint access token: %v", err)
+		slog.Error("oauth token: failed to mint access token", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to create access token")
 		return
 	}
 
 	refreshToken, err := h.mintRefreshToken(ac.UserID, clientID, ac.Scope, ac.Resource)
 	if err != nil {
-		log.Printf("OAuth token: failed to mint refresh token: %v", err)
+		slog.Error("oauth token: failed to mint refresh token", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to create refresh token")
 		return
 	}
 
-	log.Printf("OAuth token: issued access+refresh tokens for user %s, client %s", ac.UserID, clientID)
+	slog.Debug("oauth token: issued access+refresh tokens", "user_id", ac.UserID, "client_id", clientID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -601,19 +601,19 @@ func (h *Handlers) handleTokenRefresh(w http.ResponseWriter, r *http.Request) {
 
 	accessToken, err := h.mintAccessToken(rt.UserID, rt.ClientID, rt.Scope, rt.Resource)
 	if err != nil {
-		log.Printf("OAuth refresh: failed to mint access token: %v", err)
+		slog.Error("oauth refresh: failed to mint access token", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to create access token")
 		return
 	}
 
 	newRefreshToken, err := h.mintRefreshToken(rt.UserID, rt.ClientID, rt.Scope, rt.Resource)
 	if err != nil {
-		log.Printf("OAuth refresh: failed to mint refresh token: %v", err)
+		slog.Error("oauth refresh: failed to mint refresh token", "error", err)
 		oauthError(w, http.StatusInternalServerError, "server_error", "failed to create refresh token")
 		return
 	}
 
-	log.Printf("OAuth refresh: rotated tokens for user %s, client %s", rt.UserID, rt.ClientID)
+	slog.Debug("oauth refresh: rotated tokens", "user_id", rt.UserID, "client_id", rt.ClientID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

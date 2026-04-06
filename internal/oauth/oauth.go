@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -116,11 +116,11 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 	// endpoint and re-register proactively. This handles the case where existing
 	// servers were registered before tracking was added.
 	if force {
-		log.Printf("OAuth forced re-registration for server %s", serverID)
+		slog.Warn("OAuth forced re-registration", "server_id", serverID)
 	} else if auth.RegisteredRedirectURI == "" {
-		log.Printf("OAuth redirect URI not tracked for server %s, attempting discovery + re-registration", serverID)
+		slog.Info("OAuth redirect URI not tracked, attempting discovery + re-registration", "server_id", serverID)
 	} else {
-		log.Printf("OAuth redirect URI changed for server %s: %q -> %q, re-registering", serverID, auth.RegisteredRedirectURI, callbackURL)
+		slog.Info("OAuth redirect URI changed, re-registering", "server_id", serverID, "old_uri", auth.RegisteredRedirectURI, "new_uri", callbackURL)
 	}
 
 	// Try using stored registration endpoint first, fall back to re-discovery
@@ -133,22 +133,22 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 			if tryURL == "" {
 				continue
 			}
-			log.Printf("Discovering OAuth for server %s at %s", serverID, tryURL)
+			slog.Debug("discovering OAuth endpoints", "server_id", serverID, "url", tryURL)
 			d, err := DiscoverOAuth(ctx, tryURL)
 			if err != nil {
-				log.Printf("OAuth discovery error for server %s at %s: %v", serverID, tryURL, err)
+				slog.Warn("OAuth discovery error", "server_id", serverID, "url", tryURL, "error", err)
 				continue
 			}
 			if d != nil && d.RegistrationEndpoint != "" {
 				disc = d
-				log.Printf("OAuth discovery found registration endpoint: %s", d.RegistrationEndpoint)
+				slog.Debug("OAuth discovery found registration endpoint", "endpoint", d.RegistrationEndpoint)
 				break
 			}
 		}
 		if disc == nil || disc.RegistrationEndpoint == "" {
 			if auth.RegisteredRedirectURI == "" {
 				// Never tracked — can't re-register, proceed with existing credentials
-				log.Printf("No registration endpoint found for server %s, proceeding with existing credentials", serverID)
+				slog.Info("no registration endpoint found, proceeding with existing credentials", "server_id", serverID)
 				return false, nil
 			}
 			return false, fmt.Errorf("redirect URI changed but cannot re-register: no registration endpoint found (update client credentials manually)")
@@ -185,7 +185,7 @@ func (m *Manager) ReRegisterIfNeeded(ctx context.Context, serverID string, srv *
 	delete(m.tokens, serverID)
 	m.mu.Unlock()
 
-	log.Printf("OAuth re-registered for server %s: new client_id=%s", serverID, reg.ClientID)
+	slog.Debug("OAuth re-registered for server", "server_id", serverID, "client_id", reg.ClientID)
 	return true, nil
 }
 
@@ -280,7 +280,7 @@ func (m *Manager) HandleCallback(ctx context.Context, state, code string) (strin
 	m.tokens[pa.ServerID] = tokenSet
 	m.mu.Unlock()
 
-	log.Printf("OAuth tokens acquired for server %s (expires %s)", pa.ServerID, tokenSet.ExpiresAt.Format(time.RFC3339))
+	slog.Info("OAuth tokens acquired", "server_id", pa.ServerID, "expires_at", tokenSet.ExpiresAt.Format(time.RFC3339))
 	return pa.ServerID, nil
 }
 
@@ -439,10 +439,10 @@ func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *Token
 	// endpoints (e.g. Shortcut migrated from shortcut.com to api.app.shortcut.com).
 	// Re-discover endpoints and retry the refresh with the new token URL.
 	if err != nil && strings.Contains(err.Error(), "returned 404") {
-		log.Printf("OAuth token endpoint 404 for server %s, attempting re-discovery", serverID)
+		slog.Warn("OAuth token endpoint returned 404, attempting re-discovery", "server_id", serverID)
 		disc, discErr := DiscoverOAuth(ctx, cfg.URL)
 		if discErr == nil && disc != nil && disc.TokenURL != "" && disc.TokenURL != cfg.Auth.TokenURL {
-			log.Printf("OAuth re-discovered new endpoints for server %s: token=%s auth=%s", serverID, disc.TokenURL, disc.AuthURL)
+			slog.Info("OAuth re-discovered new endpoints", "server_id", serverID, "token_url", disc.TokenURL, "auth_url", disc.AuthURL)
 			cfg.Auth.TokenURL = disc.TokenURL
 			if disc.AuthURL != "" {
 				cfg.Auth.AuthURL = disc.AuthURL
@@ -453,7 +453,7 @@ func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *Token
 			configJSON, marshalErr := json.Marshal(&cfg)
 			if marshalErr == nil {
 				if updateErr := m.servers.UpdateConfig(serverID, configJSON); updateErr != nil {
-					log.Printf("OAuth: failed to persist re-discovered endpoints for %s: %v", serverID, updateErr)
+					slog.Error("failed to persist re-discovered OAuth endpoints", "server_id", serverID, "error", updateErr)
 				}
 			}
 			newTS, err = m.tokenRequest(ctx, disc.TokenURL, data)
@@ -464,7 +464,7 @@ func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *Token
 		// On invalid_grant (revoked/expired refresh token), clear stale tokens
 		// so the UI shows "Not Authorized" with a reauthorize button
 		if strings.Contains(err.Error(), "invalid_grant") {
-			log.Printf("OAuth refresh token invalid for server %s, clearing stale tokens", serverID)
+			slog.Warn("OAuth refresh token invalid, clearing stale tokens", "server_id", serverID)
 			m.clearTokens(serverID, srv, &cfg)
 		}
 		return fmt.Errorf("token refresh failed (reauthorize via server detail page): %w", err)
@@ -483,7 +483,7 @@ func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *Token
 	m.tokens[serverID] = newTS
 	m.mu.Unlock()
 
-	log.Printf("OAuth tokens refreshed for server %s (expires %s)", serverID, newTS.ExpiresAt.Format(time.RFC3339))
+	slog.Info("OAuth tokens refreshed", "server_id", serverID, "expires_at", newTS.ExpiresAt.Format(time.RFC3339))
 	return nil
 }
 
@@ -543,11 +543,11 @@ func (m *Manager) clearTokens(serverID string, srv *store.Server, cfg *store.Rem
 
 	configJSON, err := json.Marshal(cfg)
 	if err != nil {
-		log.Printf("Failed to marshal config when clearing tokens for %s: %v", serverID, err)
+		slog.Error("failed to marshal config when clearing tokens", "server_id", serverID, "error", err)
 		return
 	}
 	if err := m.servers.UpdateConfig(serverID, configJSON); err != nil {
-		log.Printf("Failed to clear tokens in DB for %s: %v", serverID, err)
+		slog.Error("failed to clear tokens in DB", "server_id", serverID, "error", err)
 	}
 
 	m.mu.Lock()

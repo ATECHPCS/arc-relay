@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -44,10 +44,10 @@ func NewManager(socket, networkName string) (*Manager, error) {
 	}
 	ping, err := probe.Ping(context.Background(), dclient.PingOptions{})
 	if err == nil && ping.APIVersion != "" {
-		log.Printf("Docker daemon API version: %s", ping.APIVersion)
+		slog.Info("docker daemon API version", "version", ping.APIVersion)
 		opts = append(opts, dclient.WithVersion(ping.APIVersion))
 	} else {
-		log.Printf("Warning: Docker ping failed (%v), using default API version", err)
+		slog.Warn("docker ping failed, using default API version", "error", err)
 	}
 	_ = probe.Close()
 
@@ -59,7 +59,7 @@ func NewManager(socket, networkName string) (*Manager, error) {
 	m := &Manager{cli: cli, networkName: networkName}
 
 	if err := m.ensureNetwork(context.Background()); err != nil {
-		log.Printf("Warning: could not ensure docker network %q: %v", networkName, err)
+		slog.Warn("could not ensure docker network", "network", networkName, "error", err)
 	}
 
 	return m, nil
@@ -178,7 +178,7 @@ func (m *Manager) StartContainer(ctx context.Context, cfg ContainerConfig) (stri
 func (m *Manager) StopContainer(ctx context.Context, containerID string) error {
 	timeout := 10
 	if _, err := m.cli.ContainerStop(ctx, containerID, dclient.ContainerStopOptions{Timeout: &timeout}); err != nil {
-		log.Printf("Warning: error stopping container %s: %v", containerID, err)
+		slog.Warn("error stopping container", "container", containerID, "error", err)
 	}
 	_, err := m.cli.ContainerRemove(ctx, containerID, dclient.ContainerRemoveOptions{Force: true})
 	return err
@@ -203,7 +203,7 @@ func (m *Manager) AttachStdio(ctx context.Context, containerID string) (io.Write
 	go func() {
 		_, err := stdcopy.StdCopy(stdoutW, io.Discard, resp.Reader)
 		if err != nil {
-			log.Printf("docker demux error for %s: %v", containerID[:12], err)
+			slog.Error("docker demux error", "container", containerID[:12], "error", err)
 		}
 		_ = stdoutW.Close()
 	}()
@@ -360,7 +360,7 @@ func parseBuildOutput(reader io.Reader) error {
 			return fmt.Errorf("%s", msg.Error)
 		}
 		if msg.Stream != "" {
-			log.Printf("[build] %s", strings.TrimRight(msg.Stream, "\n"))
+			slog.Debug("docker build output", "line", strings.TrimRight(msg.Stream, "\n"))
 		}
 	}
 }

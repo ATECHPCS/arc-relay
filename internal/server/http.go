@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -88,8 +88,39 @@ func (s *Server) routes() {
 	webHandlers.RegisterRoutes(s.mux)
 }
 
+// responseWriter wraps http.ResponseWriter to capture the status code and bytes written.
+type responseWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+	bytes       int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if !rw.wroteHeader {
+		rw.status = code
+		rw.wroteHeader = true
+	}
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.wroteHeader {
+		rw.status = http.StatusOK
+		rw.wroteHeader = true
+	}
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytes += n
+	return n, err
+}
+
+// Unwrap returns the underlying ResponseWriter for http.Flusher etc.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s %s", r.Method, r.URL.Path)
+	start := time.Now()
 
 	hub := sentry.GetHubFromContext(r.Context())
 	if hub == nil {
@@ -97,25 +128,42 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	hub.Scope().SetRequest(r)
 
+	rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+
 	defer func() {
 		if rv := recover(); rv != nil {
+			rw.status = http.StatusInternalServerError
 			hub.RecoverWithContext(r.Context(), rv)
 			sentry.Flush(2 * time.Second)
-			log.Printf("Panic recovered in %s %s: %v", r.Method, r.URL.Path, rv)
+			slog.Error("panic recovered", "method", r.Method, "path", r.URL.Path, "panic", rv)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
+
+		// Log access for every request, including panics.
+		level := slog.LevelInfo
+		if r.URL.Path == "/health" {
+			level = slog.LevelDebug
+		}
+		slog.Log(r.Context(), level, "http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"bytes", rw.bytes,
+			"remote", r.RemoteAddr,
+		)
 	}()
 
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'")
-	s.mux.ServeHTTP(w, r)
+	rw.Header().Set("X-Content-Type-Options", "nosniff")
+	rw.Header().Set("X-Frame-Options", "DENY")
+	rw.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	rw.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'")
+	s.mux.ServeHTTP(rw, r)
 }
 
 func (s *Server) ListenAndServe() error {
 	addr := s.cfg.Addr()
-	log.Printf("Arc Relay listening on %s", addr)
+	slog.Info("arc relay listening", "addr", addr)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           s,
@@ -182,7 +230,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 
 	srv, err := s.servers.GetByName(serverName)
 	if err != nil {
-		log.Printf("Error looking up server %s: %v", serverName, err)
+		slog.Error("error looking up server", "server", serverName, "err", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -218,7 +266,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	// Check if this is a notification (no "id" field)
 	_, hasID := raw["id"]
 	if !hasID {
-		log.Printf("Proxy %s: notification %s", serverName, method)
+		slog.Debug("proxy notification", "server", serverName, "method", method)
 		// Forward notification to backend if it supports it, then return 202
 		if notifier, ok := backend.(interface {
 			SendNotification(n *mcp.Notification) error
@@ -238,7 +286,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Proxy %s: request %s (id=%s)", serverName, mcpReq.Method, string(mcpReq.ID))
+	slog.Debug("proxy request", "server", serverName, "method", mcpReq.Method, "id", string(mcpReq.ID))
 
 	startTime := time.Now()
 	_, endpointName := extractEndpointName(mcpReq.Method, mcpReq.Params)
@@ -295,7 +343,7 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 	durationMs := time.Since(startTime).Milliseconds()
 
 	if err != nil {
-		log.Printf("Error proxying to server %s: %v", serverName, err)
+		slog.Error("error proxying to server", "server", serverName, "err", err)
 		if s.requestLogs != nil && methodShouldLog(mcpReq.Method) {
 			go s.logRequest(user, srv.ID, mcpReq.Method, endpointName, durationMs, "error", err.Error())
 		}
@@ -346,7 +394,7 @@ func (s *Server) logRequest(user *store.User, serverID, method, endpointName str
 		rl.UserID = user.ID
 	}
 	if err := s.requestLogs.Create(rl); err != nil {
-		log.Printf("Failed to log request: %v", err)
+		slog.Warn("failed to log request", "err", err)
 	}
 }
 
@@ -367,12 +415,13 @@ func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.
 	if user.ProfileID != nil && s.profileStore != nil {
 		allowed, err := s.profileStore.CheckPermission(*user.ProfileID, serverID, endpointType, endpointName)
 		if err != nil {
-			log.Printf("Profile permission check error: %v", err)
+			slog.Error("profile permission check error", "err", err)
 			return mcp.NewErrorResponse(req.ID, mcp.ErrCodeInternal, "permission check failed")
 		}
 		if !allowed {
-			log.Printf("Access denied: user %s (profile=%s) tried %s %s on server %s",
-				user.Username, *user.ProfileID, endpointType, endpointName, serverID)
+			slog.Warn("access denied",
+				"user", user.Username, "profile", *user.ProfileID,
+				"endpoint_type", endpointType, "endpoint", endpointName, "server_id", serverID)
 			return mcp.NewErrorResponse(req.ID, mcp.ErrCodeInternal, "access denied: not permitted by profile")
 		}
 		return nil
@@ -381,8 +430,9 @@ func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.
 	// Legacy tier-based check (keys without profile assignment)
 	tier := s.accessStore.GetTier(serverID, endpointType, endpointName)
 	if !s.accessStore.CheckAccess(user.AccessLevel, tier) {
-		log.Printf("Access denied: user %s (level=%s) tried %s %s (tier=%s)",
-			user.Username, user.AccessLevel, endpointType, endpointName, tier)
+		slog.Warn("access denied",
+			"user", user.Username, "level", user.AccessLevel,
+			"endpoint_type", endpointType, "endpoint", endpointName, "tier", tier)
 		return mcp.NewErrorResponse(req.ID, mcp.ErrCodeInternal,
 			fmt.Sprintf("access denied: requires %s level", tier))
 	}
@@ -413,7 +463,7 @@ func (s *Server) filterListResponse(resp *mcp.Response, method string, user *sto
 	// Get permitted endpoints for this user+server
 	perms, err := s.profileStore.GetPermissionsForServer(*user.ProfileID, serverID)
 	if err != nil {
-		log.Printf("Error fetching profile permissions for filtering: %v", err)
+		slog.Warn("error fetching profile permissions for filtering", "err", err)
 		return resp
 	}
 	permSet := make(map[string]bool)
@@ -458,8 +508,9 @@ func (s *Server) filterListResponse(resp *mcp.Response, method string, user *sto
 		}
 	}
 
-	log.Printf("Profile filter %s: %d → %d %s for user %s on server %s",
-		method, len(items), len(filtered), listKey, user.Username, serverID)
+	slog.Debug("profile filter applied",
+		"method", method, "before", len(items), "after", len(filtered),
+		"list_key", listKey, "user", user.Username, "server_id", serverID)
 
 	// Reconstruct the result with filtered list
 	if filtered == nil {
@@ -499,7 +550,7 @@ func (s *Server) listServers(w http.ResponseWriter, r *http.Request) {
 		if user.ProfileID != nil && s.profileStore != nil {
 			allowed, err := s.profileStore.ServerIDsForProfile(*user.ProfileID)
 			if err != nil {
-				log.Printf("Error getting server IDs for profile: %v", err)
+				slog.Warn("error getting server IDs for profile", "err", err)
 				allowed = nil
 			}
 			var filtered []*store.Server
@@ -692,7 +743,7 @@ func (s *Server) updateServer(w http.ResponseWriter, r *http.Request, id string)
 	}
 
 	if oldName != srv.Name {
-		log.Printf("Server %s slug renamed via API: %s -> %s", id, oldName, srv.Name)
+		slog.Info("server slug renamed via API", "server_id", id, "old_name", oldName, "new_name", srv.Name)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -115,7 +115,7 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 	}
 
 	// Ensure image exists (pull from registry for non-build images, verify for build images)
-	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
+	slog.Info("pulling image", "image", cfg.Image, "server", srv.Name)
 	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
 		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("pulling image: %w", err)
@@ -148,7 +148,7 @@ func (m *Manager) startStdio(ctx context.Context, srv *store.Server) error {
 	m.containers[srv.ID] = containerID
 	_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
-	log.Printf("Started stdio server %s (container %s)", srv.Name, containerID[:12])
+	slog.Info("started stdio server", "server", srv.Name, "container", containerID[:12])
 	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
 }
@@ -163,7 +163,7 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	if cfg.URL != "" {
 		m.backends[srv.ID] = NewHTTPProxy(cfg.URL)
 		_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
-		log.Printf("Connected to external HTTP server %s at %s", srv.Name, cfg.URL)
+		slog.Info("connected to external HTTP server", "server", srv.Name, "url", cfg.URL)
 		m.enumerateAsync(srv.ID, srv.Name)
 		return nil
 	}
@@ -171,7 +171,7 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	// Docker-managed HTTP server
 	_ = m.servers.UpdateStatus(srv.ID, store.StatusStarting, "")
 
-	log.Printf("Pulling image %s for server %s...", cfg.Image, srv.Name)
+	slog.Info("pulling image", "image", cfg.Image, "server", srv.Name)
 	if err := m.docker.EnsureImage(ctx, cfg.Image); err != nil {
 		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, err.Error())
 		return fmt.Errorf("pulling image: %w", err)
@@ -201,7 +201,7 @@ func (m *Manager) startHTTP(ctx context.Context, srv *store.Server) error {
 	m.containers[srv.ID] = containerID
 	_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
-	log.Printf("Started HTTP server %s (container %s, port %s)", srv.Name, containerID[:12], hostPort)
+	slog.Info("started HTTP server", "server", srv.Name, "container", containerID[:12], "port", hostPort)
 	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
 }
@@ -223,7 +223,7 @@ func (m *Manager) startRemote(ctx context.Context, srv *store.Server) error {
 	m.backends[srv.ID] = NewRemoteProxy(srv.ID, cfg, m.OAuthManager)
 	_ = m.servers.UpdateStatus(srv.ID, store.StatusRunning, "")
 
-	log.Printf("Connected to remote server %s at %s", srv.Name, cfg.URL)
+	slog.Info("connected to remote server", "server", srv.Name, "url", cfg.URL)
 	m.enumerateAsync(srv.ID, srv.Name)
 	return nil
 }
@@ -242,7 +242,7 @@ func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg
 	defer mu.Unlock()
 
 	if !force && m.docker.ImageExists(ctx, tag) {
-		log.Printf("Image %s already exists for server %s, skipping build", tag, srv.Name)
+		slog.Info("image already exists, skipping build", "image", tag, "server", srv.Name)
 		return nil
 	}
 
@@ -259,7 +259,7 @@ func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg
 		return fmt.Errorf("generating Dockerfile: %w", err)
 	}
 
-	log.Printf("Building image %s for server %s...", tag, srv.Name)
+	slog.Info("building image", "image", tag, "server", srv.Name)
 	if err := m.docker.BuildImage(ctx, dockerfile, tag, force); err != nil {
 		_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
 		return fmt.Errorf("building image: %w", err)
@@ -270,7 +270,7 @@ func (m *Manager) buildImageIfNeeded(ctx context.Context, srv *store.Server, cfg
 	updatedConfig, _ := json.Marshal(cfg)
 	_ = m.servers.UpdateConfig(srv.ID, updatedConfig)
 
-	log.Printf("Built image %s for server %s", tag, srv.Name)
+	slog.Info("built image", "image", tag, "server", srv.Name)
 	return nil
 }
 
@@ -298,7 +298,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 	}
 	args = append(args, "--", build.GitURL, tmpDir)
 
-	log.Printf("Cloning %s (ref: %s) for server %s...", build.GitURL, build.GitRef, srv.Name)
+	slog.Info("cloning git repo", "url", build.GitURL, "ref", build.GitRef, "server", srv.Name)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0",
@@ -315,14 +315,14 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
 	if _, err := os.Stat(dockerfilePath); err == nil {
 		// Build using repo's own Dockerfile with full repo as context
-		log.Printf("Building image %s from repo Dockerfile for server %s...", tag, srv.Name)
+		slog.Info("building image from repo Dockerfile", "image", tag, "server", srv.Name)
 		if err := m.docker.BuildImageFromContext(ctx, tmpDir, "Dockerfile", tag, noCache); err != nil {
 			_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Image build failed: "+err.Error())
 			return fmt.Errorf("building image from context: %w", err)
 		}
 	} else {
 		// No Dockerfile in repo — fall back to generated template
-		log.Printf("No Dockerfile in repo, using generated template for server %s", srv.Name)
+		slog.Info("no Dockerfile in repo, using generated template", "server", srv.Name)
 		dockerfile, err := dockermgr.GenerateDockerfile(build.Runtime, "", "", build.GitURL, "")
 		if err != nil {
 			_ = m.servers.UpdateStatus(srv.ID, store.StatusError, "Dockerfile generation failed: "+err.Error())
@@ -339,7 +339,7 @@ func (m *Manager) buildFromGitRepo(ctx context.Context, srv *store.Server, cfg *
 	updatedConfig, _ := json.Marshal(cfg)
 	_ = m.servers.UpdateConfig(srv.ID, updatedConfig)
 
-	log.Printf("Built image %s for server %s", tag, srv.Name)
+	slog.Info("built image", "image", tag, "server", srv.Name)
 	return nil
 }
 
@@ -385,7 +385,7 @@ func (m *Manager) EnumerateServer(ctx context.Context, serverID string) (*mcp.Se
 
 	endpoints, err := mcp.Enumerate(ctx, backend)
 	if err != nil {
-		log.Printf("Enumeration failed for server %s: %v", serverID, err)
+		slog.Warn("enumeration failed", "server_id", serverID, "err", err)
 	}
 	m.Endpoints.Set(serverID, endpoints)
 
@@ -420,16 +420,16 @@ func (m *Manager) enumerateAsync(serverID, serverName string) {
 
 		endpoints, err := m.EnumerateServer(ctx, serverID)
 		if err != nil {
-			log.Printf("Background enumeration failed for %s: %v", serverName, err)
+			slog.Warn("background enumeration failed", "server", serverName, "err", err)
 			return
 		}
 
 		toolCount := len(endpoints.Tools)
 		resourceCount := len(endpoints.Resources)
 		promptCount := len(endpoints.Prompts)
-		log.Printf("Enumerated %s: %d tools, %d resources, %d prompts (server: %s v%s)",
-			serverName, toolCount, resourceCount, promptCount,
-			endpoints.ServerInfo.Name, endpoints.ServerInfo.Version)
+		slog.Info("enumerated server",
+			"server", serverName, "tools", toolCount, "resources", resourceCount, "prompts", promptCount,
+			"server_name", endpoints.ServerInfo.Name, "server_version", endpoints.ServerInfo.Version)
 	}()
 }
 
@@ -450,7 +450,7 @@ func (m *Manager) StopServer(ctx context.Context, serverID string) error {
 	// Stop container if managed
 	if containerID, ok := m.containers[serverID]; ok {
 		if err := m.docker.StopContainer(ctx, containerID); err != nil {
-			log.Printf("Error stopping container for server %s: %v", serverID, err)
+			slog.Warn("error stopping container", "server_id", serverID, "err", err)
 		}
 		delete(m.containers, serverID)
 	}
@@ -513,7 +513,7 @@ func (m *Manager) PullAndRecreateContainer(ctx context.Context, srv *store.Serve
 	if image == "" {
 		return fmt.Errorf("server has no Docker image configured")
 	}
-	log.Printf("Pulling latest image %s for server %s...", image, srv.Name)
+	slog.Info("pulling latest image", "image", image, "server", srv.Name)
 	if err := m.docker.PullImage(ctx, image); err != nil {
 		return fmt.Errorf("pulling image: %w", err)
 	}
@@ -580,7 +580,7 @@ func (m *Manager) StopAll(ctx context.Context) {
 
 	for _, id := range serverIDs {
 		if err := m.StopServer(ctx, id); err != nil {
-			log.Printf("Error stopping server %s: %v", id, err)
+			slog.Warn("error stopping server", "server_id", id, "err", err)
 		}
 	}
 }
