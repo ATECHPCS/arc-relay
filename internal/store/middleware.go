@@ -138,7 +138,11 @@ func (s *MiddlewareStore) Get(id string) (*MiddlewareConfig, error) {
 // Upsert creates or updates a middleware config for a server (or global if serverID is nil).
 func (s *MiddlewareStore) Upsert(mc *MiddlewareConfig) error {
 	if mc.ID == "" {
-		mc.ID = generateID()
+		id, err := generateID()
+		if err != nil {
+			return err
+		}
+		mc.ID = id
 	}
 	now := time.Now()
 	mc.UpdatedAt = now
@@ -163,9 +167,12 @@ func (s *MiddlewareStore) Upsert(mc *MiddlewareConfig) error {
 // UpsertEnabled creates or updates a middleware config's enabled state for a server
 // without overwriting the config field. If the row doesn't exist, it's created with empty config.
 func (s *MiddlewareStore) UpsertEnabled(serverID, middleware string, enabled bool, priority int) error {
-	id := generateID()
+	id, err := generateID()
+	if err != nil {
+		return err
+	}
 	now := time.Now()
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		INSERT INTO middleware_configs (id, server_id, middleware, enabled, config, priority, created_at, updated_at)
 		VALUES (?, ?, ?, ?, '{}', ?, ?, ?)
 		ON CONFLICT(server_id, middleware) DO UPDATE SET
@@ -208,7 +215,10 @@ func (s *MiddlewareStore) UpsertGlobal(mc *MiddlewareConfig) error {
 			WHERE id = ?
 		`, mc.Enabled, string(mc.Config), mc.Priority, now, existing.ID)
 	} else {
-		id := generateID()
+		id, idErr := generateID()
+		if idErr != nil {
+			return idErr
+		}
 		_, err = s.db.Exec(`
 			INSERT INTO middleware_configs (id, server_id, middleware, enabled, config, priority, created_at, updated_at)
 			VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
@@ -217,10 +227,12 @@ func (s *MiddlewareStore) UpsertGlobal(mc *MiddlewareConfig) error {
 	return err
 }
 
-func generateID() string {
+func generateID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating ID: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Delete removes a middleware config.
@@ -232,7 +244,11 @@ func (s *MiddlewareStore) Delete(id string) error {
 // LogEvent records a middleware event.
 func (s *MiddlewareStore) LogEvent(evt *MiddlewareEvent) error {
 	if evt.ID == "" {
-		evt.ID = generateID()
+		id, err := generateID()
+		if err != nil {
+			return err
+		}
+		evt.ID = id
 	}
 	_, err := s.db.Exec(`
 		INSERT INTO middleware_events (id, timestamp, server_id, middleware, event_type, summary, request_method, endpoint_name, user_id)
