@@ -285,8 +285,12 @@ func (h *Handlers) handleDeviceAuthPageGet(w http.ResponseWriter, r *http.Reques
 	}
 
 	// After POST approval redirect, show success without re-creating anything.
-	if r.URL.Query().Get("approved") == "1" {
-		data["Approved"] = true
+	// Validate the flash nonce to prevent forging the approved state.
+	if nonce := r.URL.Query().Get("approved"); nonce != "" {
+		if _, ok := h.flashKeys.LoadAndDelete("device-approved-" + nonce); ok {
+			data["Approved"] = true
+		}
+		// If nonce is invalid/expired, just show the normal page
 		h.render(w, r, "device_auth.html", data)
 		return
 	}
@@ -371,7 +375,19 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	slog.Debug("device auth: approved", "user", user.Username)
 
 	// Redirect to prevent duplicate key creation on browser refresh.
-	http.Redirect(w, r, "/auth/device?approved=1", http.StatusFound)
+	// Use a flash nonce to prevent forging the approved state.
+	nonce, err := generateID()
+	if err != nil {
+		log.Printf("Device auth: failed to generate flash nonce: %v", err)
+		http.Redirect(w, r, "/auth/device", http.StatusFound)
+		return
+	}
+	h.flashKeys.Store("device-approved-"+nonce, true)
+	go func() {
+		time.Sleep(60 * time.Second)
+		h.flashKeys.Delete("device-approved-" + nonce)
+	}()
+	http.Redirect(w, r, "/auth/device?approved="+nonce, http.StatusFound)
 }
 
 // --- Install script handler ---

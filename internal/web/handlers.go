@@ -1462,6 +1462,11 @@ func (h *Handlers) handleCreateAccountInvite(w http.ResponseWriter, r *http.Requ
 	}
 	h.flashKeys.Store("invite-cmd-"+nonce, installCmd)
 	h.flashKeys.Store("invite-link-"+nonce, inviteLink)
+	go func() {
+		time.Sleep(60 * time.Second)
+		h.flashKeys.Delete("invite-cmd-" + nonce)
+		h.flashKeys.Delete("invite-link-" + nonce)
+	}()
 	http.Redirect(w, r, "/users?invite="+nonce, http.StatusFound)
 }
 
@@ -1883,6 +1888,8 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 	if nonce := r.URL.Query().Get("new"); nonce != "" {
 		if rawKey, ok := h.flashKeys.LoadAndDelete(nonce); ok {
 			data["NewKey"] = rawKey
+		} else {
+			data["Flash"] = "Your API key was created, but its secret value can no longer be displayed. Please revoke it and create a new one if needed."
 		}
 	}
 	h.render(w, r, "api_keys.html", data)
@@ -1928,6 +1935,10 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.flashKeys.Store(nonce, rawKey)
+		go func() {
+			time.Sleep(60 * time.Second)
+			h.flashKeys.Delete(nonce)
+		}()
 		http.Redirect(w, r, "/api-keys?new="+nonce, http.StatusFound)
 		return
 	}
