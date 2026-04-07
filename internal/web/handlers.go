@@ -148,6 +148,7 @@ type Handlers struct {
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
 	loginLimiter    *loginRateLimiter
+	flashKeys       sync.Map // nonce -> raw API key (shown once after redirect)
 }
 
 func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore) *Handlers {
@@ -1337,6 +1338,27 @@ func (h *Handlers) handleUsers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Admin access required", http.StatusForbidden)
 		return
 	}
+	// Consume one-time invite flash nonce from Post-Redirect-Get.
+	if nonce := r.URL.Query().Get("invite"); nonce != "" {
+		users, _ := h.users.List()
+		profiles, _ := h.profileStore.List()
+		pendingInvites, _ := h.inviteStore.ListPending()
+		data := map[string]any{
+			"Nav":            "users",
+			"User":           user,
+			"Users":          users,
+			"Profiles":       profiles,
+			"PendingInvites": pendingInvites,
+		}
+		if cmd, ok := h.flashKeys.LoadAndDelete("invite-cmd-" + nonce); ok {
+			data["InviteCmd"] = cmd
+		}
+		if link, ok := h.flashKeys.LoadAndDelete("invite-link-" + nonce); ok {
+			data["InviteLink"] = link
+		}
+		h.render(w, r, "users.html", data)
+		return
+	}
 	h.renderUsersList(w, r, "")
 }
 
@@ -1430,18 +1452,22 @@ func (h *Handlers) handleCreateAccountInvite(w http.ResponseWriter, r *http.Requ
 	inviteLink := fmt.Sprintf("%s/invite/%s", baseURL, rawToken)
 	installCmd := fmt.Sprintf("curl -fsSL %s/install.sh | bash -s -- --token %s", baseURL, rawToken)
 
-	users, _ := h.users.List()
-	profiles, _ := h.profileStore.List()
-	pendingInvites, _ := h.inviteStore.ListPending()
-	h.render(w, r, "users.html", map[string]any{
-		"Nav":            "users",
-		"User":           admin,
-		"Users":          users,
-		"Profiles":       profiles,
-		"PendingInvites": pendingInvites,
-		"InviteCmd":      installCmd,
-		"InviteLink":     inviteLink,
-	})
+	// Store invite details in flash and redirect (Post-Redirect-Get) to
+	// prevent duplicate invite creation on browser refresh.
+	nonce, err := generateID()
+	if err != nil {
+		slog.Error("error generating flash nonce", "err", err)
+		http.Redirect(w, r, "/users", http.StatusFound)
+		return
+	}
+	h.flashKeys.Store("invite-cmd-"+nonce, installCmd)
+	h.flashKeys.Store("invite-link-"+nonce, inviteLink)
+	go func() {
+		time.Sleep(60 * time.Second)
+		h.flashKeys.Delete("invite-cmd-" + nonce)
+		h.flashKeys.Delete("invite-link-" + nonce)
+	}()
+	http.Redirect(w, r, "/users?invite="+nonce, http.StatusFound)
 }
 
 // handleInviteExchange handles POST /api/auth/invite - creates account and returns API key.
@@ -1853,9 +1879,20 @@ func (h *Handlers) handleAPIKeys(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, r, "api_keys.html", map[string]any{
+	data := map[string]any{
 		"Nav": "apikeys", "User": user, "Keys": keys, "Profiles": profiles,
-	})
+	}
+	// Consume one-time flash nonce to display newly created key.
+	// LoadAndDelete ensures the key is shown only once; refreshing
+	// the redirected URL won't re-display it.
+	if nonce := r.URL.Query().Get("new"); nonce != "" {
+		if rawKey, ok := h.flashKeys.LoadAndDelete(nonce); ok {
+			data["NewKey"] = rawKey
+		} else {
+			data["Flash"] = "Your API key was created, but its secret value can no longer be displayed. Please revoke it and create a new one if needed."
+		}
+	}
+	h.render(w, r, "api_keys.html", data)
 }
 
 func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
@@ -1889,19 +1926,20 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/api-keys", http.StatusFound)
 			return
 		}
-		keys, _ := h.users.ListAPIKeys(user.ID)
-		// Use same profile filtering as the list view
-		var profiles []*store.AgentProfile
-		if user.Role == "admin" {
-			profiles, _ = h.profileStore.List()
-		} else if user.DefaultProfileID != nil {
-			if p, err := h.profileStore.Get(*user.DefaultProfileID); err == nil {
-				profiles = []*store.AgentProfile{p}
-			}
+		// Store key in flash and redirect (Post-Redirect-Get) to prevent
+		// duplicate key creation on browser refresh.
+		nonce, err := generateID()
+		if err != nil {
+			slog.Error("error generating flash nonce", "err", err)
+			http.Redirect(w, r, "/api-keys", http.StatusFound)
+			return
 		}
-		h.render(w, r, "api_keys.html", map[string]any{
-			"Nav": "apikeys", "User": user, "Keys": keys, "NewKey": rawKey, "Profiles": profiles,
-		})
+		h.flashKeys.Store(nonce, rawKey)
+		go func() {
+			time.Sleep(60 * time.Second)
+			h.flashKeys.Delete(nonce)
+		}()
+		http.Redirect(w, r, "/api-keys?new="+nonce, http.StatusFound)
 		return
 	}
 
