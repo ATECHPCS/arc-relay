@@ -15,8 +15,14 @@ type Config struct {
 	Docker     DockerConfig     `toml:"docker"`
 	Encryption EncryptionConfig `toml:"encryption"`
 	Auth       AuthConfig       `toml:"auth"`
+	LLM        LLMConfig        `toml:"llm"`
 	SentryDSN  string           `toml:"sentry_dsn"`
 	LogLevel   string           `toml:"log_level"`
+}
+
+type LLMConfig struct {
+	APIKey string `toml:"api_key"`
+	Model  string `toml:"model"`
 }
 
 type ServerConfig struct {
@@ -92,6 +98,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("ARC_RELAY_BASE_URL"); v != "" {
 		cfg.Server.BaseURL = v
+	}
+	if v := os.Getenv("ARC_RELAY_LLM_API_KEY"); v != "" {
+		cfg.LLM.APIKey = v
+	}
+	if v := os.Getenv("ARC_RELAY_LLM_MODEL"); v != "" {
+		cfg.LLM.Model = v
 	}
 	if v := os.Getenv("ARC_RELAY_SENTRY_DSN"); v != "" {
 		cfg.SentryDSN = v

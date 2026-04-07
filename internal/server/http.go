@@ -14,6 +14,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	"github.com/comma-compliance/arc-relay/internal/config"
+	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
@@ -38,11 +39,14 @@ type Server struct {
 	healthMon       *proxy.HealthMonitor
 	inviteStore     *store.InviteStore
 	oauthTokenStore *store.OAuthTokenStore
+	optimizeStore   *store.OptimizeStore
+	llmClient       *llm.Client
+	optimizer       *middleware.Optimizer
 	mux             *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client) *Server {
 	s := &Server{
 		cfg:             cfg,
 		servers:         servers,
@@ -58,6 +62,9 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		healthMon:       healthMon,
 		inviteStore:     inviteStore,
 		oauthTokenStore: oauthTokenStore,
+		optimizeStore:   optimizeStore,
+		llmClient:       llmClient,
+		optimizer:       middleware.NewOptimizer(optimizeStore, servers),
 		mux:             http.NewServeMux(),
 	}
 	s.routes()
@@ -83,7 +90,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
@@ -367,6 +374,18 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Apply tool optimization if enabled for this server
+	if s.optimizer != nil && mcpReq.Method == "tools/list" {
+		if mwMeta == nil {
+			mwMeta = &middleware.RequestMeta{
+				ServerID:   srv.ID,
+				ServerName: srv.Name,
+				Method:     mcpReq.Method,
+			}
+		}
+		resp, _ = s.optimizer.ProcessResponse(r.Context(), &mcpReq, resp, mwMeta)
+	}
+
 	// Filter list responses to only include endpoints the user has permission for
 	if user != nil && user.ProfileID != nil && s.profileStore != nil {
 		resp = s.filterListResponse(resp, mcpReq.Method, user, srv.ID)
@@ -639,7 +658,7 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 	// Management actions are admin-only (no further access check needed since admin bypasses)
 	if len(parts) > 1 {
 		switch parts[1] {
-		case "start", "stop", "enumerate":
+		case "start", "stop", "enumerate", "optimize", "optimize-toggle":
 			if !requireAdminAccess(w, r) {
 				return
 			}
@@ -651,6 +670,10 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 				s.stopServer(w, r, id)
 			case "enumerate":
 				s.enumerateServer(w, r, id)
+			case "optimize":
+				s.runOptimize(w, r, id)
+			case "optimize-toggle":
+				s.toggleOptimize(w, r, id)
 			}
 			return
 		}
@@ -666,6 +689,8 @@ func (s *Server) handleServerByID(w http.ResponseWriter, r *http.Request) {
 			s.getEndpoints(w, r, id)
 		case "health":
 			s.checkServerHealth(w, r, id)
+		case "tool-audit":
+			s.getToolAudit(w, r, id)
 		default:
 			http.Error(w, `{"error":"unknown action"}`, http.StatusNotFound)
 		}
@@ -866,4 +891,190 @@ func (s *Server) getEndpoints(w http.ResponseWriter, r *http.Request, id string)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(endpoints)
+}
+
+func (s *Server) getToolAudit(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	srv, err := s.servers.Get(id)
+	if err != nil || srv == nil {
+		http.Error(w, `{"error":"server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	endpoints := s.proxy.Endpoints.Get(id)
+	if endpoints == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mcp.ToolAudit{
+			ServerID:   id,
+			ServerName: srv.Name,
+			Status:     "no_endpoints",
+		})
+		return
+	}
+
+	stats, totalChars := mcp.AuditTools(endpoints.Tools)
+	toolsHash := mcp.HashTools(endpoints.Tools)
+
+	audit := mcp.ToolAudit{
+		ServerID:      id,
+		ServerName:    srv.Name,
+		ToolCount:     len(endpoints.Tools),
+		OriginalChars: totalChars,
+		EstTokens:     totalChars / 4,
+		ToolsHash:     toolsHash,
+		Tools:         stats,
+		Status:        "none",
+	}
+
+	// Check optimization status
+	if s.optimizeStore != nil {
+		opt, err := s.optimizeStore.Get(id)
+		if err == nil && opt != nil {
+			audit.HasOptimized = true
+			audit.Status = opt.Status
+			audit.IsStale = opt.Status == "stale"
+			if opt.Status == "ready" || opt.Status == "stale" {
+				audit.OptimizedChars = opt.OptimizedChars
+				if totalChars > 0 {
+					audit.SavingsPercent = float64(totalChars-opt.OptimizedChars) / float64(totalChars) * 100
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(audit)
+}
+
+func (s *Server) runOptimize(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.llmClient == nil || !s.llmClient.Available() {
+		http.Error(w, `{"error":"LLM client not configured (set ARC_RELAY_LLM_API_KEY)"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	srv, err := s.servers.Get(id)
+	if err != nil || srv == nil {
+		http.Error(w, `{"error":"server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	endpoints := s.proxy.Endpoints.Get(id)
+	if endpoints == nil || len(endpoints.Tools) == 0 {
+		http.Error(w, `{"error":"no tools cached - start and enumerate the server first"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Check for concurrent run
+	if s.optimizeStore != nil {
+		existing, err := s.optimizeStore.Get(id)
+		if err == nil && existing != nil && existing.Status == "running" {
+			http.Error(w, `{"error":"optimization already in progress"}`, http.StatusConflict)
+			return
+		}
+	}
+
+	// Mark as running
+	tools := endpoints.Tools
+	toolsHash := mcp.HashTools(tools)
+	_, totalChars := mcp.AuditTools(tools)
+
+	if err := s.optimizeStore.Upsert(&store.ToolOptimization{
+		ServerID:      id,
+		ToolsHash:     toolsHash,
+		OriginalChars: totalChars,
+		Status:        "running",
+		PromptVersion: mcp.PromptVersion,
+		Model:         s.llmClient.Model(),
+	}); err != nil {
+		slog.Error("failed to mark optimization as running", "server_id", id, "err", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Run optimization in background
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		optimized, err := mcp.OptimizeTools(ctx, s.llmClient, tools)
+		if err != nil {
+			slog.Error("tool optimization failed", "server_id", id, "server", srv.Name, "err", err)
+			_ = s.optimizeStore.SetStatus(id, "error", err.Error())
+			return
+		}
+
+		optimizedJSON, err := json.Marshal(optimized)
+		if err != nil {
+			slog.Error("failed to marshal optimized tools", "server_id", id, "err", err)
+			_ = s.optimizeStore.SetStatus(id, "error", "marshal error: "+err.Error())
+			return
+		}
+
+		optChars := 0
+		for _, t := range optimized {
+			optChars += len(t.Description) + len(t.InputSchema)
+		}
+
+		if err := s.optimizeStore.Upsert(&store.ToolOptimization{
+			ServerID:       id,
+			ToolsHash:      toolsHash,
+			OriginalChars:  totalChars,
+			OptimizedChars: optChars,
+			OptimizedTools: optimizedJSON,
+			PromptVersion:  mcp.PromptVersion,
+			Model:          s.llmClient.Model(),
+			Status:         "ready",
+		}); err != nil {
+			slog.Error("failed to save optimization result", "server_id", id, "err", err)
+			return
+		}
+
+		savings := 0.0
+		if totalChars > 0 {
+			savings = float64(totalChars-optChars) / float64(totalChars) * 100
+		}
+		slog.Info("tool optimization complete",
+			"server_id", id, "server", srv.Name,
+			"tools", len(optimized),
+			"original_chars", totalChars, "optimized_chars", optChars,
+			"savings_percent", fmt.Sprintf("%.1f%%", savings),
+		)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
+}
+
+func (s *Server) toggleOptimize(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.servers.SetOptimizeEnabled(id, req.Enabled); err != nil {
+		slog.Error("failed to toggle optimize", "server_id", id, "enabled", req.Enabled, "err", err)
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("optimize toggled", "server_id", id, "enabled", req.Enabled)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"enabled": req.Enabled})
 }

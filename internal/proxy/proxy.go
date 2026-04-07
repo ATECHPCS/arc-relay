@@ -43,6 +43,9 @@ type Manager struct {
 	// OAuth manager for remote servers with OAuth auth
 	OAuthManager *oauth.Manager
 
+	// Optimize store for stale-checking after enumeration
+	OptimizeStore *store.OptimizeStore
+
 	// Per-server build locks to prevent concurrent rebuild races
 	buildLocks sync.Map // server ID -> *sync.Mutex
 }
@@ -392,6 +395,16 @@ func (m *Manager) EnumerateServer(ctx context.Context, serverID string) (*mcp.Se
 	// Sync access tiers after enumeration
 	if m.AccessStore != nil && endpoints != nil {
 		m.syncAccessTiers(serverID, endpoints)
+	}
+
+	// Check if tool optimization is stale after enumeration
+	if m.OptimizeStore != nil && endpoints != nil && len(endpoints.Tools) > 0 {
+		currentHash := mcp.HashTools(endpoints.Tools)
+		if stale, err := m.OptimizeStore.MarkStale(serverID, currentHash); err != nil {
+			slog.Warn("optimize: failed to check staleness", "server", serverID, "err", err)
+		} else if stale {
+			slog.Info("optimize: tools changed - optimization marked stale", "server", serverID)
+		}
 	}
 
 	return endpoints, err
