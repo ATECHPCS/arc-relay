@@ -42,7 +42,7 @@ type ArchiveQueueStatus struct {
 
 // ArchiveQueueStore provides CRUD for the archive_queue table.
 type ArchiveQueueStore struct {
-	db      *DB
+	db        *DB
 	encryptor *ConfigEncryptor
 }
 
