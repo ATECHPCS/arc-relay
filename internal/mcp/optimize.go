@@ -262,12 +262,18 @@ func OptimizeTools(ctx context.Context, client *llm.Client, tools []Tool) ([]Too
 		seenNames[t.Name] = true
 	}
 
-	// Per-tool safety: if the LLM expanded a tool, keep the original
+	// Per-tool safety: if the LLM expanded a tool, keep the pruned original.
+	// Match by name, not position, since the LLM may reorder output.
+	prunedByName := make(map[string]Tool, len(pruned))
+	for _, t := range pruned {
+		prunedByName[t.Name] = t
+	}
 	for i, opt := range optimized {
+		orig := prunedByName[opt.Name]
 		optSize := len(opt.Description) + len(opt.InputSchema)
-		origSize := len(pruned[i].Description) + len(pruned[i].InputSchema)
+		origSize := len(orig.Description) + len(orig.InputSchema)
 		if optSize >= origSize {
-			optimized[i] = pruned[i]
+			optimized[i] = orig
 		}
 	}
 
