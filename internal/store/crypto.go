@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 )
 
@@ -20,9 +21,10 @@ type ConfigEncryptor struct {
 }
 
 // NewConfigEncryptor creates an encryptor from a passphrase.
-// An empty key disables encryption (passthrough mode).
+// An empty key disables encryption (passthrough mode) with a warning.
 func NewConfigEncryptor(key string) *ConfigEncryptor {
 	if key == "" {
+		slog.Warn("encryption key not set - credentials will be stored in plaintext. Set ARC_RELAY_ENCRYPTION_KEY for production use.")
 		return &ConfigEncryptor{}
 	}
 	// Derive a 32-byte key from the passphrase using SHA-256

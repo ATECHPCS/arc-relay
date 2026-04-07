@@ -1,8 +1,8 @@
 # Binaries (root only, not cmd/ directories)
 /arc-relay
 /arc-sync
-/mcp-wrangler
-/mcp-sync
+/mcp-wrangler   # legacy binary name (pre-1.0)
+/mcp-sync       # legacy binary name (pre-1.0)
 !/cmd/arc-relay/
 
 # Database

@@ -507,7 +507,15 @@ func (m *Manager) tokenRequest(ctx context.Context, tokenURL string, data url.Va
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
+		// Extract only error fields - never log the full body which may contain tokens
+		var errResp struct {
+			Error       string `json:"error"`
+			Description string `json:"error_description"`
+		}
+		if json.Unmarshal(body, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("token endpoint returned %d: %s: %s", resp.StatusCode, errResp.Error, errResp.Description)
+		}
+		return nil, fmt.Errorf("token endpoint returned %d", resp.StatusCode)
 	}
 
 	var tokenResp struct {
@@ -521,7 +529,8 @@ func (m *Manager) tokenRequest(ctx context.Context, tokenURL string, data url.Va
 	}
 
 	if tokenResp.AccessToken == "" {
-		return nil, fmt.Errorf("no access_token in response: %s", string(body))
+		// Do not log the response body - it may contain refresh tokens or other secrets
+		return nil, fmt.Errorf("no access_token in token endpoint response (HTTP %d)", resp.StatusCode)
 	}
 
 	ts := &TokenSet{

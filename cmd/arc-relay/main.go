@@ -107,7 +107,7 @@ func main() {
 
 	// Initialize middleware
 	middlewareStore := store.NewMiddlewareStore(db)
-	archiveQueueStore := store.NewArchiveQueueStore(db)
+	archiveQueueStore := store.NewArchiveQueueStore(db, crypto)
 	archiveEventLogger := func(evt *store.MiddlewareEvent) {
 		if err := middlewareStore.LogEvent(evt); err != nil {
 			slog.Warn("archive dispatcher: failed to log event", "err", err)

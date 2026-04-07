@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -40,12 +42,14 @@ type ArchiveQueueStatus struct {
 
 // ArchiveQueueStore provides CRUD for the archive_queue table.
 type ArchiveQueueStore struct {
-	db *DB
+	db      *DB
+	encryptor *ConfigEncryptor
 }
 
 // NewArchiveQueueStore creates a new ArchiveQueueStore.
-func NewArchiveQueueStore(db *DB) *ArchiveQueueStore {
-	return &ArchiveQueueStore{db: db}
+// The encryptor is used to encrypt/decrypt auth_value at rest.
+func NewArchiveQueueStore(db *DB, encryptor *ConfigEncryptor) *ArchiveQueueStore {
+	return &ArchiveQueueStore{db: db, encryptor: encryptor}
 }
 
 // Enqueue inserts a new payload into the queue for immediate delivery.
@@ -57,11 +61,20 @@ func (s *ArchiveQueueStore) Enqueue(item *ArchiveQueueItem) error {
 		}
 		item.ID = id
 	}
+	// Encrypt auth_value before storing
+	authValue := item.AuthValue
+	if authValue != "" && s.encryptor != nil {
+		encrypted, err := s.encryptor.Encrypt([]byte(authValue))
+		if err != nil {
+			return fmt.Errorf("encrypting auth_value: %w", err)
+		}
+		authValue = string(encrypted)
+	}
 	now := sqliteTime(time.Now())
 	_, err := s.db.Exec(`
 		INSERT INTO archive_queue (id, server_id, created_at, payload, url, auth_type, auth_value, api_key_header, status, attempts, next_attempt_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)
-	`, item.ID, item.ServerID, now, item.Payload, item.URL, item.AuthType, item.AuthValue, item.APIKeyHeader, now)
+	`, item.ID, item.ServerID, now, item.Payload, item.URL, item.AuthType, authValue, item.APIKeyHeader, now)
 	return err
 }
 
@@ -102,6 +115,18 @@ func (s *ArchiveQueueStore) DequeueDue(limit int) ([]*ArchiveQueueItem, error) {
 		}
 		if lastError.Valid {
 			item.LastError = lastError.String
+		}
+		// Decrypt auth_value if encrypted
+		if item.AuthValue != "" && s.encryptor != nil {
+			decrypted, err := s.encryptor.Decrypt([]byte(item.AuthValue))
+			if err != nil {
+				// Log and skip this row rather than blocking the entire batch.
+				// This handles key rotation or corruption gracefully.
+				slog.Error("archive queue: cannot decrypt auth_value, holding item", "item_id", item.ID, "error", err)
+				_ = s.MarkHold(item.ID, "decrypt failed: "+err.Error())
+				continue
+			}
+			item.AuthValue = string(decrypted)
 		}
 		items = append(items, item)
 	}

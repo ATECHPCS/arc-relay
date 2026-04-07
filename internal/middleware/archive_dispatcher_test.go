@@ -26,7 +26,7 @@ func noTickTicker() func(time.Duration) (<-chan time.Time, func()) {
 func newDispatcher(t *testing.T, handler http.Handler) (*middleware.ArchiveDispatcher, *store.ArchiveQueueStore, *httptest.Server) {
 	t.Helper()
 	db := testutil.OpenTestFileDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	d := middleware.NewArchiveDispatcher(qs, nil)
@@ -179,7 +179,7 @@ func TestDispatcher_CircuitBreaker_ClosesOnSuccess(t *testing.T) {
 	})
 
 	db := testutil.OpenTestFileDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
@@ -345,7 +345,7 @@ func TestDispatcher_StartupReplay(t *testing.T) {
 	})
 
 	db := testutil.OpenTestFileDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
