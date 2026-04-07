@@ -2,6 +2,20 @@
 
 All notable changes to Arc Relay (formerly MCP Wrangler) are documented here.
 
+## [Unreleased]
+
+### Added
+- **Tool Context Optimizer** - LLM-powered tool definition compression to reduce context token usage
+  - Per-server opt-in: audit tool sizes, run LLM optimization, toggle serving optimized tools
+  - Deterministic JSON Schema pruning plus LLM-based description compression via Anthropic API
+  - Hash-based invalidation detects upstream tool changes, marks optimizations stale
+  - Optimizer middleware intercepts tools/list responses when enabled
+  - Before/after tool details table with per-tool savings and red/green coloring
+  - Concurrent run guard, adaptive batch sizing for large schemas
+  - Config: `ARC_RELAY_LLM_API_KEY`, `ARC_RELAY_LLM_MODEL` env vars
+  - Migration 014: `tool_optimizations` table, `servers.optimize_enabled` column
+- `scripts/lint.sh` - local lint script mirroring CI checks
+
 ## [1.0.0] - 2026-04-01
 
 ### Changed

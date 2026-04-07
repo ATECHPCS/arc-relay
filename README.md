@@ -65,6 +65,8 @@ Arc Relay reads a TOML config file with environment variable overrides. See [`co
 | `ARC_RELAY_ADMIN_PASSWORD` | Initial admin password (first run only) |
 | `ARC_RELAY_DB_PATH` | SQLite database path (default: `arc-relay.db`) |
 | `ARC_RELAY_BASE_URL` | Public URL for OAuth callbacks |
+| `ARC_RELAY_LLM_API_KEY` | Anthropic API key for tool context optimization (optional) |
+| `ARC_RELAY_LLM_MODEL` | LLM model for optimization (default: `claude-haiku-4-5-20251001`) |
 
 ## Adding Servers to Claude Code
 
@@ -95,6 +97,14 @@ Arc Relay's middleware processes MCP traffic bidirectionally:
 | **Archive** | Stream requests/responses to a webhook | POST with optional NaCl encryption |
 
 Configure middleware per-server via the web UI or API. The archive middleware supports NaCl Box encryption (X25519 + XSalsa20-Poly1305) for defense-in-depth on top of TLS.
+
+## Tool Context Optimizer
+
+MCP servers often ship verbose tool definitions that consume excessive LLM context tokens. The Tool Context Optimizer analyzes and compresses these definitions while preserving semantic meaning.
+
+**Without an LLM key:** Each server detail page shows a tool audit card with per-tool size breakdown and estimated token counts. No configuration needed.
+
+**With an LLM key:** Set `ARC_RELAY_LLM_API_KEY` to an [Anthropic API key](https://console.anthropic.com/) to enable LLM-powered optimization. Click "Run Optimization" on any server's detail page to compress tool descriptions. Review the savings, then toggle "Serve optimized tools" to start serving the compressed versions to clients.
 
 ## Connect to Comma Compliance Arc
 

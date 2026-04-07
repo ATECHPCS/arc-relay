@@ -55,18 +55,19 @@ const (
 )
 
 type Server struct {
-	ID            string          `json:"id"`
-	Name          string          `json:"name"`
-	DisplayName   string          `json:"display_name"`
-	ServerType    ServerType      `json:"server_type"`
-	Config        json.RawMessage `json:"config"`
-	Status        ServerStatus    `json:"status"`
-	ErrorMsg      string          `json:"error_msg,omitempty"`
-	Health        HealthStatus    `json:"health"`
-	HealthCheckAt *time.Time      `json:"health_check_at,omitempty"`
-	HealthError   string          `json:"health_error,omitempty"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	DisplayName     string          `json:"display_name"`
+	ServerType      ServerType      `json:"server_type"`
+	Config          json.RawMessage `json:"config"`
+	Status          ServerStatus    `json:"status"`
+	ErrorMsg        string          `json:"error_msg,omitempty"`
+	Health          HealthStatus    `json:"health"`
+	HealthCheckAt   *time.Time      `json:"health_check_at,omitempty"`
+	HealthError     string          `json:"health_error,omitempty"`
+	OptimizeEnabled bool            `json:"optimize_enabled"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 // StdioConfig holds config for Docker-managed stdio servers.
@@ -210,11 +211,11 @@ func (s *ServerStore) Get(id string) (*Server, error) {
 	err := s.db.QueryRow(`
 		SELECT id, name, display_name, server_type, config, status, COALESCE(error_msg, ''),
 		       COALESCE(health, 'unknown'), health_check_at, COALESCE(health_error, ''),
-		       created_at, updated_at
+		       optimize_enabled, created_at, updated_at
 		FROM servers WHERE id = ?`, id,
 	).Scan(&srv.ID, &srv.Name, &srv.DisplayName, &srv.ServerType, &srv.Config, &srv.Status, &srv.ErrorMsg,
 		&srv.Health, &srv.HealthCheckAt, &srv.HealthError,
-		&srv.CreatedAt, &srv.UpdatedAt)
+		&srv.OptimizeEnabled, &srv.CreatedAt, &srv.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -234,11 +235,11 @@ func (s *ServerStore) GetByName(name string) (*Server, error) {
 	err := s.db.QueryRow(`
 		SELECT id, name, display_name, server_type, config, status, COALESCE(error_msg, ''),
 		       COALESCE(health, 'unknown'), health_check_at, COALESCE(health_error, ''),
-		       created_at, updated_at
+		       optimize_enabled, created_at, updated_at
 		FROM servers WHERE name = ?`, name,
 	).Scan(&srv.ID, &srv.Name, &srv.DisplayName, &srv.ServerType, &srv.Config, &srv.Status, &srv.ErrorMsg,
 		&srv.Health, &srv.HealthCheckAt, &srv.HealthError,
-		&srv.CreatedAt, &srv.UpdatedAt)
+		&srv.OptimizeEnabled, &srv.CreatedAt, &srv.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -257,7 +258,7 @@ func (s *ServerStore) List() ([]*Server, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, display_name, server_type, config, status, COALESCE(error_msg, ''),
 		       COALESCE(health, 'unknown'), health_check_at, COALESCE(health_error, ''),
-		       created_at, updated_at
+		       optimize_enabled, created_at, updated_at
 		FROM servers ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("listing servers: %w", err)
@@ -269,7 +270,7 @@ func (s *ServerStore) List() ([]*Server, error) {
 		srv := &Server{}
 		if err := rows.Scan(&srv.ID, &srv.Name, &srv.DisplayName, &srv.ServerType, &srv.Config, &srv.Status, &srv.ErrorMsg,
 			&srv.Health, &srv.HealthCheckAt, &srv.HealthError,
-			&srv.CreatedAt, &srv.UpdatedAt); err != nil {
+			&srv.OptimizeEnabled, &srv.CreatedAt, &srv.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning server: %w", err)
 		}
 		if plaintext, err := s.crypto.Decrypt(srv.Config); err != nil {
@@ -339,6 +340,13 @@ func (s *ServerStore) UpdateConfig(id string, config json.RawMessage) error {
 		return fmt.Errorf("updating server config: %w", err)
 	}
 	return nil
+}
+
+// SetOptimizeEnabled toggles the optimize_enabled flag for a server.
+func (s *ServerStore) SetOptimizeEnabled(id string, enabled bool) error {
+	_, err := s.db.Exec("UPDATE servers SET optimize_enabled = ?, updated_at = ? WHERE id = ?",
+		enabled, time.Now(), id)
+	return err
 }
 
 func (s *ServerStore) Delete(id string) error {

@@ -228,6 +228,171 @@
 </div>
 {{end}}
 
+{{/* Tool Context Optimizer - Admin only */}}
+{{if and .IsAdmin .ToolAudit}}
+{{$audit := .ToolAudit}}
+<div class="card">
+  <h2>Tool Context Optimizer</h2>
+  <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem">
+    Analyze and optimize tool definitions to reduce LLM token consumption. Uses an LLM to compress verbose descriptions while preserving semantic meaning.
+  </p>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.75rem;margin-bottom:1rem">
+    <div style="padding:0.75rem;background:var(--bg-secondary);border-radius:6px;text-align:center">
+      <div style="font-size:1.4rem;font-weight:600">{{$audit.ToolCount}}</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Tools</div>
+    </div>
+    <div style="padding:0.75rem;background:var(--bg-secondary);border-radius:6px;text-align:center">
+      <div style="font-size:1.4rem;font-weight:600">~{{commas $audit.EstTokens}}</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Est. Tokens</div>
+    </div>
+    {{if $audit.OptimizedTokens}}
+    <div style="padding:0.75rem;background:var(--bg-secondary);border-radius:6px;text-align:center">
+      <div style="font-size:1.4rem;font-weight:600">~{{commas $audit.OptimizedTokens}}</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Optimized Tokens</div>
+    </div>
+    <div style="padding:0.75rem;background:var(--bg-secondary);border-radius:6px;text-align:center">
+      <div style="font-size:1.4rem;font-weight:600;color:{{if ge $audit.SavingsPercent 0}}var(--success){{else}}var(--danger){{end}}">{{$audit.SavingsPercent}}%</div>
+      <div style="font-size:0.8rem;color:var(--text-muted)">Reduction</div>
+    </div>
+    {{end}}
+  </div>
+
+  {{if $audit.HasOptimized}}
+  <div style="margin-bottom:1rem;padding:0.75rem;background:var(--bg-secondary);border-radius:6px">
+    <div style="display:flex;align-items:center;gap:0.75rem">
+      <div style="flex:1">
+        <strong>Serve optimized tools</strong>
+        <div style="font-size:0.8rem;color:var(--text-muted)">
+          Status: <span id="opt-status" class="badge" style="{{if eq $audit.Status "ready"}}background:var(--success){{else if eq $audit.Status "stale"}}background:var(--warning){{else if eq $audit.Status "error"}}background:var(--danger){{else if eq $audit.Status "running"}}background:var(--info){{else}}background:#6c757d{{end}};color:#fff;font-size:0.75rem;padding:2px 8px">{{$audit.Status}}</span>
+          {{if eq $audit.Status "running"}} <span style="font-size:0.8rem;color:var(--text-muted)">Optimizing tools in background...</span>{{end}}
+          {{if $audit.IsStale}} <span style="color:var(--warning);font-size:0.8rem">(tools changed - re-run optimization)</span>{{end}}
+          {{if $audit.Model}} <span style="font-size:0.75rem;color:var(--text-muted)">Model: {{$audit.Model}}</span>{{end}}
+        </div>
+      </div>
+      {{if eq $audit.Status "ready"}}
+      <label class="switch">
+        <input type="checkbox" id="opt-enable-toggle" onchange="toggleOptimize(this.checked)"
+          {{if .Server.OptimizeEnabled}}checked{{end}}>
+        <span class="slider"></span>
+      </label>
+      {{end}}
+    </div>
+    {{if and $audit.ErrorMsg (ne $audit.Status "running")}}
+    <div style="margin-top:0.5rem;padding:0.5rem 0.75rem;background:var(--danger-bg, #f8d7da);border:1px solid var(--danger, #dc3545);border-radius:4px;font-size:0.8rem;color:var(--danger, #dc3545)">
+      {{$audit.ErrorMsg}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+    {{if $audit.LLMAvailable}}
+    <button class="btn btn-primary" id="opt-run-btn" onclick="runOptimize()" style="font-size:0.85rem">
+      {{if $audit.HasOptimized}}Re-run Optimization{{else}}Run Optimization{{end}}
+    </button>
+    {{else}}
+    <button class="btn btn-primary" disabled style="font-size:0.85rem;opacity:0.6" title="Set ARC_RELAY_LLM_API_KEY to enable">
+      Run Optimization
+    </button>
+    <span style="font-size:0.8rem;color:var(--text-muted)">Set <code>ARC_RELAY_LLM_API_KEY</code> to enable LLM optimization</span>
+    {{end}}
+    <button class="btn btn-secondary" onclick="toggleToolAuditDetails()" style="font-size:0.85rem">
+      Show Tool Details
+    </button>
+  </div>
+
+  <div id="tool-audit-details" style="display:none;margin-top:1rem">
+    <div class="table-wrap">
+    <table class="table" style="font-size:0.85rem">
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th style="text-align:right">Desc</th>
+          <th style="text-align:right">Schema</th>
+          <th style="text-align:right">Total</th>
+          {{if $audit.OptimizedTokens}}
+          <th style="text-align:right">Opt Desc</th>
+          <th style="text-align:right">Opt Schema</th>
+          <th style="text-align:right">Opt Total</th>
+          <th style="text-align:right">Saved</th>
+          {{end}}
+        </tr>
+      </thead>
+      <tbody>
+        {{range $audit.Tools}}
+        <tr>
+          <td><code>{{.Name}}</code></td>
+          <td style="text-align:right">{{commas .DescChars}}</td>
+          <td style="text-align:right">{{commas .SchemaChar}}</td>
+          <td style="text-align:right">{{commas .TotalChars}}</td>
+          {{if $audit.OptimizedTokens}}
+          <td style="text-align:right;color:{{if le .OptDescChars .DescChars}}var(--success){{else}}var(--danger){{end}}">{{commas .OptDescChars}}</td>
+          <td style="text-align:right;color:{{if le .OptSchemaChar .SchemaChar}}var(--success){{else}}var(--danger){{end}}">{{commas .OptSchemaChar}}</td>
+          <td style="text-align:right;color:{{if le .OptTotalChars .TotalChars}}var(--success){{else}}var(--danger){{end}}">{{commas .OptTotalChars}}</td>
+          <td style="text-align:right;color:{{if ge (subtract .TotalChars .OptTotalChars) 0}}var(--success){{else}}var(--danger){{end}}">{{if .TotalChars}}{{subtract .TotalChars .OptTotalChars}}{{end}}</td>
+          {{end}}
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+<script>
+var _csrfToken = _csrfToken || (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+function runOptimize() {
+  const btn = document.getElementById('opt-run-btn');
+  btn.disabled = true;
+  btn.textContent = 'Optimizing...';
+  fetch('/servers/{{.Server.ID}}/optimize', {
+    method: 'POST',
+    headers: {'X-CSRF-Token': _csrfToken}
+  })
+    .then(r => {
+      if (!r.ok) return r.json().then(e => { throw new Error(e.error) });
+      return r.json();
+    })
+    .then(() => {
+      const status = document.getElementById('opt-status');
+      if (status) { status.textContent = 'running'; status.style.background = 'var(--info)'; }
+      btn.textContent = 'Running...';
+      const poll = setInterval(() => {
+        fetch('/servers/{{.Server.ID}}/tool-audit')
+          .then(r => r.json())
+          .then(data => {
+            if (data.status === 'ready' || data.status === 'error') {
+              clearInterval(poll);
+              location.reload();
+            }
+          });
+      }, 3000);
+    })
+    .catch(err => {
+      alert('Optimization failed: ' + err.message);
+      btn.disabled = false;
+      btn.textContent = 'Run Optimization';
+    });
+}
+
+function toggleOptimize(enabled) {
+  fetch('/servers/{{.Server.ID}}/optimize-toggle', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    body: JSON.stringify({enabled: enabled})
+  }).then(r => {
+    if (!r.ok) { alert('Failed to toggle optimization'); location.reload(); }
+  });
+}
+
+function toggleToolAuditDetails() {
+  const el = document.getElementById('tool-audit-details');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+</script>
+{{end}}
+
 {{/* Middleware Pipeline - Admin only */}}
 {{if .IsAdmin}}
 <div class="card">

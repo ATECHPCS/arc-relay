@@ -15,6 +15,7 @@ import (
 
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/docker"
+	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
@@ -160,8 +161,16 @@ func main() {
 		}
 	}()
 
+	// Initialize tool optimization stores and LLM client
+	optimizeStore := store.NewOptimizeStore(db)
+	llmClient := llm.NewClient(cfg.LLM.APIKey, cfg.LLM.Model)
+	if llmClient.Available() {
+		slog.Info("LLM tool optimizer available", "model", llmClient.Model())
+	}
+	proxyMgr.OptimizeStore = optimizeStore
+
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
