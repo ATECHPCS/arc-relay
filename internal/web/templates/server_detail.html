@@ -648,8 +648,12 @@ function toggleToolAuditDetails() {
   // of server logs and referrers).
   function openArchiveSetup(evt) {
     if (evt) evt.preventDefault();
-    var returnTo = window.location.origin + window.location.pathname + '#mw-archive';
-    var url = 'https://commacompliance.ai/compliance-archive?return_to=' + encodeURIComponent(returnTo);
+    // Bare URL with no fragment - the compliance app rebuilds the fragment with
+    // the credentials appended on the return trip.
+    var returnTo = window.location.origin + window.location.pathname;
+    // TEMP LOCAL-TEST OVERRIDE: points at the WSL-forwarded dev marketing site.
+    // Revert to https://commacompliance.ai/compliance-archive before launch.
+    var url = 'http://10.10.69.99:4321/compliance-archive?return_to=' + encodeURIComponent(returnTo);
     window.open(url, '_blank', 'noopener');
   }
 
