@@ -48,3 +48,4 @@ config.toml
 .nightshift-plan
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+dep-scan

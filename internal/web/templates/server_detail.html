@@ -739,14 +739,20 @@ function toggleToolAuditDetails() {
               result.style.display = 'block';
               if (data.success) {
                 result.style.color = '#198754';
-                result.textContent = 'Connected! Test delivery succeeded (HTTP ' + data.status_code + '). Enabling middleware...';
+                result.textContent = 'Connected! Test delivery succeeded (HTTP ' + data.status_code + '). Middleware enabled. Reloading in 6s...';
                 // Flip the toggle on and persist it
                 var toggle = document.getElementById('mw-archive-toggle');
                 if (toggle && !toggle.checked) {
                   toggle.checked = true;
                   toggleMiddleware('archive', true);
                 }
-                setTimeout(function() { location.reload(); }, 1500);
+                // Long pause so the admin has time to actually read the
+                // success confirmation before the page reloads and wipes it.
+                // Also append a URL hash flag so the reloaded page can show
+                // a persistent success banner.
+                setTimeout(function() {
+                  window.location.href = window.location.pathname + '?archive_saved=1#mw-archive';
+                }, 6000);
               } else {
                 result.style.color = '#dc3545';
                 result.textContent = 'Test delivery failed: ' + (data.error || 'unknown') + '. Check the values above and click Send Test to retry.';
@@ -754,6 +760,23 @@ function toggleToolAuditDetails() {
             }
           });
         }
+      }
+    } catch(e) {}
+
+    // Show persistent success banner after the archive auto-configure
+    // reload cycle (?archive_saved=1 in the URL).
+    try {
+      var qp = new URLSearchParams(window.location.search);
+      if (qp.get('archive_saved') === '1') {
+        var r = document.getElementById('archive-test-result');
+        if (r) {
+          r.style.display = 'block';
+          r.style.color = '#198754';
+          r.style.fontWeight = '600';
+          r.textContent = 'Compliance Archive connected and middleware enabled. Traffic is flowing.';
+        }
+        // Remove the query param so a later reload doesn't keep showing it
+        history.replaceState(null, '', window.location.pathname + '#mw-archive');
       }
     } catch(e) {}
   })();

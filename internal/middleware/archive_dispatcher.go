@@ -407,17 +407,25 @@ func (d *ArchiveDispatcher) NextAttemptTime(currentAttempts int) time.Time {
 	return d.nextAttemptTime(currentAttempts)
 }
 
-// RetryHeld resets held items and wakes the delivery loop.
+// RetryHeld resets held items and wakes the delivery loop. Also forces the
+// circuit breaker back to closed so a paused dispatcher immediately resumes
+// delivery instead of waiting for the circuit timer - the admin explicitly
+// asked us to retry, so we trust them over the automated backoff.
 func (d *ArchiveDispatcher) RetryHeld() (int64, error) {
 	count, err := d.store.RetryHeld()
 	if err != nil {
 		return 0, err
 	}
-	if count > 0 {
-		select {
-		case d.pollCh <- struct{}{}:
-		default:
-		}
+	d.mu.Lock()
+	d.cbState = cbClosed
+	d.cbPauseLevel = 0
+	d.consecutiveFails = 0
+	d.mu.Unlock()
+	// Always wake the loop after manual retry so pending rows get picked up
+	// even if the rewrite side affected zero rows and RetryHeld touched none.
+	select {
+	case d.pollCh <- struct{}{}:
+	default:
 	}
 	return count, nil
 }

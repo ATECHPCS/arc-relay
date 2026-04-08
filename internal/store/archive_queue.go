@@ -175,11 +175,14 @@ func (s *ArchiveQueueStore) RetryHeld() (int64, error) {
 }
 
 // RewriteHeldDelivery updates the URL, auth type, auth value, and api key
-// header on every row currently in 'hold' status. Used when the admin has
-// fixed a broken archive URL and wants queued messages to retry against the
-// new destination instead of the stale one captured at enqueue time. The
-// auth_value is encrypted the same way Enqueue does it so the dispatcher's
-// Decrypt call succeeds on subsequent delivery attempts.
+// header on every queue row (both 'hold' and 'pending') that is not already
+// pointing at the given URL. Used when the admin has fixed a broken archive
+// URL and wants every queued message - not just held ones - to retry against
+// the new destination instead of the stale one captured at enqueue time.
+// Also resets attempts/last_error so exponential backoff doesn't stall
+// already-pending rows that were racking up failures. The auth_value is
+// encrypted the same way Enqueue does it so the dispatcher's Decrypt call
+// succeeds on subsequent delivery attempts.
 func (s *ArchiveQueueStore) RewriteHeldDelivery(url, authType, authValue, apiKeyHeader string) (int64, error) {
 	storedAuth := authValue
 	if authValue != "" && s.encryptor != nil {
@@ -191,9 +194,10 @@ func (s *ArchiveQueueStore) RewriteHeldDelivery(url, authType, authValue, apiKey
 	}
 	result, err := s.db.Exec(`
 		UPDATE archive_queue
-		SET url = ?, auth_type = ?, auth_value = ?, api_key_header = ?
-		WHERE status = 'hold'
-	`, url, authType, storedAuth, apiKeyHeader)
+		SET url = ?, auth_type = ?, auth_value = ?, api_key_header = ?,
+		    attempts = 0, last_error = '', next_attempt_at = ?
+		WHERE status IN ('hold', 'pending') AND url != ?
+	`, url, authType, storedAuth, apiKeyHeader, sqliteTime(time.Now()), url)
 	if err != nil {
 		return 0, err
 	}
