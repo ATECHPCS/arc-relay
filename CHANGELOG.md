@@ -5,6 +5,22 @@ All notable changes to Arc Relay (formerly MCP Wrangler) are documented here.
 ## [Unreleased]
 
 ### Added
+- **Stateful archive handoff** - "Set up the Comma Compliance Archive" flow now mints a server-side nonce before opening the compliance popup and validates it on the return trip
+  - Without the nonce, any crafted `#mw-archive?...` fragment on an authenticated page could silently reconfigure archive credentials
+  - New endpoints: `POST /api/archive/handoff/begin`, `POST /api/archive/handoff/complete`
+  - In-memory nonce store with 10-minute TTL, bound to the initiating admin session
+  - Fragment values are never applied directly from the browser; the client posts them to `/complete` where server-side validation is authoritative
+  - See `docs/archive-handoff.md` for the protocol specification
+- **Envelope schema v2** - NaCl Box archive envelopes now include `version` and `kid` (key fingerprint) fields
+  - `version: "nacl-box-v1"` lets receivers dispatch on the version, not the presence of a ciphertext field
+  - `kid = base64(blake2b-256(recipient_pub)[:8])` lets receivers route decryption through multiple keys during rotation
+  - Shared `sealArchivePayload` helper - real traffic and synchronous test deliveries go through the same sealing code
+  - Schema documented in `docs/archive-envelope.md`
+- **Envelope encryption UI** - archive config section shows an "Envelope encrypted" indicator with fingerprint when a recipient key is configured, and a "Remove encryption" button for explicit plaintext downgrade
+- `ValidateArchiveConfig` is extracted as a public function and called at save time
+  - Rejects non-https URLs unless the host is localhost/loopback
+  - Rejects unknown `auth_type` or `include` values
+  - Rejects malformed `nacl_recipient_key` values before they reach the enqueue path
 - **Tool Context Optimizer** - LLM-powered tool definition compression to reduce context token usage
   - Per-server opt-in: audit tool sizes, run LLM optimization, toggle serving optimized tools
   - Deterministic JSON Schema pruning plus LLM-based description compression via Anthropic API

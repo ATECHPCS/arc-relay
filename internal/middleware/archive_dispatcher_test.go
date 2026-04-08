@@ -1,6 +1,9 @@
 package middleware_test
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/nacl/box"
 
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -334,6 +339,81 @@ func TestDispatcher_SendTest_ReportsFailure(t *testing.T) {
 	}
 	if status != 401 {
 		t.Errorf("status = %d, want 401", status)
+	}
+}
+
+// TestDispatcher_SendTest_SealsWhenKeyConfigured verifies that when a
+// recipient key is set, SendTest POSTs an envelope (not plaintext) to
+// the ingest endpoint. This is load-bearing for the handoff flow:
+// operators rely on the test delivery to catch a misconfigured key
+// before the first real request.
+func TestDispatcher_SendTest_SealsWhenKeyConfigured(t *testing.T) {
+	pub, _, err := box.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate recipient keypair: %v", err)
+	}
+	b64Key := base64.StdEncoding.EncodeToString(pub[:])
+
+	var received []byte
+	d, _, ts := newDispatcher(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+	}))
+
+	cfg := middleware.ArchiveConfig{
+		URL:              ts.URL,
+		AuthType:         "bearer",
+		AuthValue:        "test-token",
+		NaClRecipientKey: b64Key,
+	}
+
+	if _, err := d.SendTest(cfg); err != nil {
+		t.Fatalf("SendTest: %v", err)
+	}
+
+	var env struct {
+		Version         string `json:"version"`
+		KeyID           string `json:"kid"`
+		Ciphertext      string `json:"ciphertext"`
+		Nonce           string `json:"nonce"`
+		SourcePublicKey string `json:"sourcePublicKey"`
+	}
+	if err := json.Unmarshal(received, &env); err != nil {
+		t.Fatalf("received body is not a JSON envelope: %v (body: %s)", err, received)
+	}
+	if env.Version != middleware.EnvelopeVersion {
+		t.Errorf("envelope.version = %q, want %q", env.Version, middleware.EnvelopeVersion)
+	}
+	if env.KeyID == "" {
+		t.Error("envelope.kid is empty")
+	}
+	if env.Ciphertext == "" {
+		t.Error("envelope.ciphertext is empty - SendTest sent plaintext?")
+	}
+
+	// Plaintext must not appear in the received body.
+	if bytes.Contains(received, []byte("connectivity_test")) {
+		t.Error("plaintext marker leaked into sealed body")
+	}
+}
+
+// TestDispatcher_SendTest_RejectsInvalidKey verifies that a malformed
+// recipient key surfaces as a SendTest error instead of being silently
+// dropped or panicking the dispatcher.
+func TestDispatcher_SendTest_RejectsInvalidKey(t *testing.T) {
+	d, _, ts := newDispatcher(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("handler should not have been reached - encryption must fail first")
+		w.WriteHeader(200)
+	}))
+
+	cfg := middleware.ArchiveConfig{
+		URL:              ts.URL,
+		NaClRecipientKey: "not-a-valid-key!!!",
+	}
+
+	_, err := d.SendTest(cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid nacl_recipient_key, got nil")
 	}
 }
 

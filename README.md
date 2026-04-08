@@ -250,18 +250,44 @@ When `nacl_recipient_key` is configured, the archive payload is encrypted before
 
 ```json
 {
-  "nonce": "base64-encoded-24-byte-nonce",
-  "ciphertext": "base64-encoded-encrypted-payload",
-  "sourcePublicKey": "base64-encoded-ephemeral-curve25519-public-key"
+  "version": "nacl-box-v1",
+  "kid": "base64-8-byte-recipient-key-fingerprint",
+  "nonce": "base64-24-byte-nonce",
+  "ciphertext": "base64-sealed-payload",
+  "sourcePublicKey": "base64-32-byte-ephemeral-sender-pubkey"
 }
 ```
 
+Receivers dispatch on the `version` field. The `kid` is a stable
+fingerprint of the recipient pubkey (first 8 bytes of `blake2b-256`
+of the 32-byte public key, base64-encoded) used to select the right
+private key during rotation.
+
 The recipient decrypts using:
-1. Their Curve25519 private key (corresponding to the configured `nacl_recipient_key`)
+1. Their Curve25519 private key (the one whose public half was configured as `nacl_recipient_key`)
 2. The `sourcePublicKey` from the envelope (ephemeral, unique per payload)
 3. The `nonce` from the envelope
 
-This provides defense-in-depth on top of TLS - the webhook endpoint cannot read payloads without the private key, even if the transport is compromised.
+This is defense-in-depth on top of TLS. The webhook endpoint cannot read payloads without the private key, even if the transport is compromised or a reverse proxy is sitting in front of the receiver.
+
+**Public key only on the relay.** The Arc Relay binary stores only the
+recipient's public key, and even that is optional. The matching
+private key lives on the receiver and is never transmitted to the
+relay. The relay also never stores a sender key: every envelope
+generates a fresh ephemeral sender keypair, uses its private half once
+to seal the box, and discards it.
+
+**Provisioning.** In the common path an admin clicks "Set up the
+Comma Compliance Archive" on the server detail page; the compliance
+app bounces back through a stateful handoff that auto-provisions the
+URL, bearer token, and recipient public key. Standalone deployments
+can also configure `nacl_recipient_key` directly in the archive
+middleware config.
+
+**Interfaces for custom receivers.** See
+[docs/archive-envelope.md](docs/archive-envelope.md) for the wire
+format specification and [docs/archive-handoff.md](docs/archive-handoff.md)
+for the handoff protocol.
 
 ### Writing Custom Middleware
 

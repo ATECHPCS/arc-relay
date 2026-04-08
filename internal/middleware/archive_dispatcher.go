@@ -318,9 +318,26 @@ func isTransient(statusCode int) bool {
 
 // SendTest performs a synchronous test delivery without using the queue.
 // It shares request-building and error classification with production sends.
-// Returns the HTTP status code (0 on network error) and any error.
+// When cfg.NaClRecipientKey is set the test payload is sealed with the same
+// envelope path real traffic uses so a misconfigured key surfaces at handoff
+// time instead of silently during the first real request. Returns the HTTP
+// status code (0 on network error) and any error.
 func (d *ArchiveDispatcher) SendTest(cfg ArchiveConfig) (int, error) {
 	testPayload := []byte(`{"version":"v1","source":"arc_relay","phase":"test","meta":{"server_name":"connectivity_test"}}`)
+
+	var recipientKey *[32]byte
+	if cfg.NaClRecipientKey != "" {
+		decoded, err := DecodeRecipientKey(cfg.NaClRecipientKey)
+		if err != nil {
+			return 0, fmt.Errorf("invalid nacl_recipient_key: %w", err)
+		}
+		recipientKey = &decoded
+	}
+	sealed, err := sealArchivePayload(testPayload, recipientKey)
+	if err != nil {
+		return 0, fmt.Errorf("seal test payload: %w", err)
+	}
+	testPayload = sealed
 
 	req, err := http.NewRequest("POST", cfg.URL, bytes.NewReader(testPayload))
 	if err != nil {

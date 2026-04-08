@@ -776,6 +776,33 @@ alerter:
       webhook_url: "https://hooks.slack.com/..."
 ```
 
+**4. Compliance Archive - Audit-trail Webhook**
+
+Observes MCP traffic and forwards request/response pairs to an
+external compliance endpoint via a durable queue + retry + circuit
+breaker. When a recipient public key is configured, payloads are
+sealed with NaCl Box (X25519 + XSalsa20-Poly1305) before delivery so
+the ingest endpoint cannot read payload bodies without the
+corresponding private key.
+
+The archive endpoint is usually provisioned through the stateful
+handoff flow from the server detail page - see
+[archive-handoff.md](archive-handoff.md) for the protocol and
+[archive-envelope.md](archive-envelope.md) for the wire format the
+receiver must implement.
+
+Key facts:
+
+- Arc Relay stores only the **public** half of the recipient keypair.
+  The private key lives on the receiver and is never transmitted.
+- Envelope sealing uses an ephemeral sender keypair per payload.
+- Envelopes are sealed at **enqueue** time, so a key rotation that
+  invalidates in-flight queued rows must be coordinated with the
+  receiver's grace period for retired private keys.
+- The synchronous test delivery path goes through the same sealing
+  code as real traffic, so a misconfigured key surfaces at handoff
+  time instead of at first real request.
+
 #### Configuration Model
 
 Middleware is configured per-server in the web UI, with global defaults:

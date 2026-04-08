@@ -146,6 +146,7 @@ type Handlers struct {
 	healthMon       *proxy.HealthMonitor
 	catalogClient   *catalog.Client
 	deviceAuth      *deviceAuthStore
+	archiveHandoff  *archiveHandoffStore
 	inviteStore     *store.InviteStore
 	optimizeStore   *store.OptimizeStore
 	llmClient       *llm.Client
@@ -180,6 +181,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		healthMon:       healthMon,
 		catalogClient:   catalog.NewClient(),
 		deviceAuth:      newDeviceAuthStore(),
+		archiveHandoff:  newArchiveHandoffStore(),
 		inviteStore:     inviteStore,
 		optimizeStore:   optimizeStore,
 		llmClient:       llmClient,
@@ -291,6 +293,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/archive/clear", h.requireAuth(h.handleArchiveClear))
 	mux.HandleFunc("/api/archive/test", h.requireAuth(h.handleArchiveTest))
 	mux.HandleFunc("/api/archive/status", h.requireAuth(h.handleArchiveStatus))
+	mux.HandleFunc("/api/archive/handoff/begin", h.requireAuth(h.handleArchiveHandoffBegin))
+	mux.HandleFunc("/api/archive/handoff/complete", h.requireAuth(h.handleArchiveHandoffComplete))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
 	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
@@ -787,7 +791,13 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
 			mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
 			if gac, err := h.middlewareStore.GetGlobal("archive"); err == nil && gac != nil {
-				globalArchiveCfg = string(gac.Config)
+				// Inject a derived nacl_key_id into the config blob so
+				// the template can render the envelope fingerprint
+				// without shipping crypto to the browser. The stored
+				// config never contains kid; it is computed from the
+				// pubkey at render time here and by compliance on the
+				// other side.
+				globalArchiveCfg = decorateArchiveConfigForDisplay(gac.Config)
 			}
 		}
 
@@ -1304,10 +1314,31 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Validate the archive config at save time so a bad URL, unknown
+	// auth type, or malformed NaCl key is rejected here instead of
+	// silently breaking at first enqueue. ParseArchiveConfig normalizes
+	// defaults so the stored blob matches what the runtime will see.
+	archiveCfg, err := middleware.ParseArchiveConfig(body.Config)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := middleware.ValidateArchiveConfig(archiveCfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// Re-marshal the normalized config so defaults (include, api_key_header)
+	// are persisted rather than left implicit.
+	normalized, err := json.Marshal(archiveCfg)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to normalize config"})
+		return
+	}
+
 	mc := &store.MiddlewareConfig{
 		Middleware: body.Middleware,
 		Enabled:    false, // Global row is config-only; per-server toggles control enabled
-		Config:     body.Config,
+		Config:     normalized,
 		Priority:   40,
 	}
 
@@ -1324,16 +1355,13 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 	// draining the queue against the new target.
 	rewritten := int64(0)
 	if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
-		var archiveCfg middleware.ArchiveConfig
-		if err := json.Unmarshal(body.Config, &archiveCfg); err == nil && archiveCfg.URL != "" {
-			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
-				rewritten = n
-			}
-			// Reset CB and wake the delivery loop unconditionally - the
-			// admin has explicitly changed the archive destination so we
-			// trust them over any accumulated failure backoff.
-			disp.ResetCircuit()
+		if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+			rewritten = n
 		}
+		// Reset CB and wake the delivery loop unconditionally - the
+		// admin has explicitly changed the archive destination so we
+		// trust them over any accumulated failure backoff.
+		disp.ResetCircuit()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
