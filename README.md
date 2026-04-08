@@ -263,6 +263,79 @@ The recipient decrypts using:
 
 This provides defense-in-depth on top of TLS - the webhook endpoint cannot read payloads without the private key, even if the transport is compromised.
 
+### Writing Custom Middleware
+
+Arc Relay's middleware pipeline is extensible. The four built-in middlewares (sanitizer, sizer, alerter, archive) are registered via the same `Registry.Register()` mechanism you use for your own. A custom middleware is any type that implements the `Middleware` interface:
+
+```go
+package mymiddleware
+
+import (
+    "context"
+    "encoding/json"
+
+    "github.com/comma-compliance/arc-relay/internal/mcp"
+    "github.com/comma-compliance/arc-relay/internal/middleware"
+    "github.com/comma-compliance/arc-relay/internal/store"
+)
+
+// TenantTagger adds a tenant ID header to every request and logs the tool name.
+type TenantTagger struct {
+    tenantID    string
+    eventLogger middleware.EventLogger
+}
+
+func (t *TenantTagger) Name() string { return "tenant_tagger" }
+
+func (t *TenantTagger) ProcessRequest(ctx context.Context, req *mcp.Request, meta *middleware.RequestMeta) (*mcp.Request, error) {
+    // Modify the request, block it, or annotate it
+    t.eventLogger(&store.MiddlewareEvent{
+        Middleware: t.Name(),
+        Action:     "tag",
+        Detail:     "tenant=" + t.tenantID + " tool=" + meta.ToolName,
+    })
+    return req, nil
+}
+
+func (t *TenantTagger) ProcessResponse(ctx context.Context, req *mcp.Request, resp *mcp.Response, meta *middleware.RequestMeta) (*mcp.Response, error) {
+    // Inspect or transform the response
+    return resp, nil
+}
+
+// Factory parses the per-server JSON config and builds the middleware instance.
+func Factory(config json.RawMessage, logger middleware.EventLogger) (middleware.Middleware, error) {
+    var cfg struct {
+        TenantID string `json:"tenant_id"`
+    }
+    if err := json.Unmarshal(config, &cfg); err != nil {
+        return nil, err
+    }
+    return &TenantTagger{tenantID: cfg.TenantID, eventLogger: logger}, nil
+}
+```
+
+Register your factory before the server starts handling traffic. The cleanest place is in `cmd/arc-relay/main.go` right after `middleware.NewRegistry(...)`:
+
+```go
+mwRegistry := middleware.NewRegistry(middlewareStore, archiveDispatcher)
+
+// Register custom middleware
+mwRegistry.Register("tenant_tagger", mymiddleware.Factory)
+```
+
+Once registered, enable your middleware on any server by creating a `middleware_configs` row with `middleware = "tenant_tagger"` and your JSON config. The web UI and API work identically to built-in middleware.
+
+**How the pipeline runs:** `ProcessRequest` runs in registration order before the request reaches the backend; `ProcessResponse` runs in reverse order before the response reaches the client. Returning a non-nil error stops the pipeline and fails the request.
+
+Examples of what custom middleware is good for:
+- Per-tenant request tagging and routing
+- Custom PII patterns beyond the built-in sanitizer
+- Enrichment (looking up user context, adding headers)
+- Cost tracking (token counting, billing hooks)
+- Business-specific compliance rules
+
+See `internal/middleware/sanitizer.go` for a production example of a middleware that reads a JSON config and transforms responses.
+
 ## Tool Context Optimizer
 
 MCP servers often ship verbose tool definitions that consume excessive LLM context tokens. The Tool Context Optimizer analyzes and compresses these definitions while preserving semantic meaning.
