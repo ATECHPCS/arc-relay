@@ -45,9 +45,13 @@ func TestPruneSchema_RemovesMetadataKeys(t *testing.T) {
 
 	// Check nested property pruning
 	var props map[string]json.RawMessage
-	json.Unmarshal(obj["properties"], &props)
+	if err := json.Unmarshal(obj["properties"], &props); err != nil {
+		t.Fatalf("Failed to unmarshal properties: %v", err)
+	}
 	var nameProp map[string]json.RawMessage
-	json.Unmarshal(props["name"], &nameProp)
+	if err := json.Unmarshal(props["name"], &nameProp); err != nil {
+		t.Fatalf("Failed to unmarshal name property: %v", err)
+	}
 
 	if _, ok := nameProp["title"]; ok {
 		t.Error("Expected nested 'title' to be removed")
@@ -88,7 +92,9 @@ func TestPruneSchema_PreservesValidationKeywords(t *testing.T) {
 
 	result := PruneSchema(schema)
 	var obj map[string]json.RawMessage
-	json.Unmarshal(result, &obj)
+	if err := json.Unmarshal(result, &obj); err != nil {
+		t.Fatalf("Failed to unmarshal pruned schema: %v", err)
+	}
 
 	// Top-level validation keywords preserved
 	for _, key := range []string{"type", "properties", "required", "additionalProperties"} {
@@ -99,10 +105,14 @@ func TestPruneSchema_PreservesValidationKeywords(t *testing.T) {
 
 	// Check property-level validation
 	var props map[string]json.RawMessage
-	json.Unmarshal(obj["properties"], &props)
+	if err := json.Unmarshal(obj["properties"], &props); err != nil {
+		t.Fatalf("Failed to unmarshal properties: %v", err)
+	}
 
 	var count map[string]json.RawMessage
-	json.Unmarshal(props["count"], &count)
+	if err := json.Unmarshal(props["count"], &count); err != nil {
+		t.Fatalf("Failed to unmarshal count property: %v", err)
+	}
 	for _, key := range []string{"type", "minimum", "maximum", "default"} {
 		if _, ok := count[key]; !ok {
 			t.Errorf("count: expected key %q to be preserved", key)
@@ -113,7 +123,9 @@ func TestPruneSchema_PreservesValidationKeywords(t *testing.T) {
 	}
 
 	var status map[string]json.RawMessage
-	json.Unmarshal(props["status"], &status)
+	if err := json.Unmarshal(props["status"], &status); err != nil {
+		t.Fatalf("Failed to unmarshal status property: %v", err)
+	}
 	for _, key := range []string{"type", "enum", "const", "pattern", "format"} {
 		if _, ok := status[key]; !ok {
 			t.Errorf("status: expected key %q to be preserved", key)
@@ -131,10 +143,14 @@ func TestPruneSchema_HandlesAnyOf(t *testing.T) {
 
 	result := PruneSchema(schema)
 	var obj map[string]json.RawMessage
-	json.Unmarshal(result, &obj)
+	if err := json.Unmarshal(result, &obj); err != nil {
+		t.Fatalf("Failed to unmarshal pruned schema: %v", err)
+	}
 
 	var anyOf []json.RawMessage
-	json.Unmarshal(obj["anyOf"], &anyOf)
+	if err := json.Unmarshal(obj["anyOf"], &anyOf); err != nil {
+		t.Fatalf("Failed to unmarshal anyOf: %v", err)
+	}
 	if len(anyOf) != 2 {
 		t.Fatalf("Expected 2 anyOf items, got %d", len(anyOf))
 	}
@@ -142,7 +158,9 @@ func TestPruneSchema_HandlesAnyOf(t *testing.T) {
 	// Each item should have title removed
 	for i, item := range anyOf {
 		var itemObj map[string]json.RawMessage
-		json.Unmarshal(item, &itemObj)
+		if err := json.Unmarshal(item, &itemObj); err != nil {
+			t.Fatalf("anyOf[%d]: failed to unmarshal: %v", i, err)
+		}
 		if _, ok := itemObj["title"]; ok {
 			t.Errorf("anyOf[%d]: expected 'title' to be removed", i)
 		}

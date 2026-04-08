@@ -22,6 +22,7 @@ test-cli:
 
 lint:
 	go vet ./...
+	golangci-lint run ./...
 
 docker:
 	docker compose build

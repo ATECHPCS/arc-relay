@@ -28,6 +28,13 @@ if [ ! -f "$GOPATH/bin/staticcheck" ]; then
 fi
 $GOPATH/bin/staticcheck ./...
 
+echo "=== golangci-lint ==="
+if [ ! -f "$GOPATH/bin/golangci-lint" ]; then
+  echo "Installing golangci-lint..."
+  $GO install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+fi
+CGO_ENABLED=1 $GOPATH/bin/golangci-lint run ./...
+
 echo "=== tests ==="
 $GO test -count=1 ./internal/...
 
