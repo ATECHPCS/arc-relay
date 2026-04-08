@@ -174,6 +174,44 @@ func (s *ArchiveQueueStore) RetryHeld() (int64, error) {
 	return result.RowsAffected()
 }
 
+// RewriteHeldDelivery updates the URL, auth type, auth value, and api key
+// header on every row currently in 'hold' status. Used when the admin has
+// fixed a broken archive URL and wants queued messages to retry against the
+// new destination instead of the stale one captured at enqueue time. The
+// auth_value is encrypted the same way Enqueue does it so the dispatcher's
+// Decrypt call succeeds on subsequent delivery attempts.
+func (s *ArchiveQueueStore) RewriteHeldDelivery(url, authType, authValue, apiKeyHeader string) (int64, error) {
+	storedAuth := authValue
+	if authValue != "" && s.encryptor != nil {
+		encrypted, err := s.encryptor.Encrypt([]byte(authValue))
+		if err != nil {
+			return 0, fmt.Errorf("encrypt auth_value: %w", err)
+		}
+		storedAuth = string(encrypted)
+	}
+	result, err := s.db.Exec(`
+		UPDATE archive_queue
+		SET url = ?, auth_type = ?, auth_value = ?, api_key_header = ?
+		WHERE status = 'hold'
+	`, url, authType, storedAuth, apiKeyHeader)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// ClearHeld deletes every row currently in 'hold' status. Used as the
+// "nuclear option" when queued messages are unrecoverable (e.g. the old
+// destination is permanently gone and the admin doesn't want to carry the
+// backlog forward). Returns the number of rows deleted.
+func (s *ArchiveQueueStore) ClearHeld() (int64, error) {
+	result, err := s.db.Exec(`DELETE FROM archive_queue WHERE status = 'hold'`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // Status returns an aggregate summary of the queue.
 func (s *ArchiveQueueStore) Status() (*ArchiveQueueStatus, error) {
 	st := &ArchiveQueueStatus{}

@@ -506,7 +506,8 @@ function toggleToolAuditDetails() {
           </div>
           <div style="display:flex;gap:0.5rem">
             {{if gt .ArchiveQueueStatus.QueueStatus.HoldCount 0}}
-              <button onclick="retryArchive()" class="btn btn-sm" style="background:#ffc107;color:#000;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer">Retry Now</button>
+              <button onclick="retryArchive()" class="btn btn-sm" style="background:#ffc107;color:#000;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" title="Rewrite held rows to the current archive URL and retry delivery">Retry Now</button>
+              <button onclick="clearArchive()" class="btn btn-sm" style="background:#dc3545;color:#fff;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" title="Permanently discard all held messages">Clear Backlog</button>
             {{end}}
             <button onclick="testArchive()" class="btn btn-sm" style="background:var(--border, #dee2e6);color:var(--text, #212529);border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" id="archive-test-btn">Send Test</button>
           </div>
@@ -575,20 +576,27 @@ function toggleToolAuditDetails() {
     });
   }
 
+  // Save the archive config to /api/middleware/global.
+  // Returns a Promise so callers can chain follow-up actions (like kicking
+  // off a test delivery after a successful save).
   function saveArchiveConfig() {
     var cfg = buildArchiveConfig();
-    fetch('/api/middleware/global', {
+    return fetch('/api/middleware/global', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
       body: JSON.stringify({middleware: 'archive', config: cfg})
-    }).then(r => {
+    }).then(function(r) {
       if (r.ok) {
         var btn = document.querySelector('#mw-archive-config .btn-primary');
-        var orig = btn.textContent;
-        btn.textContent = 'Saved!';
-        setTimeout(function(){ btn.textContent = orig; }, 1500);
+        if (btn) {
+          var orig = btn.textContent;
+          btn.textContent = 'Saved!';
+          setTimeout(function(){ btn.textContent = orig; }, 1500);
+        }
+        return true;
       } else {
         alert('Failed to save archive config');
+        return false;
       }
     });
   }
@@ -609,6 +617,17 @@ function toggleToolAuditDetails() {
     }).then(function(r) { return r.json(); }).then(function(data) {
       if (data.status === 'ok') location.reload();
       else alert('Retry failed: ' + (data.error || 'unknown'));
+    });
+  }
+
+  function clearArchive() {
+    if (!confirm('Permanently delete all held messages from the archive queue? This cannot be undone.')) return;
+    fetch('/api/archive/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.status === 'ok') location.reload();
+      else alert('Clear failed: ' + (data.error || 'unknown'));
     });
   }
 
@@ -675,6 +694,9 @@ function toggleToolAuditDetails() {
 
     // Auto-populate from URL hash params after returning from archive signup.
     // Format: #mw-archive?archive_url=...&archive_token=...
+    // On successful populate we auto-save the config, run a Send Test, and
+    // enable the middleware toggle so the user gets immediate feedback and
+    // does not have to click anything.
     try {
       var hash = window.location.hash || '';
       var q = hash.indexOf('?');
@@ -689,21 +711,48 @@ function toggleToolAuditDetails() {
             document.getElementById('archive-auth-value').type = 'password';
             document.getElementById('archive-auth-value').value = t;
           }
-          // Enable the middleware toggle so the user can just click Save
-          var toggle = document.getElementById('mw-archive-toggle');
-          if (toggle && !toggle.checked) toggle.checked = true;
-          // Clean the hash so reload doesn't re-populate
+          // Clean the hash so reload doesn't re-populate or re-run the flow
           history.replaceState(null, '', window.location.pathname + '#mw-archive');
           // Scroll the card into view
           var card = document.getElementById('mw-archive');
           if (card) card.scrollIntoView({behavior: 'smooth', block: 'center'});
-          // Flash a visible "ready to save" message
+
+          // Flash "configuring" message
           var result = document.getElementById('archive-test-result');
           if (result) {
             result.style.display = 'block';
-            result.style.color = '#198754';
-            result.textContent = 'Archive credentials received. Click "Save Config" to enable.';
+            result.style.color = '#0066cc';
+            result.textContent = 'Saving archive config and running connectivity test...';
           }
+
+          // Auto-save the config, then run a test delivery, then enable the
+          // middleware toggle if the test succeeds.
+          saveArchiveConfig().then(function(saved) {
+            if (!saved) return;
+            return fetch('/api/archive/test', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken}
+            }).then(function(r) { return r.json(); });
+          }).then(function(data) {
+            if (!data) return;
+            if (result) {
+              result.style.display = 'block';
+              if (data.success) {
+                result.style.color = '#198754';
+                result.textContent = 'Connected! Test delivery succeeded (HTTP ' + data.status_code + '). Enabling middleware...';
+                // Flip the toggle on and persist it
+                var toggle = document.getElementById('mw-archive-toggle');
+                if (toggle && !toggle.checked) {
+                  toggle.checked = true;
+                  toggleMiddleware('archive', true);
+                }
+                setTimeout(function() { location.reload(); }, 1500);
+              } else {
+                result.style.color = '#dc3545';
+                result.textContent = 'Test delivery failed: ' + (data.error || 'unknown') + '. Check the values above and click Send Test to retry.';
+              }
+            }
+          });
         }
       }
     } catch(e) {}

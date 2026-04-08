@@ -288,6 +288,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
 	mux.HandleFunc("/api/middleware/global", h.requireAuth(h.handleGlobalMiddleware))
 	mux.HandleFunc("/api/archive/retry", h.requireAuth(h.handleArchiveRetry))
+	mux.HandleFunc("/api/archive/clear", h.requireAuth(h.handleArchiveClear))
 	mux.HandleFunc("/api/archive/test", h.requireAuth(h.handleArchiveTest))
 	mux.HandleFunc("/api/archive/status", h.requireAuth(h.handleArchiveStatus))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
@@ -1319,6 +1320,10 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 }
 
 // handleArchiveRetry resets held archive items for immediate retry.
+// Before resetting status, it rewrites the URL/auth on held rows to match
+// the current archive config so retries target the current destination
+// instead of whatever was stored at enqueue time. This is how admins
+// recover the backlog after fixing a broken archive URL.
 func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1334,12 +1339,56 @@ func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
 		return
 	}
+
+	// Best-effort: rewrite held rows with the current global archive config
+	// before retrying. If no global config is saved yet, skip the rewrite
+	// and retry the rows as-is.
+	rewritten := int64(0)
+	if globalCfg, err := h.middlewareStore.GetGlobal("archive"); err == nil && globalCfg != nil {
+		var archiveCfg middleware.ArchiveConfig
+		if err := json.Unmarshal(globalCfg.Config, &archiveCfg); err == nil && archiveCfg.URL != "" {
+			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+				rewritten = n
+			}
+		}
+	}
+
 	count, err := disp.RetryHeld()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "retried": count})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"retried":   count,
+		"rewritten": rewritten,
+	})
+}
+
+// handleArchiveClear deletes all held archive items. Used as a recovery
+// option when queued messages are unrecoverable and the admin wants a
+// clean slate instead of replaying the backlog.
+func (h *Handlers) handleArchiveClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
+		return
+	}
+	count, err := disp.ClearHeld()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "cleared": count})
 }
 
 // handleArchiveTest sends a test payload to verify archive connectivity.

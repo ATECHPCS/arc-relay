@@ -421,3 +421,16 @@ func (d *ArchiveDispatcher) RetryHeld() (int64, error) {
 	}
 	return count, nil
 }
+
+// RewriteHeldDelivery updates the URL and auth fields on all held rows.
+// Used by the retry-with-current-config flow to fix stale destinations
+// before retrying.
+func (d *ArchiveDispatcher) RewriteHeldDelivery(cfg ArchiveConfig) (int64, error) {
+	return d.store.RewriteHeldDelivery(cfg.URL, cfg.AuthType, cfg.AuthValue, cfg.APIKeyHeader)
+}
+
+// ClearHeld deletes all held rows from the archive queue. Used when queued
+// messages are unrecoverable and the admin wants a clean slate.
+func (d *ArchiveDispatcher) ClearHeld() (int64, error) {
+	return d.store.ClearHeld()
+}
