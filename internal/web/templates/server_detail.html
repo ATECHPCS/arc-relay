@@ -512,7 +512,11 @@ function toggleToolAuditDetails() {
             <button onclick="testArchive()" class="btn btn-sm" style="background:var(--border, #dee2e6);color:var(--text, #212529);border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" id="archive-test-btn">Send Test</button>
           </div>
         </div>
-        {{if .ArchiveQueueStatus.QueueStatus.LastError}}
+        {{/* Only surface the last error when the queue is actually unhealthy -
+            circuit breaker is open/half-open OR there are held rows. A closed
+            circuit with no holds means the dispatcher has recovered and the
+            last error is stale noise from a previous failure. */}}
+        {{if and .ArchiveQueueStatus.QueueStatus.LastError (or (ne .ArchiveQueueStatus.CircuitState "closed") (gt .ArchiveQueueStatus.QueueStatus.HoldCount 0))}}
           <div style="margin-top:0.25rem;color:var(--danger, #dc3545);font-size:0.8rem">
             Last error: {{.ArchiveQueueStatus.QueueStatus.LastError}}
           </div>

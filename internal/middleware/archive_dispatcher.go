@@ -416,17 +416,7 @@ func (d *ArchiveDispatcher) RetryHeld() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	d.mu.Lock()
-	d.cbState = cbClosed
-	d.cbPauseLevel = 0
-	d.consecutiveFails = 0
-	d.mu.Unlock()
-	// Always wake the loop after manual retry so pending rows get picked up
-	// even if the rewrite side affected zero rows and RetryHeld touched none.
-	select {
-	case d.pollCh <- struct{}{}:
-	default:
-	}
+	d.ResetCircuit()
 	return count, nil
 }
 
@@ -441,4 +431,20 @@ func (d *ArchiveDispatcher) RewriteHeldDelivery(cfg ArchiveConfig) (int64, error
 // messages are unrecoverable and the admin wants a clean slate.
 func (d *ArchiveDispatcher) ClearHeld() (int64, error) {
 	return d.store.ClearHeld()
+}
+
+// ResetCircuit forces the circuit breaker back to closed and wakes the
+// delivery loop. Called when the admin explicitly updates the archive
+// config or manually retries the queue - either action represents a
+// trust signal from the operator that they want delivery to resume.
+func (d *ArchiveDispatcher) ResetCircuit() {
+	d.mu.Lock()
+	d.cbState = cbClosed
+	d.cbPauseLevel = 0
+	d.consecutiveFails = 0
+	d.mu.Unlock()
+	select {
+	case d.pollCh <- struct{}{}:
+	default:
+	}
 }

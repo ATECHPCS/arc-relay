@@ -1316,7 +1316,30 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// Rewrite any queued rows that point at the previous URL so a config
+	// change takes effect immediately. Admin is declaring the new URL as
+	// the desired destination for everything in flight, including the
+	// backlog - not just for traffic enqueued after the save. Reset the
+	// circuit breaker too so a previously-paused dispatcher starts
+	// draining the queue against the new target.
+	rewritten := int64(0)
+	if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
+		var archiveCfg middleware.ArchiveConfig
+		if err := json.Unmarshal(body.Config, &archiveCfg); err == nil && archiveCfg.URL != "" {
+			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+				rewritten = n
+			}
+			// Reset CB and wake the delivery loop unconditionally - the
+			// admin has explicitly changed the archive destination so we
+			// trust them over any accumulated failure backoff.
+			disp.ResetCircuit()
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"rewritten": rewritten,
+	})
 }
 
 // handleArchiveRetry resets held archive items for immediate retry.
