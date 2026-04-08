@@ -380,7 +380,17 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		// Validate CSRF for state-changing requests
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 			if !h.validateCSRF(r, cookie.Value) {
-				http.Error(w, "Invalid or missing CSRF token", http.StatusForbidden)
+				// API endpoints expect JSON; HTML forms get a plain-text response.
+				// This keeps the JS fetch() callers from failing JSON.parse on
+				// the error body with an opaque "Unexpected token" error.
+				if strings.HasPrefix(r.URL.Path, "/api/") {
+					writeJSON(w, http.StatusForbidden, map[string]string{
+						"error": "csrf_invalid",
+						"hint":  "Your session's CSRF token is stale. Reload the page and try again.",
+					})
+				} else {
+					http.Error(w, "Invalid or missing CSRF token", http.StatusForbidden)
+				}
 				return
 			}
 		}

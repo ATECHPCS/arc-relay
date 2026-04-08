@@ -475,10 +475,10 @@ function toggleToolAuditDetails() {
       <div class="mw-detail" style="margin-top:0.5rem;font-size:0.85rem;color:var(--text-muted)">
         Archives MCP tool calls to an external compliance endpoint for audit, security review, and policy enforcement.
         <span style="display:block;margin-top:0.35rem">
-          Need a hosted endpoint?
-          <a href="https://commacompliance.ai/compliance-archive" target="_blank" rel="noopener"
+          Don't have an endpoint yet?
+          <a href="#" onclick="openArchiveSetup(event)"
              style="color:var(--primary, #0066cc);text-decoration:none;font-weight:500">
-            Learn about the Compliance Archive &rarr;
+            Set up the Comma Compliance Archive &rarr;
           </a>
         </span>
       </div>
@@ -642,6 +642,17 @@ function toggleToolAuditDetails() {
     });
   }
 
+  // Open Comma Compliance Archive signup, passing the current page as return_to.
+  // After signup completes, the archive connected page will redirect back here
+  // with archive_url and archive_token in the URL hash (hash keeps the token out
+  // of server logs and referrers).
+  function openArchiveSetup(evt) {
+    if (evt) evt.preventDefault();
+    var returnTo = window.location.origin + window.location.pathname + '#mw-archive';
+    var url = 'https://commacompliance.ai/compliance-archive?return_to=' + encodeURIComponent(returnTo);
+    window.open(url, '_blank', 'noopener');
+  }
+
   // Load existing archive config into form from data attribute
   (function() {
     try {
@@ -655,6 +666,41 @@ function toggleToolAuditDetails() {
         }
         if (cfg.auth_value) document.getElementById('archive-auth-value').value = cfg.auth_value;
         if (cfg.include) document.getElementById('archive-include').value = cfg.include;
+      }
+    } catch(e) {}
+
+    // Auto-populate from URL hash params after returning from archive signup.
+    // Format: #mw-archive?archive_url=...&archive_token=...
+    try {
+      var hash = window.location.hash || '';
+      var q = hash.indexOf('?');
+      if (q >= 0) {
+        var params = new URLSearchParams(hash.substring(q + 1));
+        var u = params.get('archive_url');
+        var t = params.get('archive_token');
+        if (u || t) {
+          if (u) document.getElementById('archive-url').value = u;
+          if (t) {
+            document.getElementById('archive-auth-type').value = 'bearer';
+            document.getElementById('archive-auth-value').type = 'password';
+            document.getElementById('archive-auth-value').value = t;
+          }
+          // Enable the middleware toggle so the user can just click Save
+          var toggle = document.getElementById('mw-archive-toggle');
+          if (toggle && !toggle.checked) toggle.checked = true;
+          // Clean the hash so reload doesn't re-populate
+          history.replaceState(null, '', window.location.pathname + '#mw-archive');
+          // Scroll the card into view
+          var card = document.getElementById('mw-archive');
+          if (card) card.scrollIntoView({behavior: 'smooth', block: 'center'});
+          // Flash a visible "ready to save" message
+          var result = document.getElementById('archive-test-result');
+          if (result) {
+            result.style.display = 'block';
+            result.style.color = '#198754';
+            result.textContent = 'Archive credentials received. Click "Save Config" to enable.';
+          }
+        }
       }
     } catch(e) {}
   })();
