@@ -261,12 +261,12 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 					slog.Error("middleware partial failed", "template", name, "err", err)
 					// Render an error card instead of propagating the failure
 					// up to the page template, which would kill the entire page.
-					return template.HTML(`<div class="mw-card" style="border-color:#dc3545"><strong>` +
+					return template.HTML(`<div class="mw-card" style="border-color:#dc3545"><strong>` + // #nosec G203 -- all interpolated values are HTMLEscapeString'd
 						template.HTMLEscapeString(name) +
 						`</strong> <span style="color:#dc3545">failed to render: ` +
 						template.HTMLEscapeString(err.Error()) + `</span></div>`), nil
 				}
-				return template.HTML(buf.String()), nil
+				return template.HTML(buf.String()), nil // #nosec G203 -- output is from html/template.ExecuteTemplate which auto-escapes
 			},
 		})
 		template.Must(t.ParseFS(templateFS, "templates/layout.html", "templates/middleware/*.html", "templates/"+page))
