@@ -177,6 +177,7 @@ func (s *MiddlewareStore) UpsertEnabled(serverID, middleware string, enabled boo
 		VALUES (?, ?, ?, ?, '{}', ?, ?, ?)
 		ON CONFLICT(server_id, middleware) DO UPDATE SET
 			enabled = excluded.enabled,
+			priority = excluded.priority,
 			updated_at = excluded.updated_at
 	`, id, serverID, middleware, enabled, priority, now, now)
 	return err

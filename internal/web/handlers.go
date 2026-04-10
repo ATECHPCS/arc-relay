@@ -1286,6 +1286,9 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 	if priority == 0 {
 		priority = desc.DefaultPriority
 	}
+	if priority == 0 {
+		priority = 100
+	}
 
 	// Toggle-only (no config provided): update enabled without overwriting config
 	if body.Config == nil {
@@ -1395,32 +1398,7 @@ func (h *Handlers) handleMiddlewareConfig(w http.ResponseWriter, r *http.Request
 		}
 		body.Config = normalized
 
-		// For global archive config, rewrite held rows and reset circuit breaker
-		if target == "global" {
-			mc := &store.MiddlewareConfig{
-				Middleware: mwName,
-				Enabled:    false,
-				Config:     body.Config,
-				Priority:   desc.DefaultPriority,
-			}
-			if err := h.middlewareStore.UpsertGlobal(mc); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
-				return
-			}
-			rewritten := int64(0)
-			if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
-				if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
-					rewritten = n
-				}
-				disp.ResetCircuit()
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "rewritten": rewritten})
-			return
-		}
-	}
-
-	// Generic global save
-	if target == "global" {
+		// Rewrite held rows and reset circuit breaker
 		mc := &store.MiddlewareConfig{
 			Middleware: mwName,
 			Enabled:    false,
@@ -1431,9 +1409,29 @@ func (h *Handlers) handleMiddlewareConfig(w http.ResponseWriter, r *http.Request
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		rewritten := int64(0)
+		if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
+			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+				rewritten = n
+			}
+			disp.ResetCircuit()
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "rewritten": rewritten})
 		return
 	}
+
+	// Generic global save
+	mc := &store.MiddlewareConfig{
+		Middleware: mwName,
+		Enabled:    false,
+		Config:     body.Config,
+		Priority:   desc.DefaultPriority,
+	}
+	if err := h.middlewareStore.UpsertGlobal(mc); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleMiddlewareAction dispatches POST /api/middleware/{name}/action/{action}.

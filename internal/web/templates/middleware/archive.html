@@ -219,7 +219,7 @@ function openArchiveSetup(evt) {
     return r.json();
   }).then(function(data) {
     var returnTo = window.location.origin + window.location.pathname;
-    var base = 'http://10.10.69.99:4321/compliance-archive';
+    var base = 'https://commacompliance.ai/compliance-archive';
     var url = base
       + '?return_to=' + encodeURIComponent(returnTo)
       + '&state=' + encodeURIComponent(data.state);
