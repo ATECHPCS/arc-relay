@@ -963,7 +963,10 @@ arc-sync init {{.BaseURL}}</code></pre>
       body: new FormData(form)
     }).then(function(response) {
       if (!response.ok) {
-        throw new Error('Server returned ' + response.status);
+        return response.text().then(function(body) {
+          var detail = body.trim();
+          throw new Error(detail || ('Server returned ' + response.status));
+        });
       }
       var reader = response.body.getReader();
       var decoder = new TextDecoder();
