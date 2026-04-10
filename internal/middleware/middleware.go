@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 
 	"github.com/comma-compliance/arc-relay/internal/mcp"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -83,9 +84,24 @@ func (p *Pipeline) ProcessResponse(ctx context.Context, req *mcp.Request, resp *
 	return resp, nil
 }
 
+// Descriptor describes a registered middleware for the UI and handler layer.
+// It is provided at Register() time, not on the Middleware interface itself,
+// so that processing-only middleware stay decoupled from presentation.
+type Descriptor struct {
+	Name            string   // registry key: "archive"
+	DisplayName     string   // "Compliance Archive"
+	Description     string   // one-liner for toggle card
+	DefaultPriority int      // 40
+	DisplayOrder    int      // UI ordering, separate from pipeline priority
+	Scope           string   // "server", "global", "both"
+	TemplateName    string   // "middleware/archive" - empty = toggle-only
+	Actions         []string // ["test", "retry", "clear"] - whitelisted action names
+}
+
 // Registry holds middleware factories and builds pipelines from DB configs.
 type Registry struct {
 	factories         map[string]Factory
+	descriptors       map[string]Descriptor
 	store             *store.MiddlewareStore
 	archiveDispatcher *ArchiveDispatcher
 }
@@ -100,15 +116,49 @@ type EventLogger func(evt *store.MiddlewareEvent)
 func NewRegistry(mwStore *store.MiddlewareStore, archiveDispatcher *ArchiveDispatcher) *Registry {
 	r := &Registry{
 		factories:         make(map[string]Factory),
+		descriptors:       make(map[string]Descriptor),
 		store:             mwStore,
 		archiveDispatcher: archiveDispatcher,
 	}
 	// Register built-in middleware
-	r.Register("sanitizer", NewSanitizerFromConfig)
-	r.Register("sizer", NewSizerFromConfig)
-	r.Register("alerter", NewAlerterFromConfig)
+	r.Register(Descriptor{
+		Name:            "sanitizer",
+		DisplayName:     "Sanitizer",
+		Description:     "PII & secret redaction",
+		DefaultPriority: 10,
+		DisplayOrder:    10,
+		Scope:           "server",
+	}, NewSanitizerFromConfig)
+
+	r.Register(Descriptor{
+		Name:            "sizer",
+		DisplayName:     "Content Sizer",
+		Description:     "Response size limits",
+		DefaultPriority: 20,
+		DisplayOrder:    20,
+		Scope:           "server",
+	}, NewSizerFromConfig)
+
+	r.Register(Descriptor{
+		Name:            "alerter",
+		DisplayName:     "Alerter",
+		Description:     "Pattern monitoring",
+		DefaultPriority: 30,
+		DisplayOrder:    30,
+		Scope:           "server",
+	}, NewAlerterFromConfig)
+
 	// Archive uses a closure to capture the shared dispatcher
-	r.Register("archive", func(config json.RawMessage, logger EventLogger) (Middleware, error) {
+	r.Register(Descriptor{
+		Name:            "archive",
+		DisplayName:     "Compliance Archive",
+		Description:     "Audit trail",
+		DefaultPriority: 40,
+		DisplayOrder:    40,
+		Scope:           "both",
+		TemplateName:    "middleware_archive",
+		Actions:         []string{"test", "retry", "clear", "status"},
+	}, func(config json.RawMessage, logger EventLogger) (Middleware, error) {
 		return NewArchiveFromConfig(config, logger, archiveDispatcher)
 	})
 	return r
@@ -119,9 +169,34 @@ func (r *Registry) ArchiveDispatcher() *ArchiveDispatcher {
 	return r.archiveDispatcher
 }
 
-// Register adds a middleware factory.
-func (r *Registry) Register(name string, factory Factory) {
-	r.factories[name] = factory
+// Register adds a middleware factory with its descriptor.
+func (r *Registry) Register(desc Descriptor, factory Factory) {
+	r.factories[desc.Name] = factory
+	r.descriptors[desc.Name] = desc
+}
+
+// IsRegistered returns true if a middleware with the given name is registered.
+func (r *Registry) IsRegistered(name string) bool {
+	_, ok := r.factories[name]
+	return ok
+}
+
+// Descriptor returns the descriptor for a named middleware, or ok=false.
+func (r *Registry) Descriptor(name string) (Descriptor, bool) {
+	d, ok := r.descriptors[name]
+	return d, ok
+}
+
+// Descriptors returns all registered descriptors sorted by DisplayOrder.
+func (r *Registry) Descriptors() []Descriptor {
+	descs := make([]Descriptor, 0, len(r.descriptors))
+	for _, d := range r.descriptors {
+		descs = append(descs, d)
+	}
+	sort.Slice(descs, func(i, j int) bool {
+		return descs[i].DisplayOrder < descs[j].DisplayOrder
+	})
+	return descs
 }
 
 // BuildPipeline creates a pipeline for a specific server by loading configs from the DB.

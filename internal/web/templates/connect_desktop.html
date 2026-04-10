@@ -167,7 +167,7 @@ function testArchiveConnect() {
   btn.disabled = true;
   btn.textContent = 'Testing...';
   if (result) result.style.display = 'none';
-  fetch('/api/archive/test', {
+  fetch('/api/middleware/archive/action/test', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
   }).then(function(r) { return r.json(); }).then(function(data) {

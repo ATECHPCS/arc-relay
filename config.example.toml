@@ -21,6 +21,10 @@ session_secret = "change-me-generate-a-real-secret"
 # Default admin password (only used on first run to create admin user)
 admin_password = "changeme"
 
+[sentry]
+# Sentry DSN for error tracking (leave blank to disable)
+dsn = ""
+
 # --- Middleware Configuration ---
 # Middleware is configured per-server via the web UI or API.
 # Below are examples of the JSON config for each middleware type.

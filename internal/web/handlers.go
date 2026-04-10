@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -30,7 +31,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
-//go:embed templates/*.html
+//go:embed templates/*.html templates/middleware/*.html
 var templateFS embed.FS
 
 // Flash represents a one-time notification message.
@@ -70,6 +71,15 @@ type ConfigDisplay struct {
 	ImageStale       bool   // true if container is running an older image
 	IsDocker         bool   // true if this server uses Docker (has an image)
 	HasBuildConfig   bool   // true if this is a locally-built image (not from registry)
+}
+
+// MiddlewareCard is the per-card view model passed to the middleware template loop.
+type MiddlewareCard struct {
+	Descriptor middleware.Descriptor
+	Enabled    bool
+	Config     json.RawMessage
+	ServerID   string
+	CustomData map[string]any // middleware-specific data (e.g. ArchiveQueueStatus)
 }
 
 // loginRateLimiter tracks failed login attempts per IP.
@@ -235,10 +245,31 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		},
 	}
 
-	// Parse each page template together with the layout
+	// Parse each page template together with the layout and middleware partials.
+	// Middleware partials define named templates (e.g. "middleware_archive") that
+	// can be invoked from server_detail.html via {{callTemplate .TemplateName .}}.
 	pages := []string{"dashboard.html", "server_form.html", "server_detail.html", "users.html", "api_keys.html", "logs.html", "device_auth.html", "profiles.html", "profile_detail.html", "oauth_authorize.html", "connect_desktop.html", "change_password.html"}
 	for _, page := range pages {
-		t := template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/"+page))
+		t := template.New("").Funcs(funcMap)
+		// Add callTemplate func that captures this template set for dynamic dispatch.
+		// Go's {{template}} requires a string literal; this func lets the range loop
+		// invoke a partial by name stored in a Descriptor.
+		t.Funcs(template.FuncMap{
+			"callTemplate": func(name string, data interface{}) (template.HTML, error) {
+				var buf bytes.Buffer
+				if err := t.ExecuteTemplate(&buf, name, data); err != nil {
+					slog.Error("middleware partial failed", "template", name, "err", err)
+					// Render an error card instead of propagating the failure
+					// up to the page template, which would kill the entire page.
+					return template.HTML(`<div class="mw-card" style="border-color:#dc3545"><strong>` + // #nosec G203 -- all interpolated values are HTMLEscapeString'd
+						template.HTMLEscapeString(name) +
+						`</strong> <span style="color:#dc3545">failed to render: ` +
+						template.HTMLEscapeString(err.Error()) + `</span></div>`), nil
+				}
+				return template.HTML(buf.String()), nil // #nosec G203 -- output is from html/template.ExecuteTemplate which auto-escapes
+			},
+		})
+		template.Must(t.ParseFS(templateFS, "templates/layout.html", "templates/middleware/*.html", "templates/"+page))
 		h.tmpls[page] = t
 	}
 	// Login and invite_redeem are standalone (no layout)
@@ -288,13 +319,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api-keys/", h.requireAuth(h.handleAPIKeyRoutes))
 	mux.HandleFunc("/profiles", h.requireAuth(h.handleProfiles))
 	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
-	mux.HandleFunc("/api/middleware/global", h.requireAuth(h.handleGlobalMiddleware))
-	mux.HandleFunc("/api/archive/retry", h.requireAuth(h.handleArchiveRetry))
-	mux.HandleFunc("/api/archive/clear", h.requireAuth(h.handleArchiveClear))
-	mux.HandleFunc("/api/archive/test", h.requireAuth(h.handleArchiveTest))
-	mux.HandleFunc("/api/archive/status", h.requireAuth(h.handleArchiveStatus))
-	mux.HandleFunc("/api/archive/handoff/begin", h.requireAuth(h.handleArchiveHandoffBegin))
-	mux.HandleFunc("/api/archive/handoff/complete", h.requireAuth(h.handleArchiveHandoffComplete))
+	mux.HandleFunc("/api/middleware/", h.requireAuth(h.handleMiddlewareAPI))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
 	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
@@ -783,21 +808,39 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			serverLogs, _ = h.requestLogs.ByServer(srv.ID, 20)
 		}
 
-		// Middleware configs and events
-		var mwConfigs []*store.MiddlewareConfig
+		// Middleware configs and events - build per-card view models
+		var mwCards []MiddlewareCard
 		var mwEvents []*store.MiddlewareEvent
-		var globalArchiveCfg string
 		if h.middlewareStore != nil {
-			mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
+			mwConfigs, _ := h.middlewareStore.GetForServer(srv.ID)
 			mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
-			if gac, err := h.middlewareStore.GetGlobal("archive"); err == nil && gac != nil {
-				// Inject a derived nacl_key_id into the config blob so
-				// the template can render the envelope fingerprint
-				// without shipping crypto to the browser. The stored
-				// config never contains kid; it is computed from the
-				// pubkey at render time here and by compliance on the
-				// other side.
-				globalArchiveCfg = decorateArchiveConfigForDisplay(gac.Config)
+
+			// Index DB configs by middleware name for easy lookup
+			configByName := make(map[string]*store.MiddlewareConfig, len(mwConfigs))
+			for _, mc := range mwConfigs {
+				configByName[mc.Middleware] = mc
+			}
+
+			for _, desc := range h.mwRegistry.Descriptors() {
+				card := MiddlewareCard{
+					Descriptor: desc,
+					ServerID:   srv.ID,
+					CustomData: make(map[string]any),
+				}
+				if mc, ok := configByName[desc.Name]; ok {
+					card.Enabled = mc.Enabled
+					card.Config = mc.Config
+				}
+				// Archive-specific custom data
+				if desc.Name == "archive" {
+					if gac, err := h.middlewareStore.GetGlobal("archive"); err == nil && gac != nil {
+						card.CustomData["GlobalArchiveConfig"] = decorateArchiveConfigForDisplay(gac.Config)
+					}
+					if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
+						card.CustomData["ArchiveQueueStatus"] = disp.Status()
+					}
+				}
+				mwCards = append(mwCards, card)
 			}
 		}
 
@@ -827,12 +870,8 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 		data["TierMap"] = tierMap
 		data["EndpointUsage"] = endpointUsage
 		data["RecentLogs"] = serverLogs
-		data["MiddlewareConfigs"] = mwConfigs
+		data["MiddlewareCards"] = mwCards
 		data["MiddlewareEvents"] = mwEvents
-		data["GlobalArchiveConfig"] = globalArchiveCfg
-		if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
-			data["ArchiveQueueStatus"] = disp.Status()
-		}
 	}
 
 	// All users see their permitted endpoints
@@ -1231,9 +1270,9 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Validate middleware name
-	validNames := map[string]bool{"sanitizer": true, "sizer": true, "alerter": true, "archive": true}
-	if !validNames[body.Middleware] {
+	// Validate middleware name against registry
+	desc, ok := h.mwRegistry.Descriptor(body.Middleware)
+	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown middleware: " + body.Middleware})
 		return
 	}
@@ -1245,19 +1284,10 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 
 	priority := body.Priority
 	if priority == 0 {
-		// Default priorities: sanitizer=10, sizer=20, alerter=30, archive=40
-		switch body.Middleware {
-		case "sanitizer":
-			priority = 10
-		case "sizer":
-			priority = 20
-		case "alerter":
-			priority = 30
-		case "archive":
-			priority = 40
-		default:
-			priority = 100
-		}
+		priority = desc.DefaultPriority
+	}
+	if priority == 0 {
+		priority = 100
 	}
 
 	// Toggle-only (no config provided): update enabled without overwriting config
@@ -1286,9 +1316,37 @@ func (h *Handlers) handleServerMiddleware(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleGlobalMiddleware saves a global middleware config (server_id NULL).
-// Used for archive config that applies across all servers.
-func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request) {
+// handleMiddlewareAPI routes /api/middleware/{name}/config and /api/middleware/{name}/action/{action}.
+func (h *Handlers) handleMiddlewareAPI(w http.ResponseWriter, r *http.Request) {
+	// Parse: /api/middleware/{name}/config or /api/middleware/{name}/action/{action}
+	path := strings.TrimPrefix(r.URL.Path, "/api/middleware/")
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+	mwName := parts[0]
+	if !h.mwRegistry.IsRegistered(mwName) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown middleware: " + mwName})
+		return
+	}
+	switch parts[1] {
+	case "config":
+		h.handleMiddlewareConfig(w, r, mwName)
+	case "action":
+		action := ""
+		if len(parts) == 3 {
+			action = parts[2]
+		}
+		h.handleMiddlewareAction(w, r, mwName, action)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// handleMiddlewareConfig saves global middleware config (server_id NULL).
+// Requires target=global query param. Per-server config uses /servers/{id}/middleware.
+func (h *Handlers) handleMiddlewareConfig(w http.ResponseWriter, r *http.Request, mwName string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1299,83 +1357,87 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	desc, ok := h.mwRegistry.Descriptor(mwName)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown middleware: " + mwName})
+		return
+	}
+	target := r.URL.Query().Get("target")
+	if target != "global" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target=global required; per-server config uses /servers/{id}/middleware"})
+		return
+	}
+	if desc.Scope != "global" && desc.Scope != "both" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": mwName + " does not support global config"})
+		return
+	}
+
 	var body struct {
-		Middleware string          `json:"middleware"`
-		Config     json.RawMessage `json:"config"`
+		Config json.RawMessage `json:"config"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 
-	// Only archive supports global config for now
-	if body.Middleware != "archive" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "global config only supported for archive"})
+	// Archive-specific validation
+	if mwName == "archive" {
+		archiveCfg, err := middleware.ParseArchiveConfig(body.Config)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if _, err := middleware.ValidateArchiveConfig(archiveCfg); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		normalized, err := json.Marshal(archiveCfg)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to normalize config"})
+			return
+		}
+		body.Config = normalized
+
+		// Rewrite held rows and reset circuit breaker
+		mc := &store.MiddlewareConfig{
+			Middleware: mwName,
+			Enabled:    false,
+			Config:     body.Config,
+			Priority:   desc.DefaultPriority,
+		}
+		if err := h.middlewareStore.UpsertGlobal(mc); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
+			return
+		}
+		rewritten := int64(0)
+		if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
+			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+				rewritten = n
+			}
+			disp.ResetCircuit()
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "rewritten": rewritten})
 		return
 	}
 
-	// Validate the archive config at save time so a bad URL, unknown
-	// auth type, or malformed NaCl key is rejected here instead of
-	// silently breaking at first enqueue. ParseArchiveConfig normalizes
-	// defaults so the stored blob matches what the runtime will see.
-	archiveCfg, err := middleware.ParseArchiveConfig(body.Config)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	if _, err := middleware.ValidateArchiveConfig(archiveCfg); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	// Re-marshal the normalized config so defaults (include, api_key_header)
-	// are persisted rather than left implicit.
-	normalized, err := json.Marshal(archiveCfg)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to normalize config"})
-		return
-	}
-
+	// Generic global save
 	mc := &store.MiddlewareConfig{
-		Middleware: body.Middleware,
-		Enabled:    false, // Global row is config-only; per-server toggles control enabled
-		Config:     normalized,
-		Priority:   40,
+		Middleware: mwName,
+		Enabled:    false,
+		Config:     body.Config,
+		Priority:   desc.DefaultPriority,
 	}
-
 	if err := h.middlewareStore.UpsertGlobal(mc); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save: " + err.Error()})
 		return
 	}
-
-	// Rewrite any queued rows that point at the previous URL so a config
-	// change takes effect immediately. Admin is declaring the new URL as
-	// the desired destination for everything in flight, including the
-	// backlog - not just for traffic enqueued after the save. Reset the
-	// circuit breaker too so a previously-paused dispatcher starts
-	// draining the queue against the new target.
-	rewritten := int64(0)
-	if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
-		if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
-			rewritten = n
-		}
-		// Reset CB and wake the delivery loop unconditionally - the
-		// admin has explicitly changed the archive destination so we
-		// trust them over any accumulated failure backoff.
-		disp.ResetCircuit()
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":    "ok",
-		"rewritten": rewritten,
-	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleArchiveRetry resets held archive items for immediate retry.
-// Before resetting status, it rewrites the URL/auth on held rows to match
-// the current archive config so retries target the current destination
-// instead of whatever was stored at enqueue time. This is how admins
-// recover the backlog after fixing a broken archive URL.
-func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
+// handleMiddlewareAction dispatches POST /api/middleware/{name}/action/{action}.
+// Actions are validated against the descriptor's whitelist plus the special
+// handoff_begin / handoff_complete actions for archive.
+func (h *Handlers) handleMiddlewareAction(w http.ResponseWriter, r *http.Request, mwName string, action string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -1385,87 +1447,67 @@ func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Admin access required", http.StatusForbidden)
 		return
 	}
-	disp := h.mwRegistry.ArchiveDispatcher()
-	if disp == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
+
+	desc, ok := h.mwRegistry.Descriptor(mwName)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown middleware: " + mwName})
 		return
 	}
 
-	// Best-effort: rewrite held rows with the current global archive config
-	// before retrying. If no global config is saved yet, skip the rewrite
-	// and retry the rows as-is.
-	rewritten := int64(0)
-	if globalCfg, err := h.middlewareStore.GetGlobal("archive"); err == nil && globalCfg != nil {
-		var archiveCfg middleware.ArchiveConfig
-		if err := json.Unmarshal(globalCfg.Config, &archiveCfg); err == nil && archiveCfg.URL != "" {
-			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
-				rewritten = n
-			}
+	// Check action whitelist. Handoff actions are always allowed for archive.
+	allowed := false
+	for _, a := range desc.Actions {
+		if a == action {
+			allowed = true
+			break
 		}
 	}
-
-	count, err := disp.RetryHeld()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if mwName == "archive" && (action == "handoff_begin" || action == "handoff_complete") {
+		allowed = true
+	}
+	if !allowed {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action: " + action})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":    "ok",
-		"retried":   count,
-		"rewritten": rewritten,
-	})
+
+	// Dispatch to middleware-specific handler funcs
+	switch mwName {
+	case "archive":
+		h.dispatchArchiveAction(w, r, action)
+	default:
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": mwName + " has no action handlers"})
+	}
 }
 
-// handleArchiveClear deletes all held archive items. Used as a recovery
-// option when queued messages are unrecoverable and the admin wants a
-// clean slate instead of replaying the backlog.
-func (h *Handlers) handleArchiveClear(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+// dispatchArchiveAction handles archive-specific actions.
+func (h *Handlers) dispatchArchiveAction(w http.ResponseWriter, r *http.Request, action string) {
+	switch action {
+	case "test":
+		h.archiveActionTest(w, r)
+	case "retry":
+		h.archiveActionRetry(w, r)
+	case "clear":
+		h.archiveActionClear(w, r)
+	case "status":
+		h.archiveActionStatus(w, r)
+	case "handoff_begin":
+		h.handleArchiveHandoffBegin(w, r)
+	case "handoff_complete":
+		h.handleArchiveHandoffComplete(w, r)
 	}
-	user := getUser(r)
-	if user == nil || user.Role != "admin" {
-		http.Error(w, "Admin access required", http.StatusForbidden)
-		return
-	}
+}
+
+func (h *Handlers) archiveActionTest(w http.ResponseWriter, r *http.Request) {
 	disp := h.mwRegistry.ArchiveDispatcher()
 	if disp == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
 		return
 	}
-	count, err := disp.ClearHeld()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "cleared": count})
-}
-
-// handleArchiveTest sends a test payload to verify archive connectivity.
-func (h *Handlers) handleArchiveTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	user := getUser(r)
-	if user == nil || user.Role != "admin" {
-		http.Error(w, "Admin access required", http.StatusForbidden)
-		return
-	}
-	disp := h.mwRegistry.ArchiveDispatcher()
-	if disp == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
-		return
-	}
-
-	// Load global archive config
 	globalCfg, err := h.middlewareStore.GetGlobal("archive")
 	if err != nil || globalCfg == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no archive config found - save config first"})
 		return
 	}
-
 	var archiveCfg middleware.ArchiveConfig
 	if err := json.Unmarshal(globalCfg.Config, &archiveCfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid archive config: " + err.Error()})
@@ -1475,7 +1517,6 @@ func (h *Handlers) handleArchiveTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "archive URL not configured"})
 		return
 	}
-
 	statusCode, testErr := disp.SendTest(archiveCfg)
 	if testErr != nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -1491,13 +1532,48 @@ func (h *Handlers) handleArchiveTest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleArchiveStatus returns archive queue status.
-func (h *Handlers) handleArchiveStatus(w http.ResponseWriter, r *http.Request) {
-	user := getUser(r)
-	if user == nil || user.Role != "admin" {
-		http.Error(w, "Admin access required", http.StatusForbidden)
+func (h *Handlers) archiveActionRetry(w http.ResponseWriter, r *http.Request) {
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
 		return
 	}
+	rewritten := int64(0)
+	if globalCfg, err := h.middlewareStore.GetGlobal("archive"); err == nil && globalCfg != nil {
+		var archiveCfg middleware.ArchiveConfig
+		if err := json.Unmarshal(globalCfg.Config, &archiveCfg); err == nil && archiveCfg.URL != "" {
+			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+				rewritten = n
+			}
+		}
+	}
+	count, err := disp.RetryHeld()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"retried":   count,
+		"rewritten": rewritten,
+	})
+}
+
+func (h *Handlers) archiveActionClear(w http.ResponseWriter, r *http.Request) {
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
+		return
+	}
+	count, err := disp.ClearHeld()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "cleared": count})
+}
+
+func (h *Handlers) archiveActionStatus(w http.ResponseWriter, r *http.Request) {
 	disp := h.mwRegistry.ArchiveDispatcher()
 	if disp == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"enabled": false})
