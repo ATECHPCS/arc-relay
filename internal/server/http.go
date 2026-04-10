@@ -121,9 +121,16 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Unwrap returns the underlying ResponseWriter for http.Flusher etc.
+// Unwrap exposes the underlying ResponseWriter for http.ResponseController.
 func (rw *responseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
+}
+
+// Flush implements http.Flusher so SSE streaming works through the wrapper.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
