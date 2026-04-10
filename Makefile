@@ -22,6 +22,7 @@ test-cli:
 
 lint:
 	go vet ./...
+	CGO_ENABLED=1 golangci-lint run ./...
 
 docker:
 	docker compose build

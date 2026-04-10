@@ -184,9 +184,10 @@ func relevanceScore(info ServerInfo, query string) int {
 	score := 0
 
 	// Exact slug match: "sentry-mcp" searching "sentry"
-	if slug == queryHyphen {
+	switch slug {
+	case queryHyphen:
 		score += 100
-	} else if slug == queryHyphen+"-mcp" || slug == "mcp-"+queryHyphen {
+	case queryHyphen + "-mcp", "mcp-" + queryHyphen:
 		score += 90 // common pattern: sentry-mcp, mcp-github
 	}
 
