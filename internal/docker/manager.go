@@ -88,8 +88,39 @@ func (m *Manager) PullImage(ctx context.Context, ref string) error {
 		return fmt.Errorf("pulling image %s: %w", ref, err)
 	}
 	defer func() { _ = resp.Close() }()
-	_, _ = io.Copy(io.Discard, resp)
+
+	// Docker returns pull errors (e.g. "manifest not found") as JSON
+	// objects in the response stream, not as HTTP errors. We must parse
+	// the stream to detect them - same approach as parseBuildOutput.
+	if err := parsePullOutput(resp); err != nil {
+		return fmt.Errorf("pulling image %s: %w", ref, err)
+	}
 	return nil
+}
+
+// parsePullOutput reads the Docker pull JSON stream and checks for errors.
+// Docker streams progress as JSON lines like {"status":"Pulling from ..."}
+// and reports failures as {"error":"manifest unknown","errorDetail":{...}}.
+func parsePullOutput(reader io.Reader) error {
+	decoder := json.NewDecoder(reader)
+	for {
+		var msg struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		if err := decoder.Decode(&msg); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		if msg.Error != "" {
+			return fmt.Errorf("%s", msg.Error)
+		}
+		if msg.Status != "" {
+			slog.Debug("docker pull", "status", msg.Status)
+		}
+	}
 }
 
 // EnsureImage checks if an image exists locally, and pulls it if not.
