@@ -474,6 +474,13 @@ function toggleToolAuditDetails() {
       </div>
       <div class="mw-detail" style="margin-top:0.5rem;font-size:0.85rem;color:var(--text-muted)">
         Archives MCP tool calls to an external compliance endpoint for audit, security review, and policy enforcement.
+        <span style="display:block;margin-top:0.35rem">
+          Don't have an endpoint yet?
+          <a href="#" onclick="openArchiveSetup(event)"
+             style="color:var(--primary, #0066cc);text-decoration:none;font-weight:500">
+            Set up the Comma Compliance Archive &rarr;
+          </a>
+        </span>
       </div>
       {{if .ArchiveQueueStatus}}
       <div style="margin-top:0.75rem;padding:0.5rem 0.75rem;border-radius:4px;background:var(--bg-muted, #f8f9fa);font-size:0.85rem">
@@ -499,12 +506,17 @@ function toggleToolAuditDetails() {
           </div>
           <div style="display:flex;gap:0.5rem">
             {{if gt .ArchiveQueueStatus.QueueStatus.HoldCount 0}}
-              <button onclick="retryArchive()" class="btn btn-sm" style="background:#ffc107;color:#000;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer">Retry Now</button>
+              <button onclick="retryArchive()" class="btn btn-sm" style="background:#ffc107;color:#000;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" title="Rewrite held rows to the current archive URL and retry delivery">Retry Now</button>
+              <button onclick="clearArchive()" class="btn btn-sm" style="background:#dc3545;color:#fff;border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" title="Permanently discard all held messages">Clear Backlog</button>
             {{end}}
             <button onclick="testArchive()" class="btn btn-sm" style="background:var(--border, #dee2e6);color:var(--text, #212529);border:none;padding:0.25rem 0.75rem;border-radius:4px;cursor:pointer" id="archive-test-btn">Send Test</button>
           </div>
         </div>
-        {{if .ArchiveQueueStatus.QueueStatus.LastError}}
+        {{/* Only surface the last error when the queue is actually unhealthy -
+            circuit breaker is open/half-open OR there are held rows. A closed
+            circuit with no holds means the dispatcher has recovered and the
+            last error is stale noise from a previous failure. */}}
+        {{if and .ArchiveQueueStatus.QueueStatus.LastError (or (ne .ArchiveQueueStatus.CircuitState "closed") (gt .ArchiveQueueStatus.QueueStatus.HoldCount 0))}}
           <div style="margin-top:0.25rem;color:var(--danger, #dc3545);font-size:0.8rem">
             Last error: {{.ArchiveQueueStatus.QueueStatus.LastError}}
           </div>
@@ -539,6 +551,25 @@ function toggleToolAuditDetails() {
             <option value="response">Response only</option>
           </select>
         </div>
+        {{/*
+          NaCl envelope indicator.
+          archive-nacl-key holds the base64 recipient public key and is
+          populated either by the load-config block (on page load) or
+          by the handoff completion handler (after compliance signup).
+          Operators never type into this field directly; it is updated
+          through the handoff flow or the Remove button.
+        */}}
+        <input type="hidden" id="archive-nacl-key" value="">
+        <div id="archive-envelope-row" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.5rem 0.75rem;border:1px solid var(--border, #dee2e6);border-radius:4px;background:var(--bg-muted, #f8f9fa);font-size:0.85rem">
+          <div style="display:flex;align-items:center;gap:0.5rem">
+            <span id="archive-envelope-icon" aria-hidden="true" style="font-size:1rem">&#x1F513;</span>
+            <span id="archive-envelope-text">Envelope: not encrypted (TLS only)</span>
+          </div>
+          <button type="button" id="archive-envelope-clear" onclick="removeArchiveEnvelopeKey()"
+                  style="display:none;background:none;border:1px solid var(--border, #dee2e6);color:var(--text-muted);padding:0.15rem 0.5rem;border-radius:4px;font-size:0.75rem;cursor:pointer">
+            Remove encryption
+          </button>
+        </div>
         <div style="display:flex;gap:0.5rem;margin-top:0.25rem">
           <button onclick="saveArchiveConfig()" class="btn btn-sm btn-primary" type="button">Save Config</button>
         </div>
@@ -568,31 +599,78 @@ function toggleToolAuditDetails() {
     });
   }
 
+  // Save the archive config to /api/middleware/global.
+  // Returns a Promise so callers can chain follow-up actions (like kicking
+  // off a test delivery after a successful save).
   function saveArchiveConfig() {
     var cfg = buildArchiveConfig();
-    fetch('/api/middleware/global', {
+    return fetch('/api/middleware/global', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
       body: JSON.stringify({middleware: 'archive', config: cfg})
-    }).then(r => {
+    }).then(function(r) {
       if (r.ok) {
         var btn = document.querySelector('#mw-archive-config .btn-primary');
-        var orig = btn.textContent;
-        btn.textContent = 'Saved!';
-        setTimeout(function(){ btn.textContent = orig; }, 1500);
+        if (btn) {
+          var orig = btn.textContent;
+          btn.textContent = 'Saved!';
+          setTimeout(function(){ btn.textContent = orig; }, 1500);
+        }
+        return true;
       } else {
         alert('Failed to save archive config');
+        return false;
       }
     });
   }
 
   function buildArchiveConfig() {
+    // nacl_recipient_key is always sent - an empty value explicitly
+    // clears a previously saved key so operators can downgrade to
+    // plaintext without having to hand-edit the stored config.
     return {
       url: document.getElementById('archive-url').value,
       auth_type: document.getElementById('archive-auth-type').value,
       auth_value: document.getElementById('archive-auth-value').value,
-      include: document.getElementById('archive-include').value
+      include: document.getElementById('archive-include').value,
+      nacl_recipient_key: document.getElementById('archive-nacl-key').value || ''
     };
+  }
+
+  // renderArchiveEnvelopeIndicator updates the Envelope status row to
+  // reflect the current hidden-input state. Called from the load path,
+  // the handoff-complete path, and the explicit Remove button so the
+  // UI never drifts away from the value that will actually be saved.
+  function renderArchiveEnvelopeIndicator(keyID) {
+    var keyInput = document.getElementById('archive-nacl-key');
+    var iconEl = document.getElementById('archive-envelope-icon');
+    var textEl = document.getElementById('archive-envelope-text');
+    var clearBtn = document.getElementById('archive-envelope-clear');
+    var present = keyInput && keyInput.value;
+    if (present) {
+      if (iconEl) { iconEl.textContent = '\u{1F512}'; iconEl.style.color = '#198754'; }
+      if (textEl) {
+        var label = 'Envelope encrypted (NaCl Box)';
+        if (keyID) label += ' - fingerprint: ' + keyID;
+        textEl.textContent = label;
+      }
+      if (clearBtn) clearBtn.style.display = 'inline-block';
+    } else {
+      if (iconEl) { iconEl.textContent = '\u{1F513}'; iconEl.style.color = ''; }
+      if (textEl) textEl.textContent = 'Envelope: not encrypted (TLS only)';
+      if (clearBtn) clearBtn.style.display = 'none';
+    }
+  }
+
+  // removeArchiveEnvelopeKey clears the hidden NaCl key input and
+  // immediately saves the config so the downgrade is persisted.
+  // Without an immediate save the indicator would say "not encrypted"
+  // while the server still held the old key.
+  function removeArchiveEnvelopeKey() {
+    if (!confirm('Remove envelope encryption and deliver archive payloads as plaintext over TLS? The compliance receiver must accept plaintext for this to work.')) return;
+    document.getElementById('archive-nacl-key').value = '';
+    renderArchiveEnvelopeIndicator('');
+    saveArchiveConfig();
   }
 
   function retryArchive() {
@@ -602,6 +680,17 @@ function toggleToolAuditDetails() {
     }).then(function(r) { return r.json(); }).then(function(data) {
       if (data.status === 'ok') location.reload();
       else alert('Retry failed: ' + (data.error || 'unknown'));
+    });
+  }
+
+  function clearArchive() {
+    if (!confirm('Permanently delete all held messages from the archive queue? This cannot be undone.')) return;
+    fetch('/api/archive/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.status === 'ok') location.reload();
+      else alert('Clear failed: ' + (data.error || 'unknown'));
     });
   }
 
@@ -635,8 +724,47 @@ function toggleToolAuditDetails() {
     });
   }
 
-  // Load existing archive config into form from data attribute
+  // Open Comma Compliance Archive signup with a stateful handoff.
+  // Flow:
+  //   1. POST /api/archive/handoff/begin to mint a one-time nonce bound
+  //      to this admin's session.
+  //   2. Open the compliance signup URL in a new tab with return_to +
+  //      state=<nonce>.
+  //   3. The compliance side echoes state verbatim in the return hash
+  //      fragment, along with archive_url / archive_token / nacl_recipient_key
+  //      / nacl_key_id.
+  //   4. The hash parser below POSTs all of that to
+  //      /api/archive/handoff/complete, which validates the nonce and
+  //      applies the config server-side.
+  // Without the nonce round-trip, any crafted fragment on an
+  // authenticated archive page would silently reconfigure credentials.
+  function openArchiveSetup(evt) {
+    if (evt) evt.preventDefault();
+    fetch('/api/archive/handoff/begin', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken}
+    }).then(function(r) {
+      if (!r.ok) throw new Error('failed to start handoff');
+      return r.json();
+    }).then(function(data) {
+      var returnTo = window.location.origin + window.location.pathname;
+      // TEMP LOCAL-TEST OVERRIDE: points at the WSL-forwarded dev marketing site.
+      // Revert to https://commacompliance.ai/compliance-archive before launch.
+      var base = 'http://10.10.69.99:4321/compliance-archive';
+      var url = base
+        + '?return_to=' + encodeURIComponent(returnTo)
+        + '&state=' + encodeURIComponent(data.state);
+      window.open(url, '_blank', 'noopener');
+    }).catch(function(err) {
+      alert('Could not start archive setup: ' + err.message);
+    });
+  }
+
+  // Load existing archive config into form from the data attribute.
+  // Also renders the envelope indicator so the badge state matches the
+  // hidden input from first paint.
   (function() {
+    var loadedKeyID = '';
     try {
       var raw = document.getElementById('mw-archive').dataset.config;
       if (raw && raw !== '{}') {
@@ -648,6 +776,146 @@ function toggleToolAuditDetails() {
         }
         if (cfg.auth_value) document.getElementById('archive-auth-value').value = cfg.auth_value;
         if (cfg.include) document.getElementById('archive-include').value = cfg.include;
+        if (cfg.nacl_recipient_key) {
+          document.getElementById('archive-nacl-key').value = cfg.nacl_recipient_key;
+        }
+        if (cfg.nacl_key_id) {
+          loadedKeyID = cfg.nacl_key_id;
+        }
+      }
+    } catch(e) {}
+    renderArchiveEnvelopeIndicator(loadedKeyID);
+
+    // Auto-populate from URL hash params after returning from archive signup.
+    // Format: #mw-archive?state=...&archive_url=...&archive_token=...&nacl_recipient_key=...&nacl_key_id=...
+    // The state param is the nonce minted by /api/archive/handoff/begin
+    // before the popup opened. The browser does NOT write archive config
+    // directly from the fragment; instead it POSTs the fragment values
+    // (including state) to /api/archive/handoff/complete which validates
+    // the nonce and applies the config server-side. Without the nonce
+    // round-trip, any crafted fragment could silently reconfigure us.
+    try {
+      var hash = window.location.hash || '';
+      var q = hash.indexOf('?');
+      if (q >= 0) {
+        var params = new URLSearchParams(hash.substring(q + 1));
+        var state = params.get('state');
+        var u = params.get('archive_url');
+        var t = params.get('archive_token');
+        var kRaw = params.get('nacl_recipient_key');
+        var kID = params.get('nacl_key_id') || '';
+        if (state && (u || t)) {
+          // Clean the hash immediately so a reload does not replay the
+          // fragment (the nonce is single-use server-side anyway, but
+          // keeping the hash in the URL bar is noisy).
+          history.replaceState(null, '', window.location.pathname + '#mw-archive');
+
+          var card = document.getElementById('mw-archive');
+          if (card) card.scrollIntoView({behavior: 'smooth', block: 'center'});
+
+          var result = document.getElementById('archive-test-result');
+          if (result) {
+            result.style.display = 'block';
+            result.style.color = '#0066cc';
+            result.textContent = 'Validating handoff and saving archive config...';
+          }
+
+          fetch('/api/archive/handoff/complete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken},
+            body: JSON.stringify({
+              state: state,
+              archive_url: u || '',
+              archive_token: t || '',
+              nacl_recipient_key: kRaw || '',
+              nacl_key_id: kID
+            })
+          }).then(function(r) {
+            return r.json().then(function(data) { return {ok: r.ok, data: data}; });
+          }).then(function(res) {
+            if (!res.ok) {
+              if (result) {
+                result.style.color = '#dc3545';
+                result.textContent = 'Handoff failed: ' + (res.data.error || 'unknown') + '.';
+              }
+              return null;
+            }
+            // Reflect the server's authoritative view of the config in
+            // the form so the UI and stored state do not drift. We
+            // populate auth_value from the response too - without
+            // that, any subsequent Save Config click would read an
+            // empty form field and silently clobber the token we just
+            // saved via /complete.
+            var saved = res.data.config || {};
+            if (saved.url) document.getElementById('archive-url').value = saved.url;
+            if (saved.auth_type) {
+              document.getElementById('archive-auth-type').value = saved.auth_type;
+              if (saved.auth_type !== 'none') {
+                document.getElementById('archive-auth-value').type = 'password';
+              }
+            }
+            if (typeof saved.auth_value === 'string') {
+              document.getElementById('archive-auth-value').value = saved.auth_value;
+            }
+            if (saved.include) document.getElementById('archive-include').value = saved.include;
+            document.getElementById('archive-nacl-key').value = saved.nacl_recipient_key || '';
+            renderArchiveEnvelopeIndicator(res.data.nacl_key_id || '');
+
+            // Run the test delivery through the existing endpoint so
+            // the envelope seal path gets exercised at handoff time.
+            return fetch('/api/archive/test', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'X-CSRF-Token': _csrfToken}
+            }).then(function(r) { return r.json(); });
+          }).then(function(data) {
+            if (!data) return;
+            if (result) {
+              result.style.display = 'block';
+              if (data.success) {
+                result.style.color = '#198754';
+                var encryptedNote = document.getElementById('archive-nacl-key').value
+                  ? ' Envelope encryption is active.'
+                  : '';
+                result.textContent = 'Compliance Archive configured. Test delivery succeeded (HTTP '
+                  + data.status_code + ').' + encryptedNote + ' Middleware enabled.';
+                // Flip the toggle on and persist it
+                var toggle = document.getElementById('mw-archive-toggle');
+                if (toggle && !toggle.checked) {
+                  toggle.checked = true;
+                  toggleMiddleware('archive', true);
+                }
+                // Append a URL flag so the reloaded page can show the
+                // same banner after a full refresh.
+                setTimeout(function() {
+                  window.location.href = window.location.pathname + '?archive_saved=1#mw-archive';
+                }, 6000);
+              } else {
+                result.style.color = '#dc3545';
+                result.textContent = 'Test delivery failed: ' + (data.error || 'unknown') + '. Check the values above and click Send Test to retry.';
+              }
+            }
+          });
+        }
+      }
+    } catch(e) {}
+
+    // Show persistent success banner after the archive auto-configure
+    // reload cycle (?archive_saved=1 in the URL).
+    try {
+      var qp = new URLSearchParams(window.location.search);
+      if (qp.get('archive_saved') === '1') {
+        var r = document.getElementById('archive-test-result');
+        if (r) {
+          r.style.display = 'block';
+          r.style.color = '#198754';
+          r.style.fontWeight = '600';
+          var encSuffix = document.getElementById('archive-nacl-key').value
+            ? ' with NaCl envelope encryption'
+            : '';
+          r.textContent = 'Compliance Archive configured' + encSuffix + '. Test delivery succeeded; middleware enabled.';
+        }
+        // Remove the query param so a later reload doesn't keep showing it
+        history.replaceState(null, '', window.location.pathname + '#mw-archive');
       }
     } catch(e) {}
   })();

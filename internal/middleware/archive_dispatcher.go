@@ -318,9 +318,26 @@ func isTransient(statusCode int) bool {
 
 // SendTest performs a synchronous test delivery without using the queue.
 // It shares request-building and error classification with production sends.
-// Returns the HTTP status code (0 on network error) and any error.
+// When cfg.NaClRecipientKey is set the test payload is sealed with the same
+// envelope path real traffic uses so a misconfigured key surfaces at handoff
+// time instead of silently during the first real request. Returns the HTTP
+// status code (0 on network error) and any error.
 func (d *ArchiveDispatcher) SendTest(cfg ArchiveConfig) (int, error) {
 	testPayload := []byte(`{"version":"v1","source":"arc_relay","phase":"test","meta":{"server_name":"connectivity_test"}}`)
+
+	var recipientKey *[32]byte
+	if cfg.NaClRecipientKey != "" {
+		decoded, err := DecodeRecipientKey(cfg.NaClRecipientKey)
+		if err != nil {
+			return 0, fmt.Errorf("invalid nacl_recipient_key: %w", err)
+		}
+		recipientKey = &decoded
+	}
+	sealed, err := sealArchivePayload(testPayload, recipientKey)
+	if err != nil {
+		return 0, fmt.Errorf("seal test payload: %w", err)
+	}
+	testPayload = sealed
 
 	req, err := http.NewRequest("POST", cfg.URL, bytes.NewReader(testPayload))
 	if err != nil {
@@ -407,17 +424,44 @@ func (d *ArchiveDispatcher) NextAttemptTime(currentAttempts int) time.Time {
 	return d.nextAttemptTime(currentAttempts)
 }
 
-// RetryHeld resets held items and wakes the delivery loop.
+// RetryHeld resets held items and wakes the delivery loop. Also forces the
+// circuit breaker back to closed so a paused dispatcher immediately resumes
+// delivery instead of waiting for the circuit timer - the admin explicitly
+// asked us to retry, so we trust them over the automated backoff.
 func (d *ArchiveDispatcher) RetryHeld() (int64, error) {
 	count, err := d.store.RetryHeld()
 	if err != nil {
 		return 0, err
 	}
-	if count > 0 {
-		select {
-		case d.pollCh <- struct{}{}:
-		default:
-		}
-	}
+	d.ResetCircuit()
 	return count, nil
+}
+
+// RewriteHeldDelivery updates the URL and auth fields on all held rows.
+// Used by the retry-with-current-config flow to fix stale destinations
+// before retrying.
+func (d *ArchiveDispatcher) RewriteHeldDelivery(cfg ArchiveConfig) (int64, error) {
+	return d.store.RewriteHeldDelivery(cfg.URL, cfg.AuthType, cfg.AuthValue, cfg.APIKeyHeader)
+}
+
+// ClearHeld deletes all held rows from the archive queue. Used when queued
+// messages are unrecoverable and the admin wants a clean slate.
+func (d *ArchiveDispatcher) ClearHeld() (int64, error) {
+	return d.store.ClearHeld()
+}
+
+// ResetCircuit forces the circuit breaker back to closed and wakes the
+// delivery loop. Called when the admin explicitly updates the archive
+// config or manually retries the queue - either action represents a
+// trust signal from the operator that they want delivery to resume.
+func (d *ArchiveDispatcher) ResetCircuit() {
+	d.mu.Lock()
+	d.cbState = cbClosed
+	d.cbPauseLevel = 0
+	d.consecutiveFails = 0
+	d.mu.Unlock()
+	select {
+	case d.pollCh <- struct{}{}:
+	default:
+	}
 }

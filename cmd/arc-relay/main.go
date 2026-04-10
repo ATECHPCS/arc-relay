@@ -107,7 +107,7 @@ func main() {
 
 	// Initialize middleware
 	middlewareStore := store.NewMiddlewareStore(db)
-	archiveQueueStore := store.NewArchiveQueueStore(db)
+	archiveQueueStore := store.NewArchiveQueueStore(db, crypto)
 	archiveEventLogger := func(evt *store.MiddlewareEvent) {
 		if err := middlewareStore.LogEvent(evt); err != nil {
 			slog.Warn("archive dispatcher: failed to log event", "err", err)
@@ -116,6 +116,13 @@ func main() {
 	archiveDispatcher := middleware.NewArchiveDispatcher(archiveQueueStore, archiveEventLogger)
 	archiveDispatcher.Start()
 	mwRegistry := middleware.NewRegistry(middlewareStore, archiveDispatcher)
+
+	// Register custom middleware here. Any type implementing middleware.Middleware
+	// can be registered with mwRegistry.Register("name", factoryFunc) and then
+	// enabled per-server via the web UI or API. See README.md "Writing Custom
+	// Middleware" for a working example.
+	//
+	// mwRegistry.Register("tenant_tagger", mymiddleware.Factory)
 
 	// Initialize proxy manager
 	proxyMgr := proxy.NewManager(serverStore, dockerMgr, oauthMgr, accessStore)

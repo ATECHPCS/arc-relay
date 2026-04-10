@@ -64,7 +64,13 @@
   {{else}}
   <div class="empty-state">
     {{if .IsAdmin}}
-    <p>No MCP servers configured yet.</p>
+    <h3>Get Started</h3>
+    <p>No MCP servers configured yet. Here's how to set up Arc Relay:</p>
+    <ol style="text-align:left; max-width:480px; margin:1rem auto;">
+      <li><a href="/servers/new">Add your first MCP server</a> (Docker, HTTP, or remote)</li>
+      <li><a href="/users">Invite team members</a> so they can connect their AI tools</li>
+      <li><a href="/connect">Connect a client</a> (Claude Desktop, Cursor, VS Code, or Codex CLI)</li>
+    </ol>
     <a href="/servers/new" class="btn btn-primary">Add Your First Server</a>
     {{else}}
     <p>No MCP servers available for your profile.</p>
@@ -72,6 +78,16 @@
   </div>
   {{end}}
 </div>
+
+{{if .Servers}}
+<div class="card" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
+  <div>
+    <strong>Connect your AI tools</strong>
+    <span style="color:var(--text-muted);font-size:0.85rem;"> - Claude Desktop, Cursor, VS Code, Codex CLI, or Claude Code</span>
+  </div>
+  <a href="/connect" class="btn btn-primary btn-sm">Connect Clients</a>
+</div>
+{{end}}
 
 <div class="card">
   <h2>Quick Stats</h2>

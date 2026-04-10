@@ -68,6 +68,80 @@ Arc Relay reads a TOML config file with environment variable overrides. See [`co
 | `ARC_RELAY_LLM_API_KEY` | Anthropic API key for tool context optimization (optional) |
 | `ARC_RELAY_LLM_MODEL` | LLM model for optimization (default: `claude-haiku-4-5-20251001`) |
 
+## User Onboarding
+
+Arc Relay supports invite-based onboarding. Admins create invite links from the Users page; recipients click the link, choose a username and password, and immediately receive an API key for CLI access.
+
+**Web UI invites:**
+1. Go to the Users page and click "Create Invite"
+2. Set the role (admin, user) and access level
+3. Share the invite link - it's a one-time use URL that expires
+
+**CLI invites:**
+```bash
+# Recipient runs this with the invite token from their admin:
+arc-sync init https://your-relay:8080 --token INVITE_TOKEN
+# They'll be prompted to choose a username and password
+```
+
+## CLI Tools
+
+### arc-sync
+
+`arc-sync` manages the connection between Arc Relay and your AI coding tools. It syncs MCP server definitions into `.mcp.json` files for Claude Code, Cursor, and VS Code projects.
+
+**Install:**
+```bash
+# Download from your relay instance:
+curl -fsSL https://your-relay:8080/install.sh | bash
+
+# Or build from source:
+CGO_ENABLED=0 go build ./cmd/arc-sync
+```
+
+**Commands:**
+```bash
+arc-sync init <url>       # Configure relay URL and authenticate (device code flow)
+arc-sync                  # Interactive sync - add relay servers to current project
+arc-sync list             # Show all servers and which are configured locally
+arc-sync add <name>       # Add a specific server to the current project
+arc-sync remove <name>    # Remove a server from the current project
+arc-sync status           # Show configuration and project details
+arc-sync server add       # Add a new MCP server to the relay (admin)
+arc-sync server remove    # Remove a server from the relay (admin)
+arc-sync server start     # Start a stopped server
+arc-sync server stop      # Stop a running server
+arc-sync setup-claude     # Install Claude Code skill and instructions
+arc-sync setup-project    # Add MCP instructions to project .claude/CLAUDE.md
+```
+
+**Authentication:** `arc-sync init` uses the device code flow by default. It opens a browser where you log in and approve the CLI. For CI environments, set `ARC_SYNC_URL` and `ARC_SYNC_API_KEY` environment variables.
+
+### dep-scan
+
+`dep-scan` analyzes Go module dependencies for risk signals - staleness, known vulnerabilities (via `govulncheck`), and maintenance indicators.
+
+```bash
+CGO_ENABLED=0 go build ./cmd/dep-scan
+dep-scan                      # Table output for current directory
+dep-scan -json                # JSON report
+dep-scan -threshold 7         # Exit non-zero if any dep scores >= 7
+dep-scan -skip-vulncheck      # Faster scan, no CVE data
+dep-scan -dir /path/to/module # Scan a different module
+```
+
+## Device Code Flow (CLI Authentication)
+
+The device code flow lets CLI tools authenticate without handling passwords directly:
+
+1. CLI calls `POST /api/auth/device` and receives a `device_code` and `user_code`
+2. User opens the `verification_url` in a browser and logs in
+3. User sees the code and clicks "Approve" (or "Deny")
+4. CLI polls `POST /api/auth/device/token` with the `device_code`
+5. On approval, the CLI receives an API key scoped to that user
+
+This flow is used by `arc-sync init` and can be integrated into any CLI tool.
+
 ## Adding Servers to Claude Code
 
 Install the CLI and sync your project:
@@ -97,6 +171,196 @@ Arc Relay's middleware processes MCP traffic bidirectionally:
 | **Archive** | Stream requests/responses to a webhook | POST with optional NaCl encryption |
 
 Configure middleware per-server via the web UI or API. The archive middleware supports NaCl Box encryption (X25519 + XSalsa20-Poly1305) for defense-in-depth on top of TLS.
+
+### Middleware Configuration Examples
+
+Middleware is configured per-server as JSON. Below are examples for each type.
+
+**Sanitizer** - redact or block sensitive patterns in responses:
+```json
+{
+  "patterns": [
+    {"name": "api_key", "regex": "(?i)(api[_-]?key|secret[_-]?key)\\s*[=:]\\s*\\S+", "action": "redact"},
+    {"name": "ssn", "regex": "\\b\\d{3}-\\d{2}-\\d{4}\\b", "action": "redact"},
+    {"name": "credit_card", "regex": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b", "action": "block"}
+  ]
+}
+```
+
+**Sizer** - enforce response size limits:
+```json
+{
+  "max_response_bytes": 500000,
+  "action": "truncate"
+}
+```
+Actions: `truncate` (trim to limit), `warn` (log but pass through), `block` (reject).
+
+**Alerter** - pattern or size-based alerts:
+```json
+{
+  "rules": [
+    {"name": "prod_access", "match": "(?i)(production|prod[_-]db)", "direction": "request", "action": "log"},
+    {"name": "large_response", "match_size": 100000, "direction": "response", "action": "webhook", "webhook_url": "https://hooks.example.com/alerts"}
+  ]
+}
+```
+
+**Archive** - stream tool calls to a webhook for compliance:
+```json
+{
+  "url": "https://compliance.example.com/webhooks/incoming/arc_webhooks",
+  "auth_type": "bearer",
+  "auth_value": "your-webhook-token",
+  "include": "both",
+  "nacl_recipient_key": "base64-encoded-curve25519-public-key"
+}
+```
+`include`: `request`, `response`, or `both`. `nacl_recipient_key` is optional - when set, payloads are encrypted with NaCl Box before delivery.
+
+### Archive Payload Format
+
+The archive middleware sends JSON payloads to the configured webhook URL via HTTP POST. Each payload is an envelope containing the MCP request and/or response:
+
+```json
+{
+  "version": "v1",
+  "source": "arc_relay",
+  "phase": "exchange",
+  "timestamp": "2026-04-07T12:00:00Z",
+  "meta": {
+    "server_id": "abc123",
+    "server_name": "my-server",
+    "user_id": "user-456",
+    "client_ip": "10.0.0.1",
+    "method": "tools/call",
+    "tool_name": "search",
+    "request_id": "1"
+  },
+  "request": {"jsonrpc": "2.0", "method": "tools/call", "params": {}},
+  "response": {"jsonrpc": "2.0", "result": {}}
+}
+```
+
+The `phase` field is `request`, `response`, or `exchange` (both). The `meta` block identifies who made the call, which server handled it, and the MCP method.
+
+### NaCl Encryption for Archive Payloads
+
+When `nacl_recipient_key` is configured, the archive payload is encrypted before delivery using NaCl Box (X25519 + XSalsa20-Poly1305) with an ephemeral sender keypair. The webhook receives a JSON envelope instead of the plaintext payload:
+
+```json
+{
+  "version": "nacl-box-v1",
+  "kid": "base64-8-byte-recipient-key-fingerprint",
+  "nonce": "base64-24-byte-nonce",
+  "ciphertext": "base64-sealed-payload",
+  "sourcePublicKey": "base64-32-byte-ephemeral-sender-pubkey"
+}
+```
+
+Receivers dispatch on the `version` field. The `kid` is a stable
+fingerprint of the recipient pubkey (first 8 bytes of `blake2b-256`
+of the 32-byte public key, base64-encoded) used to select the right
+private key during rotation.
+
+The recipient decrypts using:
+1. Their Curve25519 private key (the one whose public half was configured as `nacl_recipient_key`)
+2. The `sourcePublicKey` from the envelope (ephemeral, unique per payload)
+3. The `nonce` from the envelope
+
+This is defense-in-depth on top of TLS. The webhook endpoint cannot read payloads without the private key, even if the transport is compromised or a reverse proxy is sitting in front of the receiver.
+
+**Public key only on the relay.** The Arc Relay binary stores only the
+recipient's public key, and even that is optional. The matching
+private key lives on the receiver and is never transmitted to the
+relay. The relay also never stores a sender key: every envelope
+generates a fresh ephemeral sender keypair, uses its private half once
+to seal the box, and discards it.
+
+**Provisioning.** In the common path an admin clicks "Set up the
+Comma Compliance Archive" on the server detail page; the compliance
+app bounces back through a stateful handoff that auto-provisions the
+URL, bearer token, and recipient public key. Standalone deployments
+can also configure `nacl_recipient_key` directly in the archive
+middleware config.
+
+**Interfaces for custom receivers.** See
+[docs/archive-envelope.md](docs/archive-envelope.md) for the wire
+format specification and [docs/archive-handoff.md](docs/archive-handoff.md)
+for the handoff protocol.
+
+### Writing Custom Middleware
+
+Arc Relay's middleware pipeline is extensible. The four built-in middlewares (sanitizer, sizer, alerter, archive) are registered via the same `Registry.Register()` mechanism you use for your own. A custom middleware is any type that implements the `Middleware` interface:
+
+```go
+package mymiddleware
+
+import (
+    "context"
+    "encoding/json"
+
+    "github.com/comma-compliance/arc-relay/internal/mcp"
+    "github.com/comma-compliance/arc-relay/internal/middleware"
+    "github.com/comma-compliance/arc-relay/internal/store"
+)
+
+// TenantTagger adds a tenant ID header to every request and logs the tool name.
+type TenantTagger struct {
+    tenantID    string
+    eventLogger middleware.EventLogger
+}
+
+func (t *TenantTagger) Name() string { return "tenant_tagger" }
+
+func (t *TenantTagger) ProcessRequest(ctx context.Context, req *mcp.Request, meta *middleware.RequestMeta) (*mcp.Request, error) {
+    // Modify the request, block it, or annotate it
+    t.eventLogger(&store.MiddlewareEvent{
+        Middleware: t.Name(),
+        Action:     "tag",
+        Detail:     "tenant=" + t.tenantID + " tool=" + meta.ToolName,
+    })
+    return req, nil
+}
+
+func (t *TenantTagger) ProcessResponse(ctx context.Context, req *mcp.Request, resp *mcp.Response, meta *middleware.RequestMeta) (*mcp.Response, error) {
+    // Inspect or transform the response
+    return resp, nil
+}
+
+// Factory parses the per-server JSON config and builds the middleware instance.
+func Factory(config json.RawMessage, logger middleware.EventLogger) (middleware.Middleware, error) {
+    var cfg struct {
+        TenantID string `json:"tenant_id"`
+    }
+    if err := json.Unmarshal(config, &cfg); err != nil {
+        return nil, err
+    }
+    return &TenantTagger{tenantID: cfg.TenantID, eventLogger: logger}, nil
+}
+```
+
+Register your factory before the server starts handling traffic. The cleanest place is in `cmd/arc-relay/main.go` right after `middleware.NewRegistry(...)`:
+
+```go
+mwRegistry := middleware.NewRegistry(middlewareStore, archiveDispatcher)
+
+// Register custom middleware
+mwRegistry.Register("tenant_tagger", mymiddleware.Factory)
+```
+
+Once registered, enable your middleware on any server by creating a `middleware_configs` row with `middleware = "tenant_tagger"` and your JSON config. The web UI and API work identically to built-in middleware.
+
+**How the pipeline runs:** `ProcessRequest` runs in registration order before the request reaches the backend; `ProcessResponse` runs in reverse order before the response reaches the client. Returning a non-nil error stops the pipeline and fails the request.
+
+Examples of what custom middleware is good for:
+- Per-tenant request tagging and routing
+- Custom PII patterns beyond the built-in sanitizer
+- Enrichment (looking up user context, adding headers)
+- Cost tracking (token counting, billing hooks)
+- Business-specific compliance rules
+
+See `internal/middleware/sanitizer.go` for a production example of a middleware that reads a JSON config and transforms responses.
 
 ## Tool Context Optimizer
 

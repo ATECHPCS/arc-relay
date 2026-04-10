@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -40,12 +42,14 @@ type ArchiveQueueStatus struct {
 
 // ArchiveQueueStore provides CRUD for the archive_queue table.
 type ArchiveQueueStore struct {
-	db *DB
+	db        *DB
+	encryptor *ConfigEncryptor
 }
 
 // NewArchiveQueueStore creates a new ArchiveQueueStore.
-func NewArchiveQueueStore(db *DB) *ArchiveQueueStore {
-	return &ArchiveQueueStore{db: db}
+// The encryptor is used to encrypt/decrypt auth_value at rest.
+func NewArchiveQueueStore(db *DB, encryptor *ConfigEncryptor) *ArchiveQueueStore {
+	return &ArchiveQueueStore{db: db, encryptor: encryptor}
 }
 
 // Enqueue inserts a new payload into the queue for immediate delivery.
@@ -57,11 +61,20 @@ func (s *ArchiveQueueStore) Enqueue(item *ArchiveQueueItem) error {
 		}
 		item.ID = id
 	}
+	// Encrypt auth_value before storing
+	authValue := item.AuthValue
+	if authValue != "" && s.encryptor != nil {
+		encrypted, err := s.encryptor.Encrypt([]byte(authValue))
+		if err != nil {
+			return fmt.Errorf("encrypting auth_value: %w", err)
+		}
+		authValue = string(encrypted)
+	}
 	now := sqliteTime(time.Now())
 	_, err := s.db.Exec(`
 		INSERT INTO archive_queue (id, server_id, created_at, payload, url, auth_type, auth_value, api_key_header, status, attempts, next_attempt_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?)
-	`, item.ID, item.ServerID, now, item.Payload, item.URL, item.AuthType, item.AuthValue, item.APIKeyHeader, now)
+	`, item.ID, item.ServerID, now, item.Payload, item.URL, item.AuthType, authValue, item.APIKeyHeader, now)
 	return err
 }
 
@@ -103,6 +116,18 @@ func (s *ArchiveQueueStore) DequeueDue(limit int) ([]*ArchiveQueueItem, error) {
 		if lastError.Valid {
 			item.LastError = lastError.String
 		}
+		// Decrypt auth_value if encrypted
+		if item.AuthValue != "" && s.encryptor != nil {
+			decrypted, err := s.encryptor.Decrypt([]byte(item.AuthValue))
+			if err != nil {
+				// Log and skip this row rather than blocking the entire batch.
+				// This handles key rotation or corruption gracefully.
+				slog.Error("archive queue: cannot decrypt auth_value, holding item", "item_id", item.ID, "error", err)
+				_ = s.MarkHold(item.ID, "decrypt failed: "+err.Error())
+				continue
+			}
+			item.AuthValue = string(decrypted)
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -143,6 +168,48 @@ func (s *ArchiveQueueStore) RetryHeld() (int64, error) {
 		SET status = 'pending', next_attempt_at = ?, attempts = 0
 		WHERE status = 'hold'
 	`, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// RewriteHeldDelivery updates the URL, auth type, auth value, and api key
+// header on every queue row (both 'hold' and 'pending') that is not already
+// pointing at the given URL. Used when the admin has fixed a broken archive
+// URL and wants every queued message - not just held ones - to retry against
+// the new destination instead of the stale one captured at enqueue time.
+// Also resets attempts/last_error so exponential backoff doesn't stall
+// already-pending rows that were racking up failures. The auth_value is
+// encrypted the same way Enqueue does it so the dispatcher's Decrypt call
+// succeeds on subsequent delivery attempts.
+func (s *ArchiveQueueStore) RewriteHeldDelivery(url, authType, authValue, apiKeyHeader string) (int64, error) {
+	storedAuth := authValue
+	if authValue != "" && s.encryptor != nil {
+		encrypted, err := s.encryptor.Encrypt([]byte(authValue))
+		if err != nil {
+			return 0, fmt.Errorf("encrypt auth_value: %w", err)
+		}
+		storedAuth = string(encrypted)
+	}
+	result, err := s.db.Exec(`
+		UPDATE archive_queue
+		SET url = ?, auth_type = ?, auth_value = ?, api_key_header = ?,
+		    attempts = 0, last_error = '', next_attempt_at = ?
+		WHERE status IN ('hold', 'pending') AND url != ?
+	`, url, authType, storedAuth, apiKeyHeader, sqliteTime(time.Now()), url)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// ClearHeld deletes every row currently in 'hold' status. Used as the
+// "nuclear option" when queued messages are unrecoverable (e.g. the old
+// destination is permanently gone and the admin doesn't want to carry the
+// backlog forward). Returns the number of rows deleted.
+func (s *ArchiveQueueStore) ClearHeld() (int64, error) {
+	result, err := s.db.Exec(`DELETE FROM archive_queue WHERE status = 'hold'`)
 	if err != nil {
 		return 0, err
 	}

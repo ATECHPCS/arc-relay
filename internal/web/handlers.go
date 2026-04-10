@@ -146,6 +146,7 @@ type Handlers struct {
 	healthMon       *proxy.HealthMonitor
 	catalogClient   *catalog.Client
 	deviceAuth      *deviceAuthStore
+	archiveHandoff  *archiveHandoffStore
 	inviteStore     *store.InviteStore
 	optimizeStore   *store.OptimizeStore
 	llmClient       *llm.Client
@@ -180,6 +181,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		healthMon:       healthMon,
 		catalogClient:   catalog.NewClient(),
 		deviceAuth:      newDeviceAuthStore(),
+		archiveHandoff:  newArchiveHandoffStore(),
 		inviteStore:     inviteStore,
 		optimizeStore:   optimizeStore,
 		llmClient:       llmClient,
@@ -288,8 +290,11 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
 	mux.HandleFunc("/api/middleware/global", h.requireAuth(h.handleGlobalMiddleware))
 	mux.HandleFunc("/api/archive/retry", h.requireAuth(h.handleArchiveRetry))
+	mux.HandleFunc("/api/archive/clear", h.requireAuth(h.handleArchiveClear))
 	mux.HandleFunc("/api/archive/test", h.requireAuth(h.handleArchiveTest))
 	mux.HandleFunc("/api/archive/status", h.requireAuth(h.handleArchiveStatus))
+	mux.HandleFunc("/api/archive/handoff/begin", h.requireAuth(h.handleArchiveHandoffBegin))
+	mux.HandleFunc("/api/archive/handoff/complete", h.requireAuth(h.handleArchiveHandoffComplete))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
 	mux.HandleFunc("/oauth/start/", h.requireAuth(h.handleOAuthStart))
@@ -380,7 +385,17 @@ func (h *Handlers) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		// Validate CSRF for state-changing requests
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
 			if !h.validateCSRF(r, cookie.Value) {
-				http.Error(w, "Invalid or missing CSRF token", http.StatusForbidden)
+				// API endpoints expect JSON; HTML forms get a plain-text response.
+				// This keeps the JS fetch() callers from failing JSON.parse on
+				// the error body with an opaque "Unexpected token" error.
+				if strings.HasPrefix(r.URL.Path, "/api/") {
+					writeJSON(w, http.StatusForbidden, map[string]string{
+						"error": "csrf_invalid",
+						"hint":  "Your session's CSRF token is stale. Reload the page and try again.",
+					})
+				} else {
+					http.Error(w, "Invalid or missing CSRF token", http.StatusForbidden)
+				}
 				return
 			}
 		}
@@ -776,7 +791,13 @@ func (h *Handlers) handleServerDetail(w http.ResponseWriter, r *http.Request, id
 			mwConfigs, _ = h.middlewareStore.GetForServer(srv.ID)
 			mwEvents, _ = h.middlewareStore.RecentEvents(srv.ID, 20)
 			if gac, err := h.middlewareStore.GetGlobal("archive"); err == nil && gac != nil {
-				globalArchiveCfg = string(gac.Config)
+				// Inject a derived nacl_key_id into the config blob so
+				// the template can render the envelope fingerprint
+				// without shipping crypto to the browser. The stored
+				// config never contains kid; it is computed from the
+				// pubkey at render time here and by compliance on the
+				// other side.
+				globalArchiveCfg = decorateArchiveConfigForDisplay(gac.Config)
 			}
 		}
 
@@ -1293,10 +1314,31 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Validate the archive config at save time so a bad URL, unknown
+	// auth type, or malformed NaCl key is rejected here instead of
+	// silently breaking at first enqueue. ParseArchiveConfig normalizes
+	// defaults so the stored blob matches what the runtime will see.
+	archiveCfg, err := middleware.ParseArchiveConfig(body.Config)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := middleware.ValidateArchiveConfig(archiveCfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	// Re-marshal the normalized config so defaults (include, api_key_header)
+	// are persisted rather than left implicit.
+	normalized, err := json.Marshal(archiveCfg)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to normalize config"})
+		return
+	}
+
 	mc := &store.MiddlewareConfig{
 		Middleware: body.Middleware,
 		Enabled:    false, // Global row is config-only; per-server toggles control enabled
-		Config:     body.Config,
+		Config:     normalized,
 		Priority:   40,
 	}
 
@@ -1305,10 +1347,34 @@ func (h *Handlers) handleGlobalMiddleware(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// Rewrite any queued rows that point at the previous URL so a config
+	// change takes effect immediately. Admin is declaring the new URL as
+	// the desired destination for everything in flight, including the
+	// backlog - not just for traffic enqueued after the save. Reset the
+	// circuit breaker too so a previously-paused dispatcher starts
+	// draining the queue against the new target.
+	rewritten := int64(0)
+	if disp := h.mwRegistry.ArchiveDispatcher(); disp != nil {
+		if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+			rewritten = n
+		}
+		// Reset CB and wake the delivery loop unconditionally - the
+		// admin has explicitly changed the archive destination so we
+		// trust them over any accumulated failure backoff.
+		disp.ResetCircuit()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"rewritten": rewritten,
+	})
 }
 
 // handleArchiveRetry resets held archive items for immediate retry.
+// Before resetting status, it rewrites the URL/auth on held rows to match
+// the current archive config so retries target the current destination
+// instead of whatever was stored at enqueue time. This is how admins
+// recover the backlog after fixing a broken archive URL.
 func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1324,12 +1390,56 @@ func (h *Handlers) handleArchiveRetry(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
 		return
 	}
+
+	// Best-effort: rewrite held rows with the current global archive config
+	// before retrying. If no global config is saved yet, skip the rewrite
+	// and retry the rows as-is.
+	rewritten := int64(0)
+	if globalCfg, err := h.middlewareStore.GetGlobal("archive"); err == nil && globalCfg != nil {
+		var archiveCfg middleware.ArchiveConfig
+		if err := json.Unmarshal(globalCfg.Config, &archiveCfg); err == nil && archiveCfg.URL != "" {
+			if n, rwErr := disp.RewriteHeldDelivery(archiveCfg); rwErr == nil {
+				rewritten = n
+			}
+		}
+	}
+
 	count, err := disp.RetryHeld()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "retried": count})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":    "ok",
+		"retried":   count,
+		"rewritten": rewritten,
+	})
+}
+
+// handleArchiveClear deletes all held archive items. Used as a recovery
+// option when queued messages are unrecoverable and the admin wants a
+// clean slate instead of replaying the backlog.
+func (h *Handlers) handleArchiveClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	user := getUser(r)
+	if user == nil || user.Role != "admin" {
+		http.Error(w, "Admin access required", http.StatusForbidden)
+		return
+	}
+	disp := h.mwRegistry.ArchiveDispatcher()
+	if disp == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "archive dispatcher not available"})
+		return
+	}
+	count, err := disp.ClearHeld()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "ok", "cleared": count})
 }
 
 // handleArchiveTest sends a test payload to verify archive connectivity.

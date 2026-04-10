@@ -79,6 +79,121 @@ func TestNewArchiveFromConfig_NoEncryption(t *testing.T) {
 	}
 }
 
+func TestValidateArchiveConfig(t *testing.T) {
+	pub, _, _ := box.GenerateKey(rand.Reader)
+	goodKey := base64.StdEncoding.EncodeToString(pub[:])
+
+	tests := []struct {
+		name    string
+		cfg     ArchiveConfig
+		wantErr bool
+	}{
+		{
+			name:    "missing url",
+			cfg:     ArchiveConfig{Include: "both"},
+			wantErr: true,
+		},
+		{
+			name:    "plain http on public host",
+			cfg:     ArchiveConfig{URL: "http://example.com/archive", Include: "both"},
+			wantErr: true,
+		},
+		{
+			name:    "plain http on localhost allowed",
+			cfg:     ArchiveConfig{URL: "http://localhost:4000/ingest", Include: "both"},
+			wantErr: false,
+		},
+		{
+			name:    "plain http on 127.0.0.1 allowed",
+			cfg:     ArchiveConfig{URL: "http://127.0.0.1:4000/ingest", Include: "both"},
+			wantErr: false,
+		},
+		{
+			name:    "https ok",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", Include: "both"},
+			wantErr: false,
+		},
+		{
+			name:    "unknown scheme rejected",
+			cfg:     ArchiveConfig{URL: "ftp://example.com/archive", Include: "both"},
+			wantErr: true,
+		},
+		{
+			name:    "unknown auth_type rejected",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", AuthType: "hmac"},
+			wantErr: true,
+		},
+		{
+			name:    "bearer with empty value rejected",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", AuthType: "bearer", AuthValue: ""},
+			wantErr: true,
+		},
+		{
+			name:    "bearer with value accepted",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", AuthType: "bearer", AuthValue: "tok"},
+			wantErr: false,
+		},
+		{
+			name:    "api_key with empty value rejected",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", AuthType: "api_key", AuthValue: ""},
+			wantErr: true,
+		},
+		{
+			name:    "0.0.0.0 is not loopback",
+			cfg:     ArchiveConfig{URL: "http://0.0.0.0:4000/ingest"},
+			wantErr: true,
+		},
+		{
+			name:    "IPv6 loopback literal allowed",
+			cfg:     ArchiveConfig{URL: "http://[::1]:4000/ingest"},
+			wantErr: false,
+		},
+		{
+			name:    "bad include rejected",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", Include: "everything"},
+			wantErr: true,
+		},
+		{
+			name:    "bad nacl key rejected",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", NaClRecipientKey: "not-valid!!!"},
+			wantErr: true,
+		},
+		{
+			name:    "good nacl key accepted",
+			cfg:     ArchiveConfig{URL: "https://example.com/archive", NaClRecipientKey: goodKey},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidateArchiveConfig(tt.cfg)
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateArchiveConfig_ReturnsDecodedKey(t *testing.T) {
+	pub, _, _ := box.GenerateKey(rand.Reader)
+	b64 := base64.StdEncoding.EncodeToString(pub[:])
+	cfg := ArchiveConfig{URL: "https://example.com/archive", NaClRecipientKey: b64}
+	decoded, err := ValidateArchiveConfig(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decoded == nil {
+		t.Fatal("decoded key should not be nil when NaClRecipientKey is set")
+	}
+	if *decoded != *pub {
+		t.Error("decoded key does not match configured pubkey")
+	}
+}
+
 func TestArchive_CachedKeyUsedForEncryption(t *testing.T) {
 	// Verify that the cached recipientKey matches what was configured
 	dispatcher := &ArchiveDispatcher{}

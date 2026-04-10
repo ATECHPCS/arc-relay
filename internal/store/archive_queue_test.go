@@ -21,7 +21,7 @@ func newQueueItem(serverID string) *store.ArchiveQueueItem {
 
 func TestEnqueue_InsertsRow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item := newQueueItem("srv-test")
 	if err := qs.Enqueue(item); err != nil {
@@ -54,7 +54,7 @@ func TestEnqueue_InsertsRow(t *testing.T) {
 
 func TestDequeueDue_RespectsNextAttemptAt(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	// Enqueue one due now
 	item1 := newQueueItem("srv-1")
@@ -85,7 +85,7 @@ func TestDequeueDue_RespectsNextAttemptAt(t *testing.T) {
 
 func TestDequeueDue_RespectsLimit(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	for i := 0; i < 5; i++ {
 		if err := qs.Enqueue(newQueueItem("srv-1")); err != nil {
@@ -104,7 +104,7 @@ func TestDequeueDue_RespectsLimit(t *testing.T) {
 
 func TestDequeueDue_OrdersByNextAttemptThenCreated(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item1 := newQueueItem("srv-1")
 	if err := qs.Enqueue(item1); err != nil {
@@ -129,7 +129,7 @@ func TestDequeueDue_OrdersByNextAttemptThenCreated(t *testing.T) {
 
 func TestMarkDelivered_DeletesRow(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item := newQueueItem("srv-1")
 	if err := qs.Enqueue(item); err != nil {
@@ -148,7 +148,7 @@ func TestMarkDelivered_DeletesRow(t *testing.T) {
 
 func TestReschedule_UpdatesAttemptsAndNextAttempt(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item := newQueueItem("srv-1")
 	if err := qs.Enqueue(item); err != nil {
@@ -181,7 +181,7 @@ func TestReschedule_UpdatesAttemptsAndNextAttempt(t *testing.T) {
 
 func TestMarkHold_SetsStatusHold(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item := newQueueItem("srv-1")
 	if err := qs.Enqueue(item); err != nil {
@@ -209,7 +209,7 @@ func TestMarkHold_SetsStatusHold(t *testing.T) {
 
 func TestRetryHeld_ResetsHeldRows(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item := newQueueItem("srv-1")
 	if err := qs.Enqueue(item); err != nil {
@@ -238,7 +238,7 @@ func TestRetryHeld_ResetsHeldRows(t *testing.T) {
 
 func TestStatus_ReturnsCorrectCounts(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	// Empty queue
 	st, err := qs.Status()
@@ -285,7 +285,7 @@ func TestStatus_ReturnsCorrectCounts(t *testing.T) {
 
 func TestStatusForServer_FiltersCorrectly(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	if err := qs.Enqueue(newQueueItem("srv-1")); err != nil {
 		t.Fatal(err)
@@ -310,7 +310,7 @@ func TestStatusForServer_FiltersCorrectly(t *testing.T) {
 
 func TestPrune_RemovesOldItems(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	// Insert an item with old timestamp
 	item := newQueueItem("srv-1")
@@ -342,7 +342,7 @@ func TestPrune_RemovesOldItems(t *testing.T) {
 
 func TestDenormalization_PreservesOriginalConfig(t *testing.T) {
 	db := testutil.OpenTestDB(t)
-	qs := store.NewArchiveQueueStore(db)
+	qs := store.NewArchiveQueueStore(db, nil)
 
 	item := &store.ArchiveQueueItem{
 		ServerID:     "srv-1",

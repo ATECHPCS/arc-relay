@@ -1,4 +1,4 @@
--- MCP Wrangler initial schema
+-- Arc Relay initial schema
 
 CREATE TABLE IF NOT EXISTS servers (
     id           TEXT PRIMARY KEY,
