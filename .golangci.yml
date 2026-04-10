@@ -1,15 +1,21 @@
+version: "2"
+
 linters:
   enable:
     - errcheck
     - govet
     - staticcheck
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+  exclusions:
+    paths:
+      - vendor
+
+formatters:
+  enable:
     - gofmt
-
-linters-settings:
-  errcheck:
-    check-type-assertions: false
-    check-blank: false
-
-issues:
-  exclude-dirs:
-    - vendor
+  exclusions:
+    paths:
+      - vendor

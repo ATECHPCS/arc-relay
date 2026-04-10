@@ -30,8 +30,8 @@ $GOPATH/bin/staticcheck ./...
 
 echo "=== golangci-lint ==="
 if [ ! -f "$GOPATH/bin/golangci-lint" ]; then
-  echo "Installing golangci-lint..."
-  $GO install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+  echo "Installing golangci-lint v2..."
+  $GO install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.0
 fi
 CGO_ENABLED=1 $GOPATH/bin/golangci-lint run ./...
 
