@@ -6,7 +6,7 @@
   "stack": "container",
   "env": {
     "ARC_RELAY_ENCRYPTION_KEY": {
-      "description": "Encryption key for stored credentials (hex-encoded, 32 bytes).",
+      "description": "Encryption key for stored credentials. Any strong random string works; the app derives a 32-byte AES key internally.",
       "generator": "secret"
     },
     "ARC_RELAY_SESSION_SECRET": {

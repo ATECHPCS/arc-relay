@@ -43,6 +43,10 @@ func TestPublicBaseURL(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	t.Run("defaults with empty path", func(t *testing.T) {
+		// Neutralise PaaS-style env vars so this test does not depend
+		// on the caller's environment (CI runners often set PORT).
+		t.Setenv("ARC_RELAY_PORT", "")
+		t.Setenv("PORT", "")
 		cfg, err := Load("")
 		if err != nil {
 			t.Fatalf("Load() error = %v", err)
