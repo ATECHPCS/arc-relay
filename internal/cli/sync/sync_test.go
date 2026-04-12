@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/comma-compliance/arc-relay/internal/cli/config"
 )
 
@@ -349,5 +350,137 @@ func TestSyncNoRunningServers(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "No running servers") {
 		t.Error("expected 'No running servers' message")
+	}
+}
+
+func TestSyncWritesAllDetectedTargets(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+	}
+
+	configDir, projectDir, _ := setupTest(t, servers, `{"mcpServers":{}}`)
+	if err := os.MkdirAll(filepath.Join(projectDir, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".codex", "config.toml"), []byte("[mcp_servers]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(result.Added) != 1 || result.Added[0] != "sentry" {
+		t.Fatalf("expected sentry to be added, got %v", result.Added)
+	}
+
+	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading .mcp.json: %v", err)
+	}
+	var rawJSON map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawJSON); err != nil {
+		t.Fatalf("parsing .mcp.json: %v", err)
+	}
+	var mcpServers map[string]json.RawMessage
+	if err := json.Unmarshal(rawJSON["mcpServers"], &mcpServers); err != nil {
+		t.Fatalf("parsing mcpServers: %v", err)
+	}
+	if _, ok := mcpServers["sentry"]; !ok {
+		t.Fatal("expected sentry in .mcp.json")
+	}
+
+	tomlData, err := os.ReadFile(filepath.Join(projectDir, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("reading config.toml: %v", err)
+	}
+	var rawTOML map[string]any
+	if _, err := toml.Decode(string(tomlData), &rawTOML); err != nil {
+		t.Fatalf("parsing config.toml: %v", err)
+	}
+	codexServers := rawTOML["mcp_servers"].(map[string]any)
+	if _, ok := codexServers["sentry"]; !ok {
+		t.Fatal("expected sentry in .codex/config.toml")
+	}
+}
+
+func TestSyncConfiguredIfPresentInAnyTarget(t *testing.T) {
+	servers := []testServer{
+		{ID: "1", Name: "sentry", Status: "running"},
+		{ID: "2", Name: "pfsense", Status: "running"},
+	}
+
+	configDir, projectDir, relayURL := setupTest(t, servers, `{"mcpServers":{}}`)
+	if err := os.MkdirAll(filepath.Join(projectDir, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := fmt.Sprintf(`
+[mcp_servers.sentry]
+url = "%s/mcp/sentry"
+http_headers = {Authorization = "Bearer test-key"}
+`, relayURL)
+	if err := os.WriteFile(filepath.Join(projectDir, ".codex", "config.toml"), []byte(codexConfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	result, err := Run(Options{
+		ConfigDir:      configDir,
+		ProjectDir:     projectDir,
+		NonInteractive: true,
+		Output:         &output,
+		Input:          strings.NewReader(""),
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(result.Added) != 1 || result.Added[0] != "pfsense" {
+		t.Fatalf("expected only pfsense to be added, got %v", result.Added)
+	}
+	if len(result.Existed) != 1 || result.Existed[0] != "sentry" {
+		t.Fatalf("expected sentry to be treated as existing, got %v", result.Existed)
+	}
+
+	jsonData, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("reading .mcp.json: %v", err)
+	}
+	var rawJSON map[string]json.RawMessage
+	if err := json.Unmarshal(jsonData, &rawJSON); err != nil {
+		t.Fatalf("parsing .mcp.json: %v", err)
+	}
+	var jsonServers map[string]json.RawMessage
+	if err := json.Unmarshal(rawJSON["mcpServers"], &jsonServers); err != nil {
+		t.Fatalf("parsing mcpServers: %v", err)
+	}
+	if _, ok := jsonServers["sentry"]; ok {
+		t.Fatal("did not expect sentry to be backfilled into .mcp.json")
+	}
+	if _, ok := jsonServers["pfsense"]; !ok {
+		t.Fatal("expected pfsense in .mcp.json")
+	}
+
+	tomlData, err := os.ReadFile(filepath.Join(projectDir, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("reading config.toml: %v", err)
+	}
+	var rawTOML map[string]any
+	if _, err := toml.Decode(string(tomlData), &rawTOML); err != nil {
+		t.Fatalf("parsing config.toml: %v", err)
+	}
+	codexServers := rawTOML["mcp_servers"].(map[string]any)
+	if _, ok := codexServers["sentry"]; !ok {
+		t.Fatal("expected sentry to remain in .codex/config.toml")
+	}
+	if _, ok := codexServers["pfsense"]; !ok {
+		t.Fatal("expected pfsense in .codex/config.toml")
 	}
 }

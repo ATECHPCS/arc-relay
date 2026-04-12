@@ -48,6 +48,8 @@ func main() {
 		runServer()
 	case "setup-claude":
 		runSetupClaude()
+	case "setup-codex":
+		runSetupCodex()
 	case "setup-project":
 		runSetupProject()
 	case "--version", "version":
@@ -73,7 +75,8 @@ Commands:
   reset         Clear the skip list for the current project
   status        Show configuration and project details
   setup-claude  Install Claude Code skill and instructions
-  setup-project Add MCP instructions to .claude/CLAUDE.md for team sharing
+  setup-codex   Install Codex CLI AGENTS instructions
+  setup-project Add project MCP instructions to .claude/CLAUDE.md and AGENTS.md
   server        Manage servers on the relay instance (add, remove, start, stop)
 
 Flags (for sync/add):
@@ -251,6 +254,9 @@ func runInit() {
 	// Offer Claude Code integration
 	offerClaudeIntegration(scanner)
 
+	// Offer Codex CLI integration
+	offerCodexIntegration(scanner)
+
 	// Offer project-level setup if in a project directory
 	offerProjectSetup(scanner)
 
@@ -338,6 +344,11 @@ func runSetupClaude() {
 	offerClaudeIntegration(scanner)
 }
 
+func runSetupCodex() {
+	scanner := bufio.NewScanner(os.Stdin)
+	offerCodexIntegration(scanner)
+}
+
 // claudeInstructionsSnippet is appended to ~/.claude/CLAUDE.md to steer Claude
 // toward using arc-sync for MCP server management instead of editing .mcp.json directly.
 const claudeInstructionsSnippet = `
@@ -349,6 +360,19 @@ Run "arc-sync list" to see available servers. Run "arc-sync" to sync new servers
 
 // claudeInstructionsMarker identifies the arc-sync section in CLAUDE.md.
 const claudeInstructionsMarker = "## MCP Server Management"
+
+// codexInstructionsSnippet is appended to ~/.codex/AGENTS.md to steer Codex
+// toward using arc-sync for MCP server management instead of editing
+// .codex/config.toml directly.
+const codexInstructionsSnippet = `
+## MCP Server Management
+MCP servers are managed by Arc Relay via arc-sync. Do not edit .codex/config.toml or .mcp.json manually.
+Use arc-sync commands: list, add <name>, remove <name>, server add/remove/start/stop.
+Run "arc-sync list" to see available servers. Run "arc-sync" to sync new servers.
+`
+
+// codexInstructionsMarker identifies the arc-sync section in AGENTS.md.
+const codexInstructionsMarker = "## MCP Server Management"
 
 func offerClaudeIntegration(scanner *bufio.Scanner) {
 	homeDir, err := os.UserHomeDir()
@@ -447,6 +471,54 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 	}
 }
 
+func offerCodexIntegration(scanner *bufio.Scanner) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	codexDir := filepath.Join(homeDir, ".codex")
+	agentsPath := filepath.Join(codexDir, "AGENTS.md")
+
+	if hasMarker(agentsPath, codexInstructionsMarker) {
+		fmt.Println("   Codex CLI integration: already installed ✓")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("Codex CLI integration:")
+	fmt.Println("   Codex works better when it knows to use arc-sync for MCP servers")
+	fmt.Println("   instead of editing .codex/config.toml directly. This installs:")
+	fmt.Println("     • ~/.codex/AGENTS.md  — instructions for Codex to use arc-sync")
+	fmt.Println()
+	fmt.Print("   Install Codex CLI integration? [Y/n] ")
+
+	if !scanner.Scan() {
+		return
+	}
+	answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if answer != "" && answer != "y" && answer != "yes" {
+		fmt.Println("   Skipped. You can install manually later in ~/.codex/AGENTS.md.")
+		fmt.Println()
+		return
+	}
+
+	if err := os.MkdirAll(codexDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "   Warning: could not create %s: %v\n", codexDir, err)
+		fmt.Println()
+		return
+	}
+
+	if err := appendSnippetIfMissing(agentsPath, codexInstructionsMarker, codexInstructionsSnippet); err != nil {
+		fmt.Fprintf(os.Stderr, "   Warning: could not write %s: %v\n", agentsPath, err)
+		fmt.Println()
+		return
+	}
+
+	fmt.Printf("   ✓ Added MCP instructions to %s\n", agentsPath)
+	fmt.Println()
+}
+
 // projectClaudeSnippet is the content added to a project's .claude/CLAUDE.md.
 const projectClaudeSnippet = `## MCP Servers
 This project uses Arc Relay for shared tool access.
@@ -458,16 +530,28 @@ This project uses Arc Relay for shared tool access.
 
 const projectClaudeMarker = "## MCP Servers"
 
+// projectCodexSnippet is the content added to a project's AGENTS.md.
+const projectCodexSnippet = `## MCP Servers
+This project uses Arc Relay for shared tool access.
+- If arc-sync is not installed, run: arc-sync init (or ask your admin for an install command)
+- Use arc-sync for all server management (adding, removing, listing)
+- Do NOT edit .codex/config.toml or .mcp.json manually - use arc-sync commands instead
+- Run "arc-sync list" to see available servers, "arc-sync" to sync
+`
+
+const projectCodexMarker = "## MCP Servers"
+
 func runSetupProject() {
 	projectDir := getProjectDir()
-	installed := installProjectClaude(projectDir)
-	if installed {
+	installedClaude := installProjectClaude(projectDir)
+	installedCodex := installProjectCodex(projectDir)
+	if installedClaude || installedCodex {
 		fmt.Println()
-		fmt.Println("Commit .claude/CLAUDE.md so teammates get guided setup automatically.")
+		fmt.Println("Commit project instruction files so teammates get guided setup automatically.")
 	}
 }
 
-// offerProjectSetup prompts the user to set up project-level Claude instructions.
+// offerProjectSetup prompts the user to set up project-level tool instructions.
 func offerProjectSetup(scanner *bufio.Scanner) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -478,12 +562,10 @@ func offerProjectSetup(scanner *bufio.Scanner) {
 		return
 	}
 
-	// Check if project CLAUDE.md already has our marker
-	claudePath := filepath.Join(projectDir, ".claude", "CLAUDE.md")
-	if data, err := os.ReadFile(claudePath); err == nil {
-		if strings.Contains(string(data), projectClaudeMarker) {
-			return // already set up
-		}
+	hasClaude := hasProjectClaude(projectDir)
+	hasCodex := hasProjectCodex(projectDir)
+	if hasClaude && hasCodex {
+		return
 	}
 
 	// Check if this looks like a git project (worth sharing)
@@ -492,8 +574,14 @@ func offerProjectSetup(scanner *bufio.Scanner) {
 	}
 
 	fmt.Println("Project setup:")
-	fmt.Println("   Add MCP instructions to this project's .claude/CLAUDE.md so teammates")
-	fmt.Println("   get guided setup when they open the project with Claude Code.")
+	fmt.Println("   Add MCP instructions to this project so teammates get guided setup")
+	fmt.Println("   when they open it with Claude Code and Codex CLI.")
+	if !hasClaude {
+		fmt.Println("     • .claude/CLAUDE.md")
+	}
+	if !hasCodex {
+		fmt.Println("     • AGENTS.md")
+	}
 	fmt.Print("   Set up project for team sharing? [Y/n] ")
 
 	if !scanner.Scan() {
@@ -507,6 +595,7 @@ func offerProjectSetup(scanner *bufio.Scanner) {
 	}
 
 	installProjectClaude(projectDir)
+	installProjectCodex(projectDir)
 	fmt.Println()
 }
 
@@ -516,11 +605,9 @@ func installProjectClaude(projectDir string) bool {
 	claudePath := filepath.Join(claudeDir, "CLAUDE.md")
 
 	// Check if already present
-	if data, err := os.ReadFile(claudePath); err == nil {
-		if strings.Contains(string(data), projectClaudeMarker) {
-			fmt.Printf("   Project CLAUDE.md: already has MCP instructions ✓\n")
-			return false
-		}
+	if hasMarker(claudePath, projectClaudeMarker) {
+		fmt.Printf("   Project CLAUDE.md: already has MCP instructions ✓\n")
+		return false
 	}
 
 	if err := os.MkdirAll(claudeDir, 0755); err != nil {
@@ -544,14 +631,39 @@ func installProjectClaude(projectDir string) bool {
 	return true
 }
 
+// installProjectCodex adds MCP instructions to the project's AGENTS.md.
+func installProjectCodex(projectDir string) bool {
+	agentsPath := filepath.Join(projectDir, "AGENTS.md")
+
+	if hasMarker(agentsPath, projectCodexMarker) {
+		fmt.Printf("   Project AGENTS.md: already has MCP instructions ✓\n")
+		return false
+	}
+
+	snippet := projectCodexSnippet
+	if data, err := os.ReadFile(agentsPath); err == nil && len(data) > 0 {
+		snippet = "\n" + snippet
+	}
+
+	if err := appendSnippetIfMissing(agentsPath, projectCodexMarker, snippet); err != nil {
+		fmt.Fprintf(os.Stderr, "   Warning: could not write %s: %v\n", agentsPath, err)
+		return false
+	}
+
+	fmt.Printf("   ✓ Added MCP instructions to %s\n", agentsPath)
+	return true
+}
+
 // hasProjectClaude checks if the project already has MCP instructions in .claude/CLAUDE.md.
 func hasProjectClaude(projectDir string) bool {
 	claudePath := filepath.Join(projectDir, ".claude", "CLAUDE.md")
-	data, err := os.ReadFile(claudePath)
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(data), projectClaudeMarker)
+	return hasMarker(claudePath, projectClaudeMarker)
+}
+
+// hasProjectCodex checks if the project already has MCP instructions in AGENTS.md.
+func hasProjectCodex(projectDir string) bool {
+	agentsPath := filepath.Join(projectDir, "AGENTS.md")
+	return hasMarker(agentsPath, projectCodexMarker)
 }
 
 func installSkillFromEmbed(skillDir, skillPath string) error {
@@ -564,6 +676,40 @@ func installSkillFromEmbed(skillDir, skillPath string) error {
 	}
 
 	return nil
+}
+
+func hasMarker(path, marker string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), marker)
+}
+
+func appendSnippetIfMissing(path, marker, snippet string) error {
+	if hasMarker(path, marker) {
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	if _, err := f.WriteString(snippet); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func detectedTargets(projectDir string) []project.Target {
+	return project.DetectedTargetsOrDefault(projectDir)
+}
+
+func configuredServers(projectDir, relayURL string, targets []project.Target) ([]project.ManagedServer, error) {
+	return project.ReadManagedServersFromTargets(projectDir, relayURL, targets)
 }
 
 func runList() {
@@ -584,8 +730,8 @@ func runList() {
 		os.Exit(1)
 	}
 
-	target := &project.ClaudeCodeTarget{}
-	configured, err := target.Read(projectDir, creds.RelayURL)
+	targets := detectedTargets(projectDir)
+	configured, err := configuredServers(projectDir, creds.RelayURL, targets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading project config: %v\n", err)
 		os.Exit(1)
@@ -707,33 +853,39 @@ func runAdd() {
 		}
 	}
 
-	target := &project.ClaudeCodeTarget{}
+	targets := detectedTargets(projectDir)
 	toAdd := []project.ManagedServer{
 		{Name: serverName, URL: client.ServerProxyURL(serverName)},
 	}
 
 	if hasFlag("--dry-run") {
-		fmt.Printf("DRY RUN — would add %s to %s/.mcp.json\n", serverName, projectDir)
+		for _, target := range targets {
+			fmt.Printf("DRY RUN — would add %s to %s\n", serverName, filepath.Join(projectDir, target.ConfigFileName()))
+		}
 		return
 	}
 
-	// Show gitignore warnings
-	warnings := safety.CheckGitignore(projectDir, ".mcp.json")
-	fmt.Print(safety.FormatWarnings(warnings))
-
-	if err := target.Write(projectDir, creds.RelayURL, creds.APIKey, toAdd); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	// Show gitignore warnings.
+	for _, target := range targets {
+		warnings := safety.CheckGitignore(projectDir, target.ConfigFileName())
+		fmt.Print(safety.FormatWarnings(warnings))
 	}
 
-	fmt.Printf("✓  Added %s to .mcp.json\n", serverName)
+	for _, target := range targets {
+		if err := target.Write(projectDir, creds.RelayURL, creds.APIKey, toAdd); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing %s config: %v\n", target.Name(), err)
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("✓  Added %s to %d target(s)\n", serverName, len(targets))
 
 	// One-time hint about project setup
-	if !hasProjectClaude(projectDir) {
+	if !hasProjectClaude(projectDir) || !hasProjectCodex(projectDir) {
 		if _, err := os.Stat(filepath.Join(projectDir, ".git")); err == nil {
 			fmt.Println()
-			fmt.Println("   Tip: Run 'arc-sync setup-project' to add Claude Code instructions")
-			fmt.Println("   to this repo so teammates get guided setup automatically.")
+			fmt.Println("   Tip: Run 'arc-sync setup-project' to add Claude Code and Codex")
+			fmt.Println("   instructions to this repo so teammates get guided setup automatically.")
 		}
 	}
 }
@@ -748,21 +900,29 @@ func runRemove() {
 	projectDir := getProjectDir()
 	configDir := getConfigDir()
 
-	target := &project.ClaudeCodeTarget{}
+	targets := detectedTargets(projectDir)
 
 	if hasFlag("--dry-run") {
-		fmt.Printf("DRY RUN — would remove %s from %s/.mcp.json\n", serverName, projectDir)
+		for _, target := range targets {
+			fmt.Printf("DRY RUN — would remove %s from %s\n", serverName, filepath.Join(projectDir, target.ConfigFileName()))
+		}
 		return
 	}
 
-	removed, err := target.Remove(projectDir, []string{serverName})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	removedTargets := 0
+	for _, target := range targets {
+		removed, err := target.Remove(projectDir, []string{serverName})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error removing from %s config: %v\n", target.Name(), err)
+			os.Exit(1)
+		}
+		if len(removed) > 0 {
+			removedTargets++
+		}
 	}
 
-	if len(removed) == 0 {
-		fmt.Fprintf(os.Stderr, "Server %q not found in .mcp.json\n", serverName)
+	if removedTargets == 0 {
+		fmt.Fprintf(os.Stderr, "Server %q not found in detected project targets\n", serverName)
 		os.Exit(1)
 	}
 
@@ -770,10 +930,10 @@ func runRemove() {
 	state, _ := config.LoadState(configDir)
 	state.AddSkipped(projectDir, serverName)
 	if err := config.SaveState(configDir, state); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: removed from .mcp.json but failed to update skip list: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: removed from project config but failed to update skip list: %v\n", err)
 	}
 
-	fmt.Printf("✓  Removed %s from .mcp.json (skipped for future syncs)\n", serverName)
+	fmt.Printf("✓  Removed %s from %d target(s) (skipped for future syncs)\n", serverName, removedTargets)
 	fmt.Printf("   To re-add later: arc-sync reset && arc-sync add %s\n", serverName)
 }
 
@@ -818,21 +978,52 @@ func runStatus() {
 			HealthCheckAt string `json:"health_check_at,omitempty"`
 			HealthError   string `json:"health_error,omitempty"`
 		}
+		type targetStatus struct {
+			Name        string `json:"name"`
+			ConfigFile  string `json:"config_file"`
+			Detected    bool   `json:"detected"`
+			ServerCount int    `json:"server_count"`
+		}
+		type integrationStatus struct {
+			GlobalClaude  bool `json:"global_claude"`
+			GlobalCodex   bool `json:"global_codex"`
+			ProjectClaude bool `json:"project_claude"`
+			ProjectCodex  bool `json:"project_codex"`
+		}
 		type statusInfo struct {
-			RelayURL        string         `json:"relay_url,omitempty"`
-			AuthSource      string         `json:"auth_source,omitempty"`
-			ProjectDir      string         `json:"project_dir"`
-			ConfigDir       string         `json:"config_dir"`
-			HasConfig       bool           `json:"has_config"`
-			Error           string         `json:"error,omitempty"`
-			ConfiguredCount int            `json:"configured_count"`
-			SkippedCount    int            `json:"skipped_count"`
-			Servers         []serverHealth `json:"servers,omitempty"`
+			RelayURL        string            `json:"relay_url,omitempty"`
+			AuthSource      string            `json:"auth_source,omitempty"`
+			ProjectDir      string            `json:"project_dir"`
+			ConfigDir       string            `json:"config_dir"`
+			HasConfig       bool              `json:"has_config"`
+			Error           string            `json:"error,omitempty"`
+			ConfiguredCount int               `json:"configured_count"`
+			SkippedCount    int               `json:"skipped_count"`
+			Targets         []targetStatus    `json:"targets,omitempty"`
+			Integrations    integrationStatus `json:"integrations"`
+			Servers         []serverHealth    `json:"servers,omitempty"`
 		}
 		info := statusInfo{
 			ProjectDir: projectDir,
 			ConfigDir:  configDir,
 			HasConfig:  err == nil,
+			Integrations: integrationStatus{
+				ProjectClaude: hasProjectClaude(projectDir),
+				ProjectCodex:  hasProjectCodex(projectDir),
+			},
+		}
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			skillPath := filepath.Join(homeDir, ".claude", "skills", "arc-sync", "SKILL.md")
+			if _, statErr := os.Stat(skillPath); statErr == nil {
+				info.Integrations.GlobalClaude = true
+			}
+			claudeMDPath := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+			if hasMarker(claudeMDPath, claudeInstructionsMarker) {
+				info.Integrations.GlobalClaude = true
+			}
+			agentsPath := filepath.Join(homeDir, ".codex", "AGENTS.md")
+			info.Integrations.GlobalCodex = hasMarker(agentsPath, codexInstructionsMarker)
 		}
 		if err != nil {
 			info.Error = err.Error()
@@ -840,12 +1031,27 @@ func runStatus() {
 			info.RelayURL = creds.RelayURL
 			info.AuthSource = creds.Source
 
-			target := &project.ClaudeCodeTarget{}
-			configured, _ := target.Read(projectDir, creds.RelayURL)
+			targets := detectedTargets(projectDir)
+			configured, _ := configuredServers(projectDir, creds.RelayURL, targets)
 			info.ConfiguredCount = len(configured)
 
 			state, _ := config.LoadState(configDir)
 			info.SkippedCount = len(state.GetSkipped(projectDir))
+
+			for _, t := range project.AllTargets() {
+				detected := t.Detect(projectDir)
+				serverCount := 0
+				if detected {
+					managed, _ := t.Read(projectDir, creds.RelayURL)
+					serverCount = len(managed)
+				}
+				info.Targets = append(info.Targets, targetStatus{
+					Name:        t.Name(),
+					ConfigFile:  t.ConfigFileName(),
+					Detected:    detected,
+					ServerCount: serverCount,
+				})
+			}
 
 			client := relay.NewClient(creds.RelayURL, creds.APIKey)
 			if allServers, srvErr := client.ListServers(); srvErr == nil {
@@ -938,6 +1144,22 @@ func runStatus() {
 		fmt.Println("  ✓  Project CLAUDE.md: installed")
 	} else {
 		fmt.Println("  ✗  Project CLAUDE.md: not found  (run: arc-sync setup-project)")
+	}
+
+	fmt.Println("\nCodex Integration:")
+	if homeDir != "" {
+		agentsPath := filepath.Join(homeDir, ".codex", "AGENTS.md")
+		if hasMarker(agentsPath, codexInstructionsMarker) {
+			fmt.Println("  ✓  Global AGENTS.md:  installed")
+		} else {
+			fmt.Println("  ✗  Global AGENTS.md:  not found  (run: arc-sync setup-codex)")
+		}
+	}
+
+	if hasProjectCodex(projectDir) {
+		fmt.Println("  ✓  Project AGENTS.md: installed")
+	} else {
+		fmt.Println("  ✗  Project AGENTS.md: not found  (run: arc-sync setup-project)")
 	}
 
 	// Show skipped
