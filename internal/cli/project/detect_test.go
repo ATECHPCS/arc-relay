@@ -36,6 +36,21 @@ func TestDetectProjectDirWithClaudeDir(t *testing.T) {
 	}
 }
 
+func TestDetectProjectDirWithCodexDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DetectProjectDir(dir)
+	if err != nil {
+		t.Fatalf("DetectProjectDir: %v", err)
+	}
+	if got != dir {
+		t.Errorf("got %q, want %q", got, dir)
+	}
+}
+
 func TestDetectProjectDirWalksUp(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, ".mcp.json"), []byte("{}"), 0644); err != nil {
@@ -138,6 +153,26 @@ func TestDetectTargets(t *testing.T) {
 	}
 	if detected[0].Name() != "claude-code" {
 		t.Errorf("expected claude-code target, got %q", detected[0].Name())
+	}
+}
+
+func TestDetectTargetsCodex(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".codex"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".codex", "config.toml"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	all := AllTargets()
+	detected := DetectTargets(dir, all)
+
+	if len(detected) != 1 {
+		t.Fatalf("expected 1 detected target, got %d", len(detected))
+	}
+	if detected[0].Name() != "codex" {
+		t.Errorf("expected codex target, got %q", detected[0].Name())
 	}
 }
 

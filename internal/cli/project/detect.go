@@ -6,13 +6,15 @@ import (
 	"path/filepath"
 )
 
-// projectMarkers are files/dirs that reliably indicate a project root.
+// projectMarkers are files/dirs that indicate a project root.
 // We check these in order of specificity. Note: bare ".claude/" is NOT
 // a project marker because it exists in every user's home directory as
 // Claude's global config. We look for ".claude/CLAUDE.md" instead,
-// which indicates a project-level Claude config.
+// which indicates a project-level Claude config. Codex projects use a
+// project-local ".codex/" directory, so it is treated as a marker.
 var projectMarkers = []string{
 	".mcp.json",
+	".codex",
 	".git",
 }
 
@@ -103,5 +105,6 @@ func isHomeDir(dir string) bool {
 func AllTargets() []Target {
 	return []Target{
 		&ClaudeCodeTarget{},
+		&CodexTarget{},
 	}
 }

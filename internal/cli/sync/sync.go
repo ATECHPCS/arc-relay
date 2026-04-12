@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/comma-compliance/arc-relay/internal/cli/config"
@@ -78,8 +79,8 @@ func Run(opts Options) (*Result, error) {
 	// Detect project and target
 	_, _ = fmt.Fprintf(opts.Output, "Current project: %s\n", opts.ProjectDir)
 
-	target := &project.ClaudeCodeTarget{}
-	existing, err := target.Read(opts.ProjectDir, creds.RelayURL)
+	targets := project.DetectedTargetsOrDefault(opts.ProjectDir)
+	existing, err := project.ReadManagedServersFromTargets(opts.ProjectDir, creds.RelayURL, targets)
 	if err != nil {
 		return nil, fmt.Errorf("reading project config: %w", err)
 	}
@@ -109,7 +110,7 @@ func Run(opts Options) (*Result, error) {
 	for _, s := range running {
 		oldName := tracked[s.ID]
 		if oldName != "" && oldName != s.Name && existingNames[oldName] {
-			// Server was renamed - update .mcp.json entry
+			// Server was renamed - update project config entries.
 			renames = append(renames, project.ManagedServer{
 				Name:    s.Name,
 				URL:     client.ServerProxyURL(s.Name),
@@ -126,22 +127,24 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 
-	// Apply renames to .mcp.json
+	// Apply renames to all detected targets.
 	if len(renames) > 0 {
 		for _, r := range renames {
 			_, _ = fmt.Fprintf(opts.Output, "  Renamed: %s -> %s\n", r.OldName, r.Name)
 		}
 		if !opts.DryRun {
-			// Remove old entries, add new ones
 			oldNames := make([]string, 0, len(renames))
 			for _, r := range renames {
 				oldNames = append(oldNames, r.OldName)
 			}
-			if _, err := target.Remove(opts.ProjectDir, oldNames); err != nil {
-				slog.Warn("sync: removing renamed entries failed", "err", err)
-			}
-			if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, renames); err != nil {
-				slog.Warn("sync: writing renamed entries failed", "err", err)
+
+			for _, target := range targets {
+				if _, err := target.Remove(opts.ProjectDir, oldNames); err != nil {
+					slog.Warn("sync: removing renamed entries failed", "target", target.Name(), "err", err)
+				}
+				if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, renames); err != nil {
+					slog.Warn("sync: writing renamed entries failed", "target", target.Name(), "err", err)
+				}
 			}
 		}
 	}
@@ -238,13 +241,14 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	// Show change summary
-	mcpPath := fmt.Sprintf("%s/.mcp.json", opts.ProjectDir)
-	changes := []safety.PlannedChange{
-		{
-			Path:        mcpPath,
+	changes := make([]safety.PlannedChange, 0, len(targets)+1)
+	for _, target := range targets {
+		configPath := filepath.Join(opts.ProjectDir, target.ConfigFileName())
+		changes = append(changes, safety.PlannedChange{
+			Path:        configPath,
 			Description: fmt.Sprintf("adding %d server(s)", len(toAdd)),
 			Scope:       safety.ScopeProject,
-		},
+		})
 	}
 	if len(result.Skipped) > 0 {
 		changes = append(changes, safety.PlannedChange{
@@ -260,17 +264,21 @@ func Run(opts Options) (*Result, error) {
 		return result, nil
 	}
 
-	// Show gitignore warnings
-	warnings := safety.CheckGitignore(opts.ProjectDir, ".mcp.json")
-	warningOutput := safety.FormatWarnings(warnings)
-	if warningOutput != "" {
+	// Show gitignore warnings for each target file.
+	var warningOutput strings.Builder
+	for _, target := range targets {
+		warningOutput.WriteString(safety.FormatWarnings(safety.CheckGitignore(opts.ProjectDir, target.ConfigFileName())))
+	}
+	if warningOutput.Len() > 0 {
 		_, _ = fmt.Fprintln(opts.Output)
-		_, _ = fmt.Fprint(opts.Output, warningOutput)
+		_, _ = fmt.Fprint(opts.Output, warningOutput.String())
 	}
 
-	// Write changes
-	if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, toAdd); err != nil {
-		return nil, fmt.Errorf("writing project config: %w", err)
+	// Write changes to all targets.
+	for _, target := range targets {
+		if err := target.Write(opts.ProjectDir, creds.RelayURL, creds.APIKey, toAdd); err != nil {
+			return nil, fmt.Errorf("writing %s config: %w", target.Name(), err)
+		}
 	}
 
 	// Track server IDs for rename detection
@@ -291,7 +299,7 @@ func Run(opts Options) (*Result, error) {
 		}
 	}
 
-	_, _ = fmt.Fprintf(opts.Output, "\nAdded %d server(s) to .mcp.json\n", len(toAdd))
+	_, _ = fmt.Fprintf(opts.Output, "\nAdded %d server(s) to %d target(s)\n", len(toAdd), len(targets))
 	if len(result.Skipped) > 0 {
 		_, _ = fmt.Fprintf(opts.Output, "Skipped: %s (won't be prompted again — run 'arc-sync reset' to undo)\n",
 			strings.Join(result.Skipped, ", "))
