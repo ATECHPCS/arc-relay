@@ -52,7 +52,23 @@ make build
 ./arc-relay --config config.example.toml
 ```
 
-Log in with username `admin` and the password from your `.env` or config.
+### One-click Deploy (Render, Heroku, Railway)
+
+The repo ships deploy manifests for common PaaS platforms:
+
+| Platform | File | Notes |
+|---|---|---|
+| Render | [`render.yaml`](render.yaml) | Persistent 1GB disk for SQLite, secrets auto-generated. |
+| Heroku | [`app.json`](app.json) + [`heroku.yml`](heroku.yml) | Container stack. Dyno filesystem is ephemeral - data does not persist across restarts. |
+| Railway | [`railway.json`](railway.json) | Uses the repo Dockerfile. Railway config-as-code only covers build/deploy, so you must set env vars and attach a Volume at `/data` in the Railway UI before the first boot. |
+
+All three platforms inject a `PORT` env var that Arc Relay binds to automatically. `ARC_RELAY_ENCRYPTION_KEY`, `ARC_RELAY_SESSION_SECRET`, and `ARC_RELAY_ADMIN_PASSWORD` are auto-generated on Render and Heroku. On Railway you must set all three yourself; otherwise the app starts with a random admin password that is never printed, and you will be locked out.
+
+Arc Relay auto-detects its public base URL from `RENDER_EXTERNAL_URL` (Render) and `RAILWAY_PUBLIC_DOMAIN` (Railway). On Heroku, set `ARC_RELAY_BASE_URL` manually to the app's public URL after the first deploy so OAuth callbacks and `Secure` session cookies work correctly.
+
+**Docker-in-Docker limitation.** These platforms do not expose the host Docker socket to services, so deploys can only proxy to **remote** MCP backends (SSE/OAuth servers, external HTTP URLs). The built-in Docker lifecycle (stdio servers, managed HTTP servers) requires a deploy target with Docker socket access - Unraid, a VM, or a self-hosted Docker host.
+
+Log in with username `admin` and the value of `ARC_RELAY_ADMIN_PASSWORD` (from `.env`, the config file, or the platform's env var UI on PaaS deploys).
 
 ## Configuration
 

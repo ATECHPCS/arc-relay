@@ -129,4 +129,62 @@ path = "/tmp/test.db"
 			t.Error("Load() should return error for missing file")
 		}
 	})
+
+	t.Run("PORT env var fallback for PaaS", func(t *testing.T) {
+		t.Setenv("PORT", "5555")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Server.Port != 5555 {
+			t.Errorf("Server.Port = %d, want %d", cfg.Server.Port, 5555)
+		}
+	})
+
+	t.Run("RENDER_EXTERNAL_URL sets BaseURL when ARC_RELAY_BASE_URL unset", func(t *testing.T) {
+		t.Setenv("RENDER_EXTERNAL_URL", "https://arc-relay-abcd.onrender.com")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Server.BaseURL != "https://arc-relay-abcd.onrender.com" {
+			t.Errorf("Server.BaseURL = %q, want %q", cfg.Server.BaseURL, "https://arc-relay-abcd.onrender.com")
+		}
+	})
+
+	t.Run("RAILWAY_PUBLIC_DOMAIN sets BaseURL with https prefix", func(t *testing.T) {
+		t.Setenv("RAILWAY_PUBLIC_DOMAIN", "arc-relay.up.railway.app")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Server.BaseURL != "https://arc-relay.up.railway.app" {
+			t.Errorf("Server.BaseURL = %q, want %q", cfg.Server.BaseURL, "https://arc-relay.up.railway.app")
+		}
+	})
+
+	t.Run("ARC_RELAY_BASE_URL takes precedence over platform env vars", func(t *testing.T) {
+		t.Setenv("ARC_RELAY_BASE_URL", "https://manual.example.com")
+		t.Setenv("RENDER_EXTERNAL_URL", "https://render.example.com")
+		t.Setenv("RAILWAY_PUBLIC_DOMAIN", "railway.example.com")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Server.BaseURL != "https://manual.example.com" {
+			t.Errorf("Server.BaseURL = %q, want %q", cfg.Server.BaseURL, "https://manual.example.com")
+		}
+	})
+
+	t.Run("ARC_RELAY_PORT takes precedence over PORT", func(t *testing.T) {
+		t.Setenv("ARC_RELAY_PORT", "6666")
+		t.Setenv("PORT", "5555")
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if cfg.Server.Port != 6666 {
+			t.Errorf("Server.Port = %d, want %d", cfg.Server.Port, 6666)
+		}
+	})
 }

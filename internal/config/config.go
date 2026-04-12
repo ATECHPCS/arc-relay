@@ -98,6 +98,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("ARC_RELAY_BASE_URL"); v != "" {
 		cfg.Server.BaseURL = v
+	} else if v := os.Getenv("RENDER_EXTERNAL_URL"); v != "" {
+		// Render exposes the full https URL at this env var.
+		cfg.Server.BaseURL = v
+	} else if v := os.Getenv("RAILWAY_PUBLIC_DOMAIN"); v != "" {
+		// Railway exposes only the hostname; assume https.
+		cfg.Server.BaseURL = "https://" + v
 	}
 	if v := os.Getenv("ARC_RELAY_LLM_API_KEY"); v != "" {
 		cfg.LLM.APIKey = v
@@ -112,6 +118,12 @@ func Load(path string) (*Config, error) {
 		cfg.LogLevel = v
 	}
 	if v := os.Getenv("ARC_RELAY_PORT"); v != "" {
+		var port int
+		if _, err := fmt.Sscanf(v, "%d", &port); err == nil {
+			cfg.Server.Port = port
+		}
+	} else if v := os.Getenv("PORT"); v != "" {
+		// PaaS platforms (Render, Heroku, Railway, Fly) inject PORT.
 		var port int
 		if _, err := fmt.Sscanf(v, "%d", &port); err == nil {
 			cfg.Server.Port = port
