@@ -3,16 +3,16 @@
 An open-source MCP (Model Context Protocol) control plane. Arc Relay sits between your AI tools and MCP servers, providing auth, policy controls, traffic interception, and archiving - not just proxying.
 
 ```
-AI Clients                Arc Relay                    MCP Servers
- (Claude Code,     +-----------------------+       +----------------+
-  Cursor, etc.)    |  Auth & API Keys      |       | Docker stdio   |
-       |           |  Middleware Pipeline   |----->| Docker HTTP    |
-       +---------->|    Sanitizer (PII)     |      | Remote (OAuth) |
-       |  POST     |    Sizer (limits)      |<-----+----------------+
-       |  /mcp/    |    Alerter (rules)     |
-       |  {name}   |    Archive (webhook)   |
-       |           |  Health Monitor        |
-       +---------->|  Web UI + REST API     |
+AI Clients                Arc Relay                   MCP Servers
+ (Claude, Codex,   +-----------------------+      +----------------+
+  Cursor, etc.)    |  Auth & API Keys      |      | Docker stdio   |
+       |           |  Middleware Pipeline  |----->| Docker HTTP    |
+       +---------->|    Sanitizer (PII)    |      | Remote (OAuth) |
+       |  POST     |    Sizer (limits)     |<-----+----------------+
+       |  /mcp/    |    Alerter (rules)    |
+       |  {name}   |    Archive (webhook)  |
+       |           |  Health Monitor       |
+       +---------->|  Web UI + REST API    |
                    +-----------------------+
 ```
 
@@ -375,7 +375,7 @@ MCP servers often ship verbose tool definitions that consume excessive LLM conte
 
 ## Connect to Comma Compliance Arc
 
-Arc Relay works standalone as a self-hosted MCP control plane. Optionally connect to [Comma Compliance Arc](https://commacompliance.ai) for managed compliance policies, audit trails, and enterprise reporting.
+Arc Relay works standalone as a self-hosted MCP control plane. Optionally connect to [Comma Compliance Arc](https://commacompliance.ai/arc-relay/) for managed compliance policies, audit trails, and enterprise reporting.
 
 Configure the archive middleware to point at your Comma Compliance webhook endpoint. See the web UI's "Compliance Archive" section for setup.
 
