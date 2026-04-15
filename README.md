@@ -83,6 +83,7 @@ Arc Relay reads a TOML config file with environment variable overrides. See [`co
 | `ARC_RELAY_BASE_URL` | Public URL for OAuth callbacks |
 | `ARC_RELAY_LLM_API_KEY` | Anthropic API key for tool context optimization (optional) |
 | `ARC_RELAY_LLM_MODEL` | LLM model for optimization (default: `claude-haiku-4-5-20251001`) |
+| `ARC_RELAY_SENTRY_DSN` | Sentry DSN for error reporting (optional; leave unset to disable Sentry) |
 
 ## User Onboarding
 

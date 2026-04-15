@@ -130,6 +130,7 @@ TOML config file with environment variable overrides:
 | `ARC_RELAY_DB_PATH` | `database.path` | `arc-relay.db` |
 | `ARC_RELAY_BASE_URL` | `server.base_url` | `http://localhost:PORT` |
 | `ARC_RELAY_PORT` | `server.port` | `8080` |
+| `ARC_RELAY_SENTRY_DSN` | `sentry_dsn` | (disabled) |
 
 ## Code Style
 
