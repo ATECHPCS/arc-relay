@@ -126,4 +126,3 @@ func CheckPermissions(configDir string) string {
 	}
 	return ""
 }
-
