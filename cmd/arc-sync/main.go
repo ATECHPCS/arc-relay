@@ -317,7 +317,12 @@ func tryInviteToken(baseURL, token, flagUsername, flagPassword string) string {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf(" failed\n")
+		fmt.Fprintf(os.Stderr, "Error reading response: %v\n", err)
+		return ""
+	}
 	var result struct {
 		APIKey string `json:"api_key"`
 		Error  string `json:"error"`
@@ -1209,7 +1214,10 @@ func tryDeviceAuth(baseURL string) string {
 		Interval        int    `json:"interval"`
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
 	if err := json.Unmarshal(body, &deviceResp); err != nil || deviceResp.DeviceCode == "" {
 		return ""
 	}

@@ -57,6 +57,9 @@ func (s *AccessStore) GetAllTiers(serverID string) ([]EndpointTier, error) {
 		}
 		tiers = append(tiers, t)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating access tiers: %w", err)
+	}
 	return tiers, nil
 }
 

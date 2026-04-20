@@ -93,6 +93,9 @@ func (s *ProfileStore) List() ([]*AgentProfile, error) {
 		}
 		profiles = append(profiles, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating profiles: %w", err)
+	}
 	return profiles, nil
 }
 
@@ -130,6 +133,9 @@ func (s *ProfileStore) GetPermissions(profileID string) ([]ProfilePermission, er
 		}
 		perms = append(perms, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating permissions: %w", err)
+	}
 	return perms, nil
 }
 
@@ -152,6 +158,9 @@ func (s *ProfileStore) GetPermissionsForServer(profileID, serverID string) ([]Pr
 			return nil, fmt.Errorf("scanning permission: %w", err)
 		}
 		perms = append(perms, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating server permissions: %w", err)
 	}
 	return perms, nil
 }

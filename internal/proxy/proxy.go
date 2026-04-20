@@ -436,6 +436,10 @@ func (m *Manager) enumerateAsync(serverID, serverName string) {
 			slog.Warn("background enumeration failed", "server", serverName, "err", err)
 			return
 		}
+		if endpoints == nil {
+			slog.Warn("background enumeration returned no endpoints", "server", serverName)
+			return
+		}
 
 		toolCount := len(endpoints.Tools)
 		resourceCount := len(endpoints.Resources)
