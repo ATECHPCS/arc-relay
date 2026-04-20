@@ -59,6 +59,46 @@ func isPrivateIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
+// ValidateExternalURL checks that a URL is safe to make outbound requests to.
+// Rejects non-HTTPS schemes and private/loopback IP ranges to prevent SSRF
+// through attacker-controlled OAuth discovery documents. Hostnames are resolved
+// and every returned address checked against private/loopback/link-local ranges.
+func ValidateExternalURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL")
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("only https URLs are allowed")
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("invalid URL")
+	}
+	host := parsed.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("private/loopback addresses are not allowed")
+		}
+		return nil
+	}
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("cannot resolve host: %w", err)
+	}
+	for _, ipStr := range ips {
+		if ip := net.ParseIP(ipStr); ip != nil && isPrivateIP(ip) {
+			return fmt.Errorf("host resolves to private/loopback address")
+		}
+	}
+	return nil
+}
+
+// HardenedClient is an SSRF-safe HTTP client for outbound OAuth calls
+// (discovery, DCR, token exchange, refresh). The custom DialContext rejects
+// private IPs at connection time, closing the DNS-rebinding TOCTOU window that
+// pre-flight URL validation alone cannot cover.
+var HardenedClient = discoveryClient
+
 // discoveryClient is an HTTP client for OAuth discovery with defence-in-depth
 // against SSRF: a custom DialContext rejects private IPs at connection time
 // (closing the DNS rebinding TOCTOU window), and CheckRedirect limits hops.

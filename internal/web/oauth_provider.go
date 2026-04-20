@@ -236,7 +236,7 @@ func (h *Handlers) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		host := parsed.Hostname()
-		if parsed.Scheme == "http" && host != "localhost" && host != "127.0.0.1" && !strings.HasPrefix(host, "[::1]") {
+		if parsed.Scheme == "http" && !strings.EqualFold(host, "localhost") && host != "127.0.0.1" && !strings.HasPrefix(host, "[::1]") {
 			oauthError(w, http.StatusBadRequest, "invalid_redirect_uri", "http redirect_uri only allowed for localhost")
 			return
 		}

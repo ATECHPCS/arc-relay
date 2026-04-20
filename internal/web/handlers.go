@@ -2591,6 +2591,21 @@ func (h *Handlers) handleCatalogDiscoverOAuth(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// SSRF guard: refuse to surface authorization_endpoint / token_endpoint
+	// values from the discovery document when they point at private/loopback
+	// addresses or non-https schemes. A malicious remote server could otherwise
+	// steer our token POSTs at an internal URL.
+	if err := validateExternalURL(discovery.AuthURL); err != nil {
+		slog.Warn("OAuth discovery auth_url blocked by SSRF check", "auth_url", discovery.AuthURL, "error", err)
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	if err := validateExternalURL(discovery.TokenURL); err != nil {
+		slog.Warn("OAuth discovery token_url blocked by SSRF check", "token_url", discovery.TokenURL, "error", err)
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+
 	// If a registration endpoint is available, try dynamic client registration.
 	// Validate the endpoint URL to prevent SSRF via adversarial discovery responses.
 	if discovery.RegistrationEndpoint != "" {
@@ -2832,6 +2847,20 @@ func (h *Handlers) parseServerForm(r *http.Request) (*store.Server, error) {
 			if auth.ClientID == "" || auth.AuthURL == "" || auth.TokenURL == "" {
 				disc, _ := oauth.DiscoverOAuth(r.Context(), url)
 				if disc != nil {
+					// SSRF guard: drop discovered endpoints that resolve to
+					// private/loopback addresses before they get persisted.
+					if disc.AuthURL != "" {
+						if err := validateExternalURL(disc.AuthURL); err != nil {
+							slog.Warn("OAuth discovery auth_url dropped in server form", "auth_url", disc.AuthURL, "error", err)
+							disc.AuthURL = ""
+						}
+					}
+					if disc.TokenURL != "" {
+						if err := validateExternalURL(disc.TokenURL); err != nil {
+							slog.Warn("OAuth discovery token_url dropped in server form", "token_url", disc.TokenURL, "error", err)
+							disc.TokenURL = ""
+						}
+					}
 					if auth.AuthURL == "" {
 						auth.AuthURL = disc.AuthURL
 					}

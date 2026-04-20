@@ -442,13 +442,29 @@ func (m *Manager) doRefreshToken(ctx context.Context, serverID string, ts *Token
 		slog.Warn("OAuth token endpoint returned 404, attempting re-discovery", "server_id", serverID)
 		disc, discErr := DiscoverOAuth(ctx, cfg.URL)
 		if discErr == nil && disc != nil && disc.TokenURL != "" && disc.TokenURL != cfg.Auth.TokenURL {
+			// SSRF guard: refuse to persist discovered endpoints that point at
+			// private/loopback addresses or non-https schemes.
+			if vErr := ValidateExternalURL(disc.TokenURL); vErr != nil {
+				slog.Warn("OAuth re-discovery rejected: invalid token_url", "server_id", serverID, "token_url", disc.TokenURL, "error", vErr)
+				return fmt.Errorf("token refresh failed (reauthorize via server detail page): %w", err)
+			}
+			if disc.AuthURL != "" {
+				if vErr := ValidateExternalURL(disc.AuthURL); vErr != nil {
+					slog.Warn("OAuth re-discovery rejected: invalid auth_url", "server_id", serverID, "auth_url", disc.AuthURL, "error", vErr)
+					return fmt.Errorf("token refresh failed (reauthorize via server detail page): %w", err)
+				}
+			}
 			slog.Info("OAuth re-discovered new endpoints", "server_id", serverID, "token_url", disc.TokenURL, "auth_url", disc.AuthURL)
 			cfg.Auth.TokenURL = disc.TokenURL
 			if disc.AuthURL != "" {
 				cfg.Auth.AuthURL = disc.AuthURL
 			}
 			if disc.RegistrationEndpoint != "" {
-				cfg.Auth.RegistrationEndpoint = disc.RegistrationEndpoint
+				if vErr := ValidateExternalURL(disc.RegistrationEndpoint); vErr != nil {
+					slog.Warn("OAuth re-discovery dropped invalid registration_endpoint", "server_id", serverID, "endpoint", disc.RegistrationEndpoint, "error", vErr)
+				} else {
+					cfg.Auth.RegistrationEndpoint = disc.RegistrationEndpoint
+				}
 			}
 			configJSON, marshalErr := json.Marshal(&cfg)
 			if marshalErr == nil {
@@ -495,7 +511,7 @@ func (m *Manager) tokenRequest(ctx context.Context, tokenURL string, data url.Va
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := HardenedClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}

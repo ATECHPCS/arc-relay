@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 
@@ -176,7 +178,12 @@ func (a *Alerter) fireAlert(rule compiledRule, meta *RequestMeta, summary string
 	}
 }
 
-func (a *Alerter) sendWebhook(url, summary string, meta *RequestMeta) {
+func (a *Alerter) sendWebhook(rawURL, summary string, meta *RequestMeta) {
+	if err := validateWebhookURL(rawURL); err != nil {
+		slog.Warn("alerter: webhook URL rejected", "url", rawURL, "error", err)
+		return
+	}
+
 	payload := map[string]string{
 		"text":       summary,
 		"server":     meta.ServerName,
@@ -187,13 +194,50 @@ func (a *Alerter) sendWebhook(url, summary string, meta *RequestMeta) {
 	}
 	body, _ := json.Marshal(payload)
 
-	resp, err := a.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := a.httpClient.Post(rawURL, "application/json", bytes.NewReader(body))
 	if err != nil {
-		slog.Warn("alerter: webhook failed", "url", url, "error", err)
+		slog.Warn("alerter: webhook failed", "url", rawURL, "error", err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
-		slog.Warn("alerter: webhook returned non-success status", "url", url, "status", resp.StatusCode)
+		slog.Warn("alerter: webhook returned non-success status", "url", rawURL, "status", resp.StatusCode)
 	}
+}
+
+// validateWebhookURL enforces https and blocks private/loopback/link-local
+// destinations so a misconfigured or attacker-influenced rule cannot exfiltrate
+// MCP request context to internal services or cloud metadata endpoints.
+func validateWebhookURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL")
+	}
+	if parsed.Scheme != "https" {
+		return fmt.Errorf("webhook URL must use https")
+	}
+	if parsed.Host == "" {
+		return fmt.Errorf("webhook URL must include a host")
+	}
+	host := parsed.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if isPrivateAddr(ip) {
+			return fmt.Errorf("private/loopback addresses are not allowed")
+		}
+		return nil
+	}
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return fmt.Errorf("cannot resolve host: %w", err)
+	}
+	for _, ipStr := range ips {
+		if ip := net.ParseIP(ipStr); ip != nil && isPrivateAddr(ip) {
+			return fmt.Errorf("host resolves to private/loopback address")
+		}
+	}
+	return nil
+}
+
+func isPrivateAddr(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
