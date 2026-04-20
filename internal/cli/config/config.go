@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -128,12 +127,3 @@ func CheckPermissions(configDir string) string {
 	return ""
 }
 
-// CheckPermissionsFS is like CheckPermissions but accepts an fs.FileInfo directly
-// for testing purposes.
-func CheckPermissionsFS(path string, info fs.FileInfo) string {
-	mode := info.Mode().Perm()
-	if mode&0077 != 0 {
-		return fmt.Sprintf("⚠  %s has permissions %04o, should be 0600\n   Fix with: chmod 600 %s", path, mode, path)
-	}
-	return ""
-}
