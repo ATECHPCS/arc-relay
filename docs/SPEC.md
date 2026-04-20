@@ -4,7 +4,9 @@
 
 Arc Relay is a lightweight management system for deploying, proxying, and sharing MCP (Model Context Protocol) servers. It consolidates multiple MCP servers behind a single gateway with simple authentication and RBAC, making it easy to expose MCP capabilities to AI tools like Claude Desktop, Claude Code, and others.
 
-**Goals:** Simpler alternative to [microsoft/mcp-gateway](https://github.com/microsoft/mcp-gateway) — no Kubernetes, no Azure dependencies, no .NET. Just a single Go binary + Docker.
+**Goals:** Simpler alternative to [microsoft/mcp-gateway](https://github.com/microsoft/mcp-gateway) - no Kubernetes, no Azure dependencies, no .NET. Just a single Go binary + Docker.
+
+> **Authoritative API reference:** see [docs/api-contract.md](api-contract.md). That document is kept in lockstep with the automated contract test at `internal/server/http_contract_test.go`. When this spec and the contract disagree, the contract wins.
 
 ---
 
@@ -112,15 +114,31 @@ The server is hosted externally. Arc Relay acts as a pure proxy, forwarding MCP 
 5. System starts server (if managed) and runs MCP `initialize` to verify connectivity
 6. Server appears in dashboard
 
-**API:**
+**API (authoritative reference: [docs/api-contract.md](api-contract.md)):**
+
+All `/api/servers` endpoints require `Authorization: Bearer <api-key>`.
+
 ```
-POST   /api/servers           - Create server
-GET    /api/servers           - List servers
-GET    /api/servers/:id       - Get server detail
-PUT    /api/servers/:id       - Update server
-DELETE /api/servers/:id       - Delete server
-POST   /api/servers/:id/start - Start managed server
-POST   /api/servers/:id/stop  - Stop managed server
+# CRUD
+POST   /api/servers                    - Create server (admin)
+GET    /api/servers                    - List servers
+GET    /api/servers/:id                - Get server detail
+PUT    /api/servers/:id                - Update server (admin)
+DELETE /api/servers/:id                - Delete server (admin)
+
+# Lifecycle
+POST   /api/servers/:id/start          - Start managed server (admin)
+POST   /api/servers/:id/stop           - Stop managed server (admin)
+
+# Introspection
+POST   /api/servers/:id/enumerate      - Re-enumerate tools/resources/prompts (admin)
+GET    /api/servers/:id/endpoints      - Return cached endpoints
+POST   /api/servers/:id/health         - On-demand health probe
+GET    /api/servers/:id/tool-audit     - Tool size audit + optimization status
+
+# LLM tool-description optimization
+POST   /api/servers/:id/optimize         - Run optimization (admin, requires ARC_RELAY_LLM_API_KEY)
+POST   /api/servers/:id/optimize-toggle  - Enable/disable serving optimized tools (admin)
 ```
 
 **Server record (DB schema):**
@@ -215,12 +233,28 @@ CREATE TABLE api_keys (
 
 **Auth methods:**
 - **Web UI:** Session cookie (login with username/password)
-- **MCP proxy endpoints:** Bearer token (API key from `api_keys` table)
+- **Management API (`/api/servers`):** Bearer token (API key from `api_keys` table)
+- **MCP proxy (`/mcp/{server}`):** Bearer token - API key OR OAuth access token issued by the built-in OAuth 2.1 Authorization Server (see "OAuth 2.1 Authorization Server" below)
+- **Device auth (CLI onboarding):** `/api/auth/device` + `/api/auth/device/token` polling, approved in-browser at `/auth/device`
+- **Invite tokens (account bootstrap):** one-time tokens redeemed at `/invite/{token}` (browser) or `POST /api/auth/invite` (CLI)
 
 **Web UI pages:**
 - User list (admin only)
-- Create/edit user
+- Create/edit user, reset password, mark invites
 - API key management (generate, revoke, list)
+- Agent profiles (admin only)
+
+**OAuth 2.1 Authorization Server:**
+
+Arc Relay runs its own authorization server so MCP clients like Claude Desktop can authenticate end users via the standard OAuth 2.1 Authorization Code + PKCE flow. See [docs/api-contract.md](api-contract.md) for the full endpoint list. Summary:
+
+- `GET /.well-known/oauth-protected-resource[/...]` (RFC 9728)
+- `GET /.well-known/oauth-authorization-server` (RFC 8414)
+- `POST /oauth/register` (alias `/register`) - Dynamic Client Registration (RFC 7591)
+- `GET/POST /oauth/authorize` (alias `/authorize`) - consent screen (session-auth)
+- `POST /oauth/token` (alias `/token`) - `authorization_code` with PKCE (S256 required) or `refresh_token`
+
+Access tokens expire in 1 hour, refresh tokens in 30 days and rotate on every use. 401 responses on `/mcp/` and `/api/servers` include `WWW-Authenticate: Bearer resource_metadata="..."` for OAuth discovery.
 
 ### F5: Logging (stretch)
 
@@ -239,6 +273,14 @@ CREATE TABLE request_logs (
 ```
 
 All MCP requests proxied through Arc Relay are logged. For stdio servers, stderr output is captured and stored separately.
+
+Middleware-generated events (sanitizer hits, archive queue status, etc.) are recorded in the `middleware_events` table and surfaced in the server detail view.
+
+**Middleware API** (session-authenticated, admin-only):
+
+- `POST /api/middleware/{name}/config?target=global` - save the global config for a middleware (currently `archive`).
+- `POST /api/middleware/{name}/action/{action}` - invoke a middleware action. The `archive` middleware supports `test`, `retry`, `clear`, `status`, plus the stateful `handoff_begin` / `handoff_complete` actions documented in [archive-handoff.md](archive-handoff.md).
+- Per-server enable/disable is handled by `POST /servers/{id}/middleware` (form-style), which upserts the server-scoped row in `middleware_configs`.
 
 ### F6: Connection Config Generation (stretch)
 
