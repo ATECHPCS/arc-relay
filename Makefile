@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-all run test test-cli lint docker clean
+.PHONY: build build-cli build-all run test test-cli lint docker clean knowledge-silos
 
 BINARY := arc-relay
 CLI_BINARY := arc-sync
@@ -30,3 +30,6 @@ docker:
 clean:
 	rm -f $(BINARY) $(CLI_BINARY)
 	rm -rf dist/
+
+knowledge-silos:
+	node scripts/knowledge-silos.mjs
