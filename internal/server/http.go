@@ -91,6 +91,10 @@ func (s *Server) routes() {
 
 	// Memory ingestion endpoint (API key auth only)
 	s.mux.Handle("/api/memory/ingest", apiAuth(http.HandlerFunc(s.memHandlers.HandleIngest)))
+	s.mux.Handle("/api/memory/search",    apiAuth(http.HandlerFunc(s.memHandlers.HandleSearch)))
+	s.mux.Handle("/api/memory/sessions",  apiAuth(http.HandlerFunc(s.memHandlers.HandleSessions)))
+	s.mux.Handle("/api/memory/sessions/", apiAuth(http.HandlerFunc(s.memHandlers.HandleSessionExtract)))
+	s.mux.Handle("/api/memory/stats",     apiAuth(http.HandlerFunc(s.memHandlers.HandleStats)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

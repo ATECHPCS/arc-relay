@@ -4,6 +4,8 @@ package memory
 
 import (
 	"bytes"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/comma-compliance/arc-relay/internal/memory/parser"
@@ -90,4 +92,92 @@ func (s *Service) Ingest(userID string, req *IngestRequest) (*IngestResponse, er
 		EventsAdded:   len(events),
 		BytesSeen:     req.BytesSeen,
 	}, nil
+}
+
+// Search routes the query through FTS5 BM25 by default, falling back to a Go
+// regexp scan when the query contains regex metacharacters and is not wrapped
+// in double quotes (escape hatch for users who want a literal match).
+func (s *Service) Search(userID, query string, opts store.SearchOpts) ([]*store.SearchHit, error) {
+	if hasRegexMeta(query) {
+		return s.messages.SearchRegex(userID, query, opts)
+	}
+	return s.messages.Search(userID, query, opts)
+}
+
+// SessionExtract returns the messages of one session, with a user-scope check
+// (don't leak the existence of another user's session).
+func (s *Service) SessionExtract(userID, sessionID string, fromEpoch int) ([]*store.Message, error) {
+	sess, err := s.sessions.Get(sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("session not found")
+		}
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if sess.UserID != userID {
+		// Same error as missing — don't reveal existence to wrong user.
+		return nil, fmt.Errorf("session not found")
+	}
+	return s.messages.GetSession(sessionID, fromEpoch)
+}
+
+// Recent lists the calling user's most-recent sessions.
+func (s *Service) Recent(userID string, limit int) ([]*store.MemorySession, error) {
+	return s.sessions.ListByUser(userID, limit)
+}
+
+// Stats is the diagnostic shape returned by HandleStats — global counts,
+// not user-scoped (count != content; safe to surface).
+type Stats struct {
+	DBBytes      int64    `json:"db_bytes"`
+	Sessions     int64    `json:"sessions"`
+	Messages     int64    `json:"messages"`
+	LastIngestAt float64  `json:"last_ingest_at"`
+	Platforms    []string `json:"platforms"`
+}
+
+// Stats returns DB-level counts + last-ingest timestamp + the parser registry's
+// supported platforms. Used by `arc-sync memory stats` and (future) the
+// dashboard.
+func (s *Service) Stats() (*Stats, error) {
+	st := &Stats{Platforms: parser.Platforms()}
+
+	// page_count * page_size — the actual on-disk database size.
+	if err := s.messages.DB().QueryRow(
+		`SELECT (SELECT page_count FROM pragma_page_count) * (SELECT page_size FROM pragma_page_size)`,
+	).Scan(&st.DBBytes); err != nil {
+		return nil, fmt.Errorf("db bytes: %w", err)
+	}
+	if err := s.messages.DB().QueryRow(
+		`SELECT count(*) FROM memory_sessions`,
+	).Scan(&st.Sessions); err != nil {
+		return nil, fmt.Errorf("sessions count: %w", err)
+	}
+	if err := s.messages.DB().QueryRow(
+		`SELECT count(*) FROM memory_messages`,
+	).Scan(&st.Messages); err != nil {
+		return nil, fmt.Errorf("messages count: %w", err)
+	}
+	if err := s.messages.DB().QueryRow(
+		`SELECT COALESCE(MAX(last_seen_at), 0) FROM memory_sessions`,
+	).Scan(&st.LastIngestAt); err != nil {
+		return nil, fmt.Errorf("last ingest: %w", err)
+	}
+	return st, nil
+}
+
+// hasRegexMeta detects FTS5-incompatible characters that should route to the
+// regex fallback. Quoted strings bypass detection so users can search for
+// literal punctuation by quoting it.
+func hasRegexMeta(q string) bool {
+	if len(q) >= 2 && q[0] == '"' && q[len(q)-1] == '"' {
+		return false
+	}
+	for _, r := range q {
+		switch r {
+		case '\\', '.', '*', '+', '?', '[', ']', '{', '}', '(', ')', '|', '^', '$':
+			return true
+		}
+	}
+	return false
 }

@@ -229,6 +229,10 @@ func scanHits(rows *sql.Rows) ([]*SearchHit, error) {
 	return hits, rows.Err()
 }
 
+// DB returns the underlying *DB for diagnostic queries that don't fit a store
+// method (currently used by memory.Service.Stats for pragma queries).
+func (s *MessageStore) DB() *DB { return s.db }
+
 // nullableString returns nil for empty strings so SQLite stores NULL instead
 // of an empty string in nullable columns like memory_messages.uuid.
 func nullableString(s string) any {
