@@ -156,14 +156,14 @@ func flattenContent(raw json.RawMessage) (string, error) {
 	return b.String(), nil
 }
 
-// collapseSlashCommand replaces an embedded slash-command marker with a single
-// literal token, defanging it before storage. See §7 of the design spec.
+// collapseSlashCommand replaces matched slash-command tags with a single
+// literal token, defanging inline invocations before storage. Prefix/suffix
+// content around the tags is preserved.  See §7 of the design spec.
 func collapseSlashCommand(content string) string {
-	m := slashCmdRe.FindStringSubmatch(content)
-	if m == nil {
-		return content
-	}
-	name := strings.TrimSpace(m[1])
-	args := strings.TrimSpace(m[2])
-	return fmt.Sprintf("[SLASH-COMMAND: /%s args=%q]", name, args)
+	return slashCmdRe.ReplaceAllStringFunc(content, func(match string) string {
+		m := slashCmdRe.FindStringSubmatch(match)
+		name := strings.TrimSpace(m[1])
+		args := strings.TrimSpace(m[2])
+		return fmt.Sprintf("[SLASH-COMMAND: /%s args=%q]", name, args)
+	})
 }
