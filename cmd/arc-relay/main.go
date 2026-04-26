@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/store"
+	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 	"github.com/comma-compliance/arc-relay/migrations"
 )
 
@@ -157,6 +159,22 @@ func main() {
 	// Start health monitor
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
+
+	// Open memory database (separate SQLite file to isolate WAL from auth-critical writes)
+	memDBPath := cfg.Database.MemoryPath
+	if memDBPath == "" {
+		memDBPath = filepath.Join(filepath.Dir(cfg.Database.Path), "memory.db")
+	}
+	memDB, err := store.Open(memDBPath, migrationsmemory.FS)
+	if err != nil {
+		slog.Error("failed to open memory db", "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = memDB.Close() }()
+	memDB.StartBackup(6 * time.Hour)
+	defer memDB.StopBackup()
+	slog.Info("memory database opened", "path", memDBPath)
+	_ = memDB // memDB will be wired to memory stores in Task 1/2.
 
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)

@@ -3,11 +3,11 @@ package store
 import (
 	"testing"
 
-	"github.com/comma-compliance/arc-relay/migrations"
+	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 )
 
 func TestMemorySchema(t *testing.T) {
-	db, err := Open(":memory:", migrations.FS)
+	db, err := Open(":memory:", migrationsmemory.FS)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
