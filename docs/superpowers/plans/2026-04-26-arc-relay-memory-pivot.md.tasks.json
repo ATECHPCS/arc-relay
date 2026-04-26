@@ -4,7 +4,7 @@
     {
       "id": 0,
       "subject": "Task 0: Schema migration for memory namespace",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Add SQLite schema for centralized transcript memory with FTS5 search.\n\n**Files:**\n- Create: `migrations/015_memory.sql`\n- Test: `internal/store/memory_schema_test.go`\n\n**Acceptance:** memory_sessions, memory_messages, memory_compact_events tables; memory_messages_fts virtual table with content='memory_messages', content_rowid='id', tokenize='unicode61 remove_diacritics 2'; three sync triggers (_ai, _ad, _au); indexes on session and (session, epoch).\n\n**Verify:** `cd /Users/ian/code/arc-relay && CGO_ENABLED=1 go test ./internal/store/ -run TestMemorySchema -v`\n\n```json:metadata\n{\"files\": [\"migrations/015_memory.sql\", \"internal/store/memory_schema_test.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=1 go test ./internal/store/ -run TestMemorySchema -v\", \"acceptanceCriteria\": [\"memory_sessions table exists\", \"memory_messages table exists\", \"memory_compact_events table exists\", \"memory_messages_fts virtual table keyed to memory_messages.id\", \"three sync triggers _ai/_ad/_au present\", \"indexes on session and (session, epoch) created\"]}\n```"
     },
     {
@@ -84,5 +84,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T16:35:00-04:00"
+  "lastUpdated": "2026-04-26T17:25:00-04:00"
 }
