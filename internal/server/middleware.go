@@ -20,6 +20,12 @@ func UserFromContext(ctx context.Context) *store.User {
 	return u
 }
 
+// WithUser returns a copy of ctx with user attached. Exported for tests that
+// bypass APIKeyAuth and need to simulate an authenticated request.
+func WithUser(ctx context.Context, user *store.User) context.Context {
+	return context.WithValue(ctx, userContextKey, user)
+}
+
 // setWWWAuthenticate adds the RFC 9728 WWW-Authenticate header for OAuth discovery.
 // The resource_metadata URL includes the request path so the metadata's resource
 // field matches the exact URL the client probed (required by RFC 9728).

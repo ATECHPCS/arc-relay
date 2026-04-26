@@ -17,11 +17,13 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/docker"
 	"github.com/comma-compliance/arc-relay/internal/llm"
+	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/web"
 	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 	"github.com/comma-compliance/arc-relay/migrations"
 )
@@ -174,7 +176,17 @@ func main() {
 	memDB.StartBackup(6 * time.Hour)
 	defer memDB.StopBackup()
 	slog.Info("memory database opened", "path", memDBPath)
-	_ = memDB // memDB will be wired to memory stores in Task 1/2.
+
+	// Memory subsystem wiring (Task 4).
+	messageStore := store.NewMessageStore(memDB)
+	sessionMemoryStore := store.NewSessionMemoryStore(memDB)
+	memSvc := memory.NewService(sessionMemoryStore, messageStore)
+	memHandlers := web.NewMemoryHandlers(memSvc, func(ctx context.Context) string {
+		if u := server.UserFromContext(ctx); u != nil {
+			return u.ID
+		}
+		return ""
+	})
 
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)
@@ -199,7 +211,7 @@ func main() {
 	proxyMgr.OptimizeStore = optimizeStore
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

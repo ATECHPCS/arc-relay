@@ -39,33 +39,39 @@ type Server struct {
 	healthMon       *proxy.HealthMonitor
 	inviteStore     *store.InviteStore
 	oauthTokenStore *store.OAuthTokenStore
-	optimizeStore   *store.OptimizeStore
-	llmClient       *llm.Client
-	optimizer       *middleware.Optimizer
-	mux             *http.ServeMux
+	optimizeStore      *store.OptimizeStore
+	llmClient          *llm.Client
+	optimizer          *middleware.Optimizer
+	messageStore       *store.MessageStore
+	sessionMemoryStore *store.SessionMemoryStore
+	memHandlers        *web.MemoryHandlers
+	mux                *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers) *Server {
 	s := &Server{
-		cfg:             cfg,
-		servers:         servers,
-		users:           users,
-		proxy:           proxyMgr,
-		oauthMgr:        oauthMgr,
-		accessStore:     accessStore,
-		profileStore:    profileStore,
-		requestLogs:     requestLogs,
-		sessionStore:    sessionStore,
-		middlewareStore: middlewareStore,
-		mwRegistry:      mwRegistry,
-		healthMon:       healthMon,
-		inviteStore:     inviteStore,
-		oauthTokenStore: oauthTokenStore,
-		optimizeStore:   optimizeStore,
-		llmClient:       llmClient,
-		optimizer:       middleware.NewOptimizer(optimizeStore, servers),
-		mux:             http.NewServeMux(),
+		cfg:                cfg,
+		servers:            servers,
+		users:              users,
+		proxy:              proxyMgr,
+		oauthMgr:           oauthMgr,
+		accessStore:        accessStore,
+		profileStore:       profileStore,
+		requestLogs:        requestLogs,
+		sessionStore:       sessionStore,
+		middlewareStore:    middlewareStore,
+		mwRegistry:         mwRegistry,
+		healthMon:          healthMon,
+		inviteStore:        inviteStore,
+		oauthTokenStore:    oauthTokenStore,
+		optimizeStore:      optimizeStore,
+		llmClient:          llmClient,
+		optimizer:          middleware.NewOptimizer(optimizeStore, servers),
+		messageStore:       messageStore,
+		sessionMemoryStore: sessionMemoryStore,
+		memHandlers:        memHandlers,
+		mux:                http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -82,6 +88,9 @@ func (s *Server) routes() {
 	apiAuth := APIKeyAuth(s.users, baseURL)
 	s.mux.Handle("/api/servers", apiAuth(http.HandlerFunc(s.handleServers)))
 	s.mux.Handle("/api/servers/", apiAuth(http.HandlerFunc(s.handleServerByID)))
+
+	// Memory ingestion endpoint (API key auth only)
+	s.mux.Handle("/api/memory/ingest", apiAuth(http.HandlerFunc(s.memHandlers.HandleIngest)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
