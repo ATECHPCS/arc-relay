@@ -6,17 +6,21 @@ import (
 	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 )
 
-// seedTestSession is a test-only shortcut that bypasses SessionMemoryStore
-// (which lands in Task 2). Inserts the minimum row required so the FK on
-// memory_messages.session_id resolves.
+// seedTestSession is a test-only shortcut that calls SessionMemoryStore.Upsert
+// to seed the parent row required by memory_messages's foreign key.
 func seedTestSession(t *testing.T, db *DB, sessionID, userID string) {
 	t.Helper()
-	_, err := db.Exec(`
-INSERT INTO memory_sessions
-    (session_id, user_id, project_dir, file_path, file_mtime, indexed_at, last_seen_at, platform, bytes_seen)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-`, sessionID, userID, "/test", "/test/x.jsonl", 1.0, 1.0, 1.0, "claude-code", 0)
-	if err != nil {
+	store := NewSessionMemoryStore(db)
+	if err := store.Upsert(&MemorySession{
+		SessionID:  sessionID,
+		UserID:     userID,
+		ProjectDir: "/test",
+		FilePath:   "/test/x.jsonl",
+		FileMtime:  1.0,
+		IndexedAt:  1.0,
+		LastSeenAt: 1.0,
+		Platform:   "claude-code",
+	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 }
