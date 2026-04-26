@@ -17,7 +17,7 @@
     {
       "id": 1,
       "subject": "Task 1: MessageStore + FTS5 search",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": ["0a"],
       "description": "**Goal:** CRUD + FTS5 BM25 search for memory_messages, mirroring ServerStore.\n\n**Files:** `internal/store/memory_messages.go` + test.\n\n**Acceptance:** NewMessageStore; Insert/BulkInsert(tx); Search(userID, query, opts) BM25; SearchRegex Go regexp fallback; GetSession(sessionID, fromEpoch); user scoping via memory_sessions join.\n\n**Verify:** `CGO_ENABLED=1 go test ./internal/store/ -run TestMessageStore -v`\n\n```json:metadata\n{\"files\": [\"internal/store/memory_messages.go\", \"internal/store/memory_messages_test.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=1 go test ./internal/store/ -run TestMessageStore -v\", \"acceptanceCriteria\": [\"NewMessageStore constructor\", \"Insert + BulkInsert in transaction\", \"Search returns BM25 ranked rows\", \"SearchRegex falls back to Go regexp\", \"GetSession respects fromEpoch\", \"all queries scoped to user_id\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T18:05:00-04:00"
+  "lastUpdated": "2026-04-26T18:50:00-04:00"
 }
