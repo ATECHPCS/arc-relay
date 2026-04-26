@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 4: Ingest service + REST endpoint",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [1, 2, 3],
       "description": "**Goal:** `POST /api/memory/ingest` parses+persists transcript deltas.\n\n**Files:** `internal/memory/service.go`, `internal/web/memory_handlers.go`, `internal/web/memory_handlers_test.go`, modify `internal/server/http.go`.\n\n**Acceptance:** apiAuth wired; 10 MiB body cap via http.MaxBytesReader; idempotent on uuid; response `{messages_added, events_added, bytes_seen}`.\n\n**Verify:** `CGO_ENABLED=1 go test ./internal/web/ -run TestMemoryIngest -v`\n\n```json:metadata\n{\"files\": [\"internal/memory/service.go\", \"internal/web/memory_handlers.go\", \"internal/web/memory_handlers_test.go\", \"internal/server/http.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=1 go test ./internal/web/ -run TestMemoryIngest -v\", \"acceptanceCriteria\": [\"POST /api/memory/ingest auth via apiAuth\", \"10 MiB body cap enforced\", \"idempotent re-POST\", \"response shape correct\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T19:35:00-04:00"
+  "lastUpdated": "2026-04-26T20:05:00-04:00"
 }
