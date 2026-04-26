@@ -10,7 +10,7 @@
     {
       "id": "0a",
       "subject": "Task 0a: Rework — separate memory DB + migrations-memory package",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [0],
       "description": "**Goal:** Move 015_memory.sql out of the main migrations/ set into a new migrations-memory/ package; open a second *store.DB against /data/memory.db; wire ARC_RELAY_MEMORY_DB_PATH env var.\n\n**Files:**\n- Create: `migrations-memory/migrations.go` (with `//go:embed *.sql` + `var FS embed.FS`)\n- Move: `migrations/015_memory.sql` → `migrations-memory/001_memory.sql` (use `git mv`)\n- Modify: `internal/store/memory_schema_test.go` (open against `migrationsmemory.FS`)\n- Modify: `cmd/arc-relay/main.go` (open second store.DB; defer Close + StartBackup)\n- Modify: `internal/config/config.go` (add `MemoryDBPath` with envconfig tag)\n- Modify: `Dockerfile` (add `ENV ARC_RELAY_MEMORY_DB_PATH=/data/memory.db`)\n- Modify: `config.example.toml` (document `memory_db_path`)\n\n**Acceptance:** make test passes; smoke check shows /tmp/relay.db has NO memory_* tables and /tmp/mem.db DOES.\n\n**Verify:** `cd /Users/ian/code/arc-relay-memory-pivot && make test` AND the manual two-DB sqlite3 inspection from plan Step 6.\n\n```json:metadata\n{\"files\": [\"migrations-memory/migrations.go\", \"migrations-memory/001_memory.sql\", \"internal/store/memory_schema_test.go\", \"cmd/arc-relay/main.go\", \"internal/config/config.go\", \"Dockerfile\", \"config.example.toml\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && make test\", \"acceptanceCriteria\": [\"migrations/015_memory.sql removed\", \"migrations-memory/001_memory.sql exists with identical SQL\", \"migrations-memory package exports embed.FS\", \"main.go opens two separate store.DB instances\", \"ARC_RELAY_MEMORY_DB_PATH env var honored with sensible default\", \"two-DB smoke check passes (relay.db has no memory_* tables; mem.db has them)\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T17:25:00-04:00"
+  "lastUpdated": "2026-04-26T18:05:00-04:00"
 }
