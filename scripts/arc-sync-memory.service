@@ -1,0 +1,12 @@
+[Unit]
+Description=Arc Relay memory transcript watcher
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/arc-sync memory watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
