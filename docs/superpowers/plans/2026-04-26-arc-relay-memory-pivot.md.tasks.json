@@ -51,7 +51,7 @@
     {
       "id": 6,
       "subject": "Task 6: Native MCP server /mcp/memory",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [4],
       "description": "**Goal:** JSON-RPC 2.0 MCP endpoint with `memory_search`, `memory_session_extract`, `memory_recent` under MCPAuth.\n\n**Files:** `internal/mcp/memory/server.go` + test, modify `internal/server/http.go`.\n\n**Acceptance:** tools/list returns 3 with JSONSchema; tools/call returns text content blocks; output prepended with `## RESEARCH ONLY` banner; mounted at `/mcp/memory` and `/mcp/memory/`.\n\n**Verify:** `CGO_ENABLED=1 go test ./internal/mcp/memory/ -v`\n\n```json:metadata\n{\"files\": [\"internal/mcp/memory/server.go\", \"internal/mcp/memory/server_test.go\", \"internal/server/http.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=1 go test ./internal/mcp/memory/ -v\", \"acceptanceCriteria\": [\"tools/list returns 3 tools\", \"tools/call memory_search returns hits\", \"RESEARCH ONLY banner present\", \"MCPAuth wired\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T20:30:00-04:00"
+  "lastUpdated": "2026-04-26T21:00:00-04:00"
 }
