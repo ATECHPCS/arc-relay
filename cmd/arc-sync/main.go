@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,7 @@ Commands:
   setup-project Add project MCP instructions to .claude/CLAUDE.md and AGENTS.md
   server        Manage servers on the relay instance (add, remove, start, stop)
   memory        Tail Claude Code transcripts and POST deltas to the relay
+                Subcommands: watch, install-service, search, list, stats, show
 
 Flags (for sync/add):
   --non-interactive, -y    Auto-accept all new servers
@@ -1675,7 +1677,7 @@ func getPositionalArg(args []string) string {
 
 func runMemory() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: arc-sync memory <watch|install-service> [args]")
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory <watch|install-service|search|list|stats|show> [args]")
 		os.Exit(1)
 	}
 	switch os.Args[2] {
@@ -1683,10 +1685,124 @@ func runMemory() {
 		runMemoryWatch()
 	case "install-service":
 		runMemoryInstallService()
+	case "search":
+		runMemorySearch()
+	case "list":
+		runMemoryList()
+	case "stats":
+		runMemoryStats()
+	case "show":
+		runMemoryShow()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown memory subcommand: %s\n", os.Args[2])
 		os.Exit(1)
 	}
+}
+
+func runMemorySearch() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory search <query> [--limit N] [--project P] [--session ID] [--json]")
+		os.Exit(1)
+	}
+	args := os.Args[3:]
+	query := args[0]
+	opts := sync.SearchOptions{
+		Limit:      atoiOrDefault(getFlagValue(args[1:], "--limit"), 0),
+		ProjectDir: getFlagValue(args[1:], "--project"),
+		SessionID:  getFlagValue(args[1:], "--session"),
+		JSON:       hasFlagInArgs(args[1:], "--json"),
+	}
+	out, err := newMemorySearchClient().Search(query, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory search:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func runMemoryList() {
+	args := os.Args[3:]
+	opts := sync.ListOptions{
+		Limit:    atoiOrDefault(getFlagValue(args, "--limit"), 0),
+		Platform: getFlagValue(args, "--platform"),
+		JSON:     hasFlagInArgs(args, "--json"),
+	}
+	out, err := newMemorySearchClient().List(opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory list:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func runMemoryStats() {
+	args := os.Args[3:]
+	c := newMemorySearchClient()
+	var (
+		out string
+		err error
+	)
+	if hasFlagInArgs(args, "--json") {
+		out, err = c.StatsRaw()
+	} else {
+		out, err = c.Stats()
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory stats:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func runMemoryShow() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory show <session-uuid> [--from-epoch N] [--tail N] [--json]")
+		os.Exit(1)
+	}
+	args := os.Args[3:]
+	sid := args[0]
+	opts := sync.ShowOptions{
+		FromEpoch: atoiOrDefault(getFlagValue(args[1:], "--from-epoch"), 0),
+		Tail:      atoiOrDefault(getFlagValue(args[1:], "--tail"), 0),
+		JSON:      hasFlagInArgs(args[1:], "--json"),
+	}
+	out, err := newMemorySearchClient().Show(sid, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory show:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func newMemorySearchClient() *sync.MemorySearchClient {
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	creds, err := config.ResolveCredentials(configDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return &sync.MemorySearchClient{
+		BaseURL:    creds.RelayURL,
+		APIKey:     creds.APIKey,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// atoiOrDefault converts s to int; returns def if s is empty or invalid.
+// Used for parsing optional integer flag values.
+func atoiOrDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func runMemoryWatch() {
