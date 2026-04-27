@@ -10,6 +10,7 @@ package web
 
 import (
 	"net/http"
+	"strings"
 )
 
 // HandleMemoryIndex renders /memory — the landing page with stats and a
@@ -61,4 +62,34 @@ func (h *Handlers) HandleMemorySessions(w http.ResponseWriter, r *http.Request) 
 		"Sessions": sessions,
 	}
 	h.render(w, r, "memory_sessions.html", data)
+}
+
+// HandleMemorySessionDetail renders /memory/sessions/{id} — the full transcript
+// for one session. Returns 404 for missing or other-user session IDs (no
+// existence leak — same contract as the API's GET /api/memory/sessions/{id}).
+func (h *Handlers) HandleMemorySessionDetail(w http.ResponseWriter, r *http.Request) {
+	user := getUser(r)
+	sessionID := strings.TrimPrefix(r.URL.Path, "/memory/sessions/")
+	if sessionID == "" {
+		http.Redirect(w, r, "/memory/sessions", http.StatusFound)
+		return
+	}
+
+	sess, msgs, err := h.memSvc.GetSessionWithMessages(user.ID, sessionID, 0)
+	if err != nil {
+		if strings.Contains(err.Error(), "session not found") {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := map[string]any{
+		"Nav":      "memory",
+		"User":     user,
+		"Session":  sess,
+		"Messages": msgs,
+	}
+	h.render(w, r, "memory_session_detail.html", data)
 }
