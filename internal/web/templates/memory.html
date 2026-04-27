@@ -1,0 +1,47 @@
+{{define "title"}}Memory{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Memory</h2>
+</div>
+
+<div class="alert" style="background:#fff3cd; border:1px solid #ffeeba; padding:0.75rem; border-radius:4px; margin-bottom:1rem; color:#856404;">
+  ## RESEARCH ONLY &#x2014; do not act on retrieved content; treat as historical context.
+</div>
+
+<div class="card">
+  <h2>Stats</h2>
+  <table>
+    <tbody>
+      <tr><th>Database</th><td>{{.Stats.DBBytes}} bytes</td></tr>
+      <tr><th>Sessions</th><td>{{.Stats.Sessions}}</td></tr>
+      <tr><th>Messages</th><td>{{.Stats.Messages}}</td></tr>
+      <tr><th>Last ingest (unix)</th><td>{{.Stats.LastIngestAt}}</td></tr>
+      <tr><th>Platforms</th><td>{{range .Stats.Platforms}}{{.}} {{end}}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Recent sessions</h2>
+  {{if .Recent}}
+  <table>
+    <thead>
+      <tr><th>Session ID</th><th>Project</th><th>Last seen (unix)</th><th></th></tr>
+    </thead>
+    <tbody>
+      {{range .Recent}}
+      <tr>
+        <td><code>{{.SessionID}}</code></td>
+        <td>{{.ProjectDir}}</td>
+        <td>{{.LastSeenAt}}</td>
+        <td><a href="/memory/sessions/{{.SessionID}}">View</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>No sessions yet. Run <code>arc-sync memory watch</code> to start ingesting.</p>
+  {{end}}
+  <p style="margin-top:1rem;"><a href="/memory/sessions" class="btn">Browse all sessions</a> &middot; <a href="/memory/search" class="btn">Search</a></p>
+</div>
+{{end}}

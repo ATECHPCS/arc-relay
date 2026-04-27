@@ -16,6 +16,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/memory"
 	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
@@ -47,11 +48,12 @@ type Server struct {
 	sessionMemoryStore *store.SessionMemoryStore
 	memHandlers        *web.MemoryHandlers
 	memMcp             *mcpmemory.Server
+	memSvc             *memory.Service
 	mux                *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server, memSvc *memory.Service) *Server {
 	s := &Server{
 		cfg:                cfg,
 		servers:            servers,
@@ -74,6 +76,7 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		sessionMemoryStore: sessionMemoryStore,
 		memHandlers:        memHandlers,
 		memMcp:             memMcp,
+		memSvc:             memSvc,
 		mux:                http.NewServeMux(),
 	}
 	s.routes()
@@ -111,7 +114,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient, s.memSvc)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }

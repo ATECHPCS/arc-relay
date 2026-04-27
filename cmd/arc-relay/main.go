@@ -218,7 +218,7 @@ func main() {
 	proxyMgr.OptimizeStore = optimizeStore
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp, memSvc)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
