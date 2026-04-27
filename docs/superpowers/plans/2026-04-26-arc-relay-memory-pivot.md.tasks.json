@@ -58,7 +58,7 @@
     {
       "id": 7,
       "subject": "Task 7: arc-sync memory watch",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [4],
       "description": "**Goal:** Tail `~/.claude/projects/**/*.jsonl` and POST deltas.\n\n**Files:** `internal/cli/sync/memory.go` + test, modify `cmd/arc-sync/main.go`, `go.mod`/`go.sum` for fsnotify.\n\n**Acceptance:** watermark in `~/.config/arc-sync/memory_state.json`; fsnotify with 5s poll fallback; `--once` flag; never modifies source JSONL.\n\n**Verify:** `CGO_ENABLED=0 go test ./internal/cli/sync/ -run TestMemoryWatcher -v`\n\n```json:metadata\n{\"files\": [\"internal/cli/sync/memory.go\", \"internal/cli/sync/memory_test.go\", \"cmd/arc-sync/main.go\", \"go.mod\", \"go.sum\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=0 go test ./internal/cli/sync/ -run TestMemoryWatcher -v\", \"acceptanceCriteria\": [\"watermark persisted per file\", \"fsnotify with poll fallback\", \"--once flag for cron\", \"never mutates source JSONL\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T21:00:00-04:00"
+  "lastUpdated": "2026-04-26T21:30:00-04:00"
 }
