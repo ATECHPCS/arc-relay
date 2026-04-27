@@ -60,8 +60,16 @@ type ingestRequest struct {
 func (w *MemoryWatcher) loadState() *stateFile {
 	st := &stateFile{Files: map[string]*fileState{}}
 	b, err := os.ReadFile(w.StatePath)
-	if err == nil {
-		_ = json.Unmarshal(b, st)
+	if err != nil {
+		// File missing on first run is expected; only log other errors.
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "memory watch: cannot read state file %s: %v\n", w.StatePath, err)
+		}
+		return st
+	}
+	if err := json.Unmarshal(b, st); err != nil {
+		fmt.Fprintf(os.Stderr, "memory watch: state file corrupted, starting fresh (%s): %v\n", w.StatePath, err)
+		st = &stateFile{Files: map[string]*fileState{}}
 	}
 	if st.Files == nil {
 		st.Files = map[string]*fileState{}
@@ -106,9 +114,16 @@ func (w *MemoryWatcher) Run() error {
 		return fmt.Errorf("watch root: %w", err)
 	}
 	// Also watch the directory containing the wakeup flag — Task 10's Stop hook
-	// touches that file to signal an immediate scan.
+	// touches that file to signal an immediate scan. Create the dir first since
+	// it's our config dir; if creation fails, log + continue (the 30s tick will
+	// still catch up, just not instantly).
 	if w.FlagPath != "" {
-		_ = notify.Add(filepath.Dir(w.FlagPath))
+		flagDir := filepath.Dir(w.FlagPath)
+		if err := os.MkdirAll(flagDir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "memory watch: cannot create wakeup-flag dir %s: %v\n", flagDir, err)
+		} else if err := notify.Add(flagDir); err != nil {
+			fmt.Fprintf(os.Stderr, "memory watch: cannot watch wakeup-flag dir %s: %v\n", flagDir, err)
+		}
 	}
 
 	tick := time.NewTicker(30 * time.Second)

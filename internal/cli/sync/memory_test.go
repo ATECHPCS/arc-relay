@@ -142,6 +142,42 @@ func TestMemoryWatcher_HTTPFailureDoesNotAdvanceWatermark(t *testing.T) {
 	}
 }
 
+func TestMemoryWatcher_CorruptStateFileResetsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	pd := filepath.Join(dir, "p", "-x")
+	_ = os.MkdirAll(pd, 0o755)
+	_ = os.WriteFile(filepath.Join(pd, "s1.jsonl"), []byte("{}\n"), 0o644)
+
+	statePath := filepath.Join(dir, "state.json")
+	// Pre-write a corrupted state file
+	_ = os.WriteFile(statePath, []byte("{not json"), 0o600)
+
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"messages_added": 0, "events_added": 0, "bytes_seen": 3,
+		})
+	}))
+	defer server.Close()
+
+	w := &MemoryWatcher{
+		BaseURL:    server.URL,
+		APIKey:     "k",
+		RootDir:    filepath.Join(dir, "p"),
+		StatePath:  statePath,
+		HTTPClient: server.Client(),
+	}
+	if err := w.RunOnce(); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	// We don't assert post count beyond "no crash" — the test's value is
+	// proving the watcher recovers from corrupt state without panicking.
+	if posts < 1 {
+		t.Fatalf("expected at least 1 POST after recovery, got %d", posts)
+	}
+}
+
 func TestMemoryWatcher_DecodesProjectDir(t *testing.T) {
 	cases := []struct {
 		escaped, want string
