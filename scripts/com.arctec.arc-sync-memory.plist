@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.arctec.arc-sync-memory</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/arc-sync</string>
+        <string>memory</string>
+        <string>watch</string>
+    </array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/arc-sync-memory.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/arc-sync-memory.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/ian</string>
+    </dict>
+</dict>
+</plist>

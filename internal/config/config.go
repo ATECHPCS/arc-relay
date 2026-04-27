@@ -32,7 +32,8 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path string `toml:"path"`
+	Path       string `toml:"path"`
+	MemoryPath string `toml:"memory_path"`
 }
 
 type DockerConfig struct {
@@ -95,6 +96,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("ARC_RELAY_DB_PATH"); v != "" {
 		cfg.Database.Path = v
+	}
+	if v := os.Getenv("ARC_RELAY_MEMORY_DB_PATH"); v != "" {
+		cfg.Database.MemoryPath = v
 	}
 	if v := os.Getenv("ARC_RELAY_BASE_URL"); v != "" {
 		cfg.Server.BaseURL = v

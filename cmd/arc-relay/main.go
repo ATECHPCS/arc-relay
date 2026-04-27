@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,11 +17,15 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/docker"
 	"github.com/comma-compliance/arc-relay/internal/llm"
+	"github.com/comma-compliance/arc-relay/internal/memory"
+	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/store"
+	"github.com/comma-compliance/arc-relay/internal/web"
+	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
 	"github.com/comma-compliance/arc-relay/migrations"
 )
 
@@ -158,6 +163,38 @@ func main() {
 	healthMon := proxy.NewHealthMonitor(proxyMgr, serverStore, 30*time.Second)
 	healthMon.Start()
 
+	// Open memory database (separate SQLite file to isolate WAL from auth-critical writes)
+	memDBPath := cfg.Database.MemoryPath
+	if memDBPath == "" {
+		memDBPath = filepath.Join(filepath.Dir(cfg.Database.Path), "memory.db")
+	}
+	memDB, err := store.Open(memDBPath, migrationsmemory.FS)
+	if err != nil {
+		slog.Error("failed to open memory db", "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = memDB.Close() }()
+	memDB.StartBackup(6 * time.Hour)
+	defer memDB.StopBackup()
+	slog.Info("memory database opened", "path", memDBPath)
+
+	// Memory subsystem wiring (Task 4).
+	messageStore := store.NewMessageStore(memDB)
+	sessionMemoryStore := store.NewSessionMemoryStore(memDB)
+	memSvc := memory.NewService(sessionMemoryStore, messageStore)
+	memHandlers := web.NewMemoryHandlers(memSvc, func(ctx context.Context) string {
+		if u := server.UserFromContext(ctx); u != nil {
+			return u.ID
+		}
+		return ""
+	})
+	memMcp := mcpmemory.NewServer(memSvc, func(ctx context.Context) string {
+		if u := server.UserFromContext(ctx); u != nil {
+			return u.ID
+		}
+		return ""
+	})
+
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)
 
@@ -181,7 +218,7 @@ func main() {
 	proxyMgr.OptimizeStore = optimizeStore
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

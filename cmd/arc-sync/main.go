@@ -9,7 +9,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -52,6 +55,8 @@ func main() {
 		runSetupCodex()
 	case "setup-project":
 		runSetupProject()
+	case "memory":
+		runMemory()
 	case "--version", "version":
 		fmt.Printf("arc-sync %s\n", version)
 	case "--help", "help", "-h":
@@ -78,6 +83,8 @@ Commands:
   setup-codex   Install Codex CLI AGENTS instructions
   setup-project Add project MCP instructions to .claude/CLAUDE.md and AGENTS.md
   server        Manage servers on the relay instance (add, remove, start, stop)
+  memory        Tail Claude Code transcripts and POST deltas to the relay
+                Subcommands: watch, install-service, search, list, stats, show
 
 Flags (for sync/add):
   --non-interactive, -y    Auto-accept all new servers
@@ -1666,6 +1673,254 @@ func getPositionalArg(args []string) string {
 		return arg
 	}
 	return ""
+}
+
+func runMemory() {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory <watch|install-service|search|list|stats|show> [args]")
+		os.Exit(1)
+	}
+	switch os.Args[2] {
+	case "watch":
+		runMemoryWatch()
+	case "install-service":
+		runMemoryInstallService()
+	case "search":
+		runMemorySearch()
+	case "list":
+		runMemoryList()
+	case "stats":
+		runMemoryStats()
+	case "show":
+		runMemoryShow()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown memory subcommand: %s\n", os.Args[2])
+		os.Exit(1)
+	}
+}
+
+func runMemorySearch() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory search <query> [--limit N] [--project P] [--session ID] [--json]")
+		os.Exit(1)
+	}
+	args := os.Args[3:]
+	query := args[0]
+	opts := sync.SearchOptions{
+		Limit:      atoiOrDefault(getFlagValue(args[1:], "--limit"), 0),
+		ProjectDir: getFlagValue(args[1:], "--project"),
+		SessionID:  getFlagValue(args[1:], "--session"),
+		JSON:       hasFlagInArgs(args[1:], "--json"),
+	}
+	out, err := newMemorySearchClient().Search(query, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory search:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func runMemoryList() {
+	args := os.Args[3:]
+	opts := sync.ListOptions{
+		Limit:    atoiOrDefault(getFlagValue(args, "--limit"), 0),
+		Platform: getFlagValue(args, "--platform"),
+		JSON:     hasFlagInArgs(args, "--json"),
+	}
+	out, err := newMemorySearchClient().List(opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory list:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func runMemoryStats() {
+	args := os.Args[3:]
+	c := newMemorySearchClient()
+	var (
+		out string
+		err error
+	)
+	if hasFlagInArgs(args, "--json") {
+		out, err = c.StatsRaw()
+	} else {
+		out, err = c.Stats()
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory stats:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func runMemoryShow() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory show <session-uuid> [--from-epoch N] [--tail N] [--json]")
+		os.Exit(1)
+	}
+	args := os.Args[3:]
+	sid := args[0]
+	opts := sync.ShowOptions{
+		FromEpoch: atoiOrDefault(getFlagValue(args[1:], "--from-epoch"), 0),
+		Tail:      atoiOrDefault(getFlagValue(args[1:], "--tail"), 0),
+		JSON:      hasFlagInArgs(args[1:], "--json"),
+	}
+	out, err := newMemorySearchClient().Show(sid, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "memory show:", err)
+		os.Exit(1)
+	}
+	fmt.Print(out)
+}
+
+func newMemorySearchClient() *sync.MemorySearchClient {
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	creds, err := config.ResolveCredentials(configDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	return &sync.MemorySearchClient{
+		BaseURL:    creds.RelayURL,
+		APIKey:     creds.APIKey,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+	}
+}
+
+// atoiOrDefault converts s to int; returns def if s is empty or invalid.
+// Used for parsing optional integer flag values.
+func atoiOrDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func runMemoryWatch() {
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	creds, err := config.ResolveCredentials(configDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	home, _ := os.UserHomeDir()
+	w := &sync.MemoryWatcher{
+		BaseURL:    creds.RelayURL,
+		APIKey:     creds.APIKey,
+		RootDir:    filepath.Join(home, ".claude", "projects"),
+		StatePath:  filepath.Join(configDir, "memory_state.json"),
+		FlagPath:   filepath.Join(configDir, "wakeup.flag"),
+		HTTPClient: &http.Client{Timeout: 60 * time.Second},
+	}
+	once := false
+	for _, a := range os.Args[3:] {
+		if a == "--once" {
+			once = true
+		}
+	}
+	if once {
+		if err := w.RunOnce(); err != nil {
+			fmt.Fprintln(os.Stderr, "memory watch:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := w.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "memory watch:", err)
+		os.Exit(1)
+	}
+}
+
+func runMemoryInstallService() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		installLaunchd(home)
+	case "linux":
+		installSystemd(home)
+	default:
+		fmt.Fprintf(os.Stderr, "unsupported platform %s — run `arc-sync memory watch` directly under your own supervision tooling\n", runtime.GOOS)
+		os.Exit(1)
+	}
+}
+
+func installLaunchd(home string) {
+	src := filepath.Join("scripts", "com.arctec.arc-sync-memory.plist")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reading template %s: %v\n", src, err)
+		os.Exit(1)
+	}
+	dstDir := filepath.Join(home, "Library", "LaunchAgents")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	dst := filepath.Join(dstDir, "com.arctec.arc-sync-memory.plist")
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	cmd := exec.Command("launchctl", "load", "-w", dst)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "launchctl load failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("launchd unit installed at %s and loaded.\n", dst)
+	fmt.Printf("  Note: the plist hardcodes HOME=%s.\n", home)
+	fmt.Printf("  If your home directory differs, edit the file and run:\n")
+	fmt.Printf("    launchctl unload %s && launchctl load -w %s\n", dst, dst)
+}
+
+func installSystemd(home string) {
+	src := filepath.Join("scripts", "arc-sync-memory.service")
+	data, err := os.ReadFile(src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reading template %s: %v\n", src, err)
+		os.Exit(1)
+	}
+	dstDir := filepath.Join(home, ".config", "systemd", "user")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	dst := filepath.Join(dstDir, "arc-sync-memory.service")
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for _, args := range [][]string{
+		{"systemctl", "--user", "daemon-reload"},
+		{"systemctl", "--user", "enable", "--now", "arc-sync-memory.service"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s failed: %v\n", strings.Join(args, " "), err)
+			os.Exit(1)
+		}
+	}
+	fmt.Printf("systemd user unit installed at %s and enabled.\n", dst)
 }
 
 // getCommandAfterDash returns everything after a bare "--" in the args.

@@ -20,6 +20,7 @@ RUN mkdir -p /data
 
 # Default DB path inside the container - matches the /data volume mount
 ENV ARC_RELAY_DB_PATH=/data/arc-relay.db
+ENV ARC_RELAY_MEMORY_DB_PATH=/data/memory.db
 
 EXPOSE 8080
 

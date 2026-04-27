@@ -4,6 +4,10 @@ port = 8080
 
 [database]
 path = "/data/arc-relay.db"
+# Path to the centralized transcript memory database. Defaults to memory.db
+# alongside the main DB. Held in a separate SQLite file so transcript ingest
+# doesn't share WAL with auth-critical writes.
+memory_path = "memory.db"
 
 [docker]
 # Docker socket path (default for Linux)

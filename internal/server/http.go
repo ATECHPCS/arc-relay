@@ -16,6 +16,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
+	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
@@ -39,33 +40,41 @@ type Server struct {
 	healthMon       *proxy.HealthMonitor
 	inviteStore     *store.InviteStore
 	oauthTokenStore *store.OAuthTokenStore
-	optimizeStore   *store.OptimizeStore
-	llmClient       *llm.Client
-	optimizer       *middleware.Optimizer
-	mux             *http.ServeMux
+	optimizeStore      *store.OptimizeStore
+	llmClient          *llm.Client
+	optimizer          *middleware.Optimizer
+	messageStore       *store.MessageStore
+	sessionMemoryStore *store.SessionMemoryStore
+	memHandlers        *web.MemoryHandlers
+	memMcp             *mcpmemory.Server
+	mux                *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server) *Server {
 	s := &Server{
-		cfg:             cfg,
-		servers:         servers,
-		users:           users,
-		proxy:           proxyMgr,
-		oauthMgr:        oauthMgr,
-		accessStore:     accessStore,
-		profileStore:    profileStore,
-		requestLogs:     requestLogs,
-		sessionStore:    sessionStore,
-		middlewareStore: middlewareStore,
-		mwRegistry:      mwRegistry,
-		healthMon:       healthMon,
-		inviteStore:     inviteStore,
-		oauthTokenStore: oauthTokenStore,
-		optimizeStore:   optimizeStore,
-		llmClient:       llmClient,
-		optimizer:       middleware.NewOptimizer(optimizeStore, servers),
-		mux:             http.NewServeMux(),
+		cfg:                cfg,
+		servers:            servers,
+		users:              users,
+		proxy:              proxyMgr,
+		oauthMgr:           oauthMgr,
+		accessStore:        accessStore,
+		profileStore:       profileStore,
+		requestLogs:        requestLogs,
+		sessionStore:       sessionStore,
+		middlewareStore:    middlewareStore,
+		mwRegistry:         mwRegistry,
+		healthMon:          healthMon,
+		inviteStore:        inviteStore,
+		oauthTokenStore:    oauthTokenStore,
+		optimizeStore:      optimizeStore,
+		llmClient:          llmClient,
+		optimizer:          middleware.NewOptimizer(optimizeStore, servers),
+		messageStore:       messageStore,
+		sessionMemoryStore: sessionMemoryStore,
+		memHandlers:        memHandlers,
+		memMcp:             memMcp,
+		mux:                http.NewServeMux(),
 	}
 	s.routes()
 	return s
@@ -73,6 +82,11 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 
 func (s *Server) routes() {
 	baseURL := s.cfg.PublicBaseURL()
+
+	// Native MCP memory server — registered before /mcp/ so it wins the match.
+	// MCPAuth accepts both API keys and OAuth tokens (same as the proxy route).
+	s.mux.Handle("/mcp/memory", MCPAuth(s.users, s.oauthTokenStore, baseURL)(s.memMcp))
+	s.mux.Handle("/mcp/memory/", MCPAuth(s.users, s.oauthTokenStore, baseURL)(s.memMcp))
 
 	// MCP proxy endpoints (API key + OAuth token auth + rate limiting)
 	limiter := NewRateLimiter(100, 200) // 100 req/sec sustained, 200 burst
@@ -82,6 +96,13 @@ func (s *Server) routes() {
 	apiAuth := APIKeyAuth(s.users, baseURL)
 	s.mux.Handle("/api/servers", apiAuth(http.HandlerFunc(s.handleServers)))
 	s.mux.Handle("/api/servers/", apiAuth(http.HandlerFunc(s.handleServerByID)))
+
+	// Memory ingestion endpoint (API key auth only)
+	s.mux.Handle("/api/memory/ingest", apiAuth(http.HandlerFunc(s.memHandlers.HandleIngest)))
+	s.mux.Handle("/api/memory/search",    apiAuth(http.HandlerFunc(s.memHandlers.HandleSearch)))
+	s.mux.Handle("/api/memory/sessions",  apiAuth(http.HandlerFunc(s.memHandlers.HandleSessions)))
+	s.mux.Handle("/api/memory/sessions/", apiAuth(http.HandlerFunc(s.memHandlers.HandleSessionExtract)))
+	s.mux.Handle("/api/memory/stats",     apiAuth(http.HandlerFunc(s.memHandlers.HandleStats)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
