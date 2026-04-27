@@ -207,6 +207,12 @@ func (h *Handlers) handleAuthorizationServerMetadata(w http.ResponseWriter, r *h
 
 // handleOAuthRegister handles POST /register (RFC 7591 Dynamic Client Registration).
 func (h *Handlers) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
+	if !h.oauthRegisterLimiter.allow(clientIP(r)) {
+		h.rateLimitResponse(w, 1*time.Hour)
+		return
+	}
+	h.oauthRegisterLimiter.record(clientIP(r))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return

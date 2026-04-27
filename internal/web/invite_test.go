@@ -30,11 +30,12 @@ func newTestHandlersWithInvites(t *testing.T) (*Handlers, *store.SessionStore, *
 	cfg.Auth.SessionSecret = "test-secret"
 
 	h := &Handlers{
-		cfg:          cfg,
-		users:        users,
-		sessionStore: sessions,
-		inviteStore:  invites,
-		csrfSecret:   []byte(cfg.Auth.SessionSecret),
+		cfg:           cfg,
+		users:         users,
+		sessionStore:  sessions,
+		inviteStore:   invites,
+		csrfSecret:    []byte(cfg.Auth.SessionSecret),
+		inviteLimiter: newIPRateLimiter(15*time.Minute, 10),
 	}
 	return h, sessions, user, invites
 }
