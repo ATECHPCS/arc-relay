@@ -26,6 +26,12 @@ import (
 //go:embed skill.md
 var embeddedSkillMD []byte
 
+//go:embed templates/com.arctec.arc-sync-memory.plist
+var embeddedLaunchdPlist []byte
+
+//go:embed templates/arc-sync-memory.service
+var embeddedSystemdUnit []byte
+
 var version = "dev"
 
 func main() {
@@ -1878,12 +1884,10 @@ func runMemoryInstallService() {
 }
 
 func installLaunchd(home string) {
-	src := filepath.Join("scripts", "com.arctec.arc-sync-memory.plist")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "reading template %s: %v\n", src, err)
-		os.Exit(1)
-	}
+	data := embeddedLaunchdPlist
+	// Substitute hardcoded HOME first (before binary path, to avoid corrupting the binary path
+	// if it happens to contain the home directory)
+	data = bytes.ReplaceAll(data, []byte("/Users/ian"), []byte(home))
 	// Substitute hardcoded /usr/local/bin/arc-sync with the actual binary path
 	selfPath, err := resolveSelfPath()
 	if err != nil {
@@ -1909,19 +1913,13 @@ func installLaunchd(home string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✔ launchd unit installed at %s and loaded.\n", dst)
-	fmt.Printf("  Binary path: %s\n", selfPath)
-	fmt.Printf("  Note: the plist hardcodes HOME=%s.\n", os.Getenv("HOME"))
-	fmt.Printf("  If your home directory differs (or after binary moves), edit the file and run:\n")
-	fmt.Printf("    launchctl unload %s && launchctl load -w %s\n", dst, dst)
+	fmt.Printf("  Binary: %s\n", selfPath)
+	fmt.Printf("  HOME:   %s\n", home)
+	fmt.Printf("\nReload after binary moves: launchctl unload %s && launchctl load -w %s\n", dst, dst)
 }
 
 func installSystemd(home string) {
-	src := filepath.Join("scripts", "arc-sync-memory.service")
-	data, err := os.ReadFile(src)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "reading template %s: %v\n", src, err)
-		os.Exit(1)
-	}
+	data := embeddedSystemdUnit
 	// Substitute hardcoded /usr/local/bin/arc-sync with the actual binary path
 	selfPath, err := resolveSelfPath()
 	if err != nil {
