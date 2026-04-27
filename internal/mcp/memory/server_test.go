@@ -137,6 +137,9 @@ func TestMCP_Recent(t *testing.T) {
 	resp := mcpCall(t, h, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory_recent","arguments":{"limit":10}}}`)
 	result := resp["result"].(map[string]any)
 	text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(text, banner) {
+		t.Fatalf("RESEARCH ONLY banner missing from memory_recent output: %q", text)
+	}
 	for _, sid := range []string{"sess-a", "sess-b"} {
 		if !strings.Contains(text, sid) {
 			t.Fatalf("missing session %q in: %q", sid, text)

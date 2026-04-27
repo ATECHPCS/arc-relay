@@ -240,8 +240,11 @@ func formatMessages(msgs []*store.Message) string {
 
 func formatSessions(rows []*store.MemorySession) string {
 	var b strings.Builder
+	b.WriteString(safetyBanner)
+	b.WriteString("\n\n")
 	if len(rows) == 0 {
-		return "(no sessions)\n"
+		b.WriteString("(no sessions)\n")
+		return b.String()
 	}
 	for _, s := range rows {
 		fmt.Fprintf(&b, "%s  %s  %s\n", s.SessionID, s.ProjectDir, s.FilePath)
