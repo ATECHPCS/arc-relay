@@ -1,0 +1,40 @@
+{
+  "planPath": "docs/superpowers/plans/2026-04-27-arc-relay-memory-dashboard.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: GetSessionWithMessages service method",
+      "status": "completed",
+      "description": "**Goal:** Add `memory.Service.GetSessionWithMessages(userID, sessionID, fromEpoch)` returning session metadata + messages with the same user-scope error semantics as SessionExtract.\n\n**Files:**\n- Modify: `internal/memory/service.go`\n- Create: `internal/memory/service_test.go` (3 subtests: happy path, missing, wrong-user)\n\n**Verify:** `cd /Users/ian/code/arc-relay-memory-pivot && CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/memory/ -run TestGetSessionWithMessages -v`\n\n**Acceptance:** missing session and wrong-user session both return identical `session not found` error (no existence leak).\n\n```json:metadata\n{\"files\": [\"internal/memory/service.go\", \"internal/memory/service_test.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/memory/ -run TestGetSessionWithMessages -v\", \"acceptanceCriteria\": [\"GetSessionWithMessages returns session + messages\", \"missing session → session not found\", \"wrong user → identical session not found (no leak)\", \"happy path returns ordered messages\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: Plumbing + landing page (/memory)",
+      "status": "completed",
+      "blockedBy": [0],
+      "description": "**Goal:** Wire `memory.Service` into `web.Handlers`. Add `/memory` landing page with stats and 5 recent sessions teaser. Add Memory link to nav.\n\n**Files:**\n- Modify: `internal/web/handlers.go` (Handlers struct + NewHandlers signature + RegisterRoutes + template registration)\n- Modify: `internal/web/templates/layout.html` (add Memory nav link, always-visible)\n- Modify: `internal/server/http.go` (Server.memSvc field; pass to NewHandlers)\n- Modify: `cmd/arc-relay/main.go` (pass memSvc to server.New if signature changes)\n- Create: `internal/web/memory_dashboard.go` (HandleMemoryIndex + helpers)\n- Create: `internal/web/memory_dashboard_test.go` (test stub — manual verify for now)\n- Create: `internal/web/templates/memory.html`\n\n**Verify:** `make test && make build`. Manual: open /memory in browser, see stats card + recent-sessions teaser + RESEARCH ONLY banner.\n\n**Acceptance:** GET /memory renders 200 with stats and teaser. Nav link visible. No admin gating.\n\n```json:metadata\n{\"files\": [\"internal/web/handlers.go\", \"internal/web/templates/layout.html\", \"internal/server/http.go\", \"cmd/arc-relay/main.go\", \"internal/web/memory_dashboard.go\", \"internal/web/memory_dashboard_test.go\", \"internal/web/templates/memory.html\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && make test && make build\", \"acceptanceCriteria\": [\"Handlers gains memSvc field\", \"NewHandlers signature gains memSvc param\", \"/memory route registered behind requireAuth\", \"Memory nav link visible (no admin gating)\", \"page renders 200 with stats + teaser\", \"banner present\"]}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "Task 2: Sessions list page (/memory/sessions)",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** Add /memory/sessions page rendering the user's 50 most-recent sessions in a table, each linking to detail.\n\n**Files:**\n- Modify: `internal/web/memory_dashboard.go` (HandleMemorySessions)\n- Modify: `internal/web/handlers.go` (template registration + route)\n- Create: `internal/web/templates/memory_sessions.html`\n\n**Verify:** `make test && make build`. Manual: navigate to /memory/sessions in browser.\n\n**Acceptance:** GET /memory/sessions renders 200; user A sees only user A's sessions; rows link to /memory/sessions/{id}.\n\n```json:metadata\n{\"files\": [\"internal/web/memory_dashboard.go\", \"internal/web/handlers.go\", \"internal/web/templates/memory_sessions.html\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && make test && make build\", \"acceptanceCriteria\": [\"GET /memory/sessions renders 200\", \"table shows user-scoped sessions\", \"rows link to /memory/sessions/{id}\", \"banner present\"]}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "Task 3: Session detail page (/memory/sessions/{id})",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** Add session detail page with full transcript rendering. 404 on missing/wrong-user.\n\n**Files:**\n- Modify: `internal/web/memory_dashboard.go` (HandleMemorySessionDetail)\n- Modify: `internal/web/handlers.go` (template registration + /memory/sessions/ route — trailing slash for catch-all)\n- Create: `internal/web/templates/memory_session_detail.html`\n\n**Verify:** `make test && make build`. Manual: visit /memory/sessions/{some-id} for own session (200); visit /memory/sessions/does-not-exist (404).\n\n**Acceptance:** missing-session returns 404; other-user session returns 404 (existence-leak prevention); valid session renders full transcript with role labels and RESEARCH ONLY banner.\n\n```json:metadata\n{\"files\": [\"internal/web/memory_dashboard.go\", \"internal/web/handlers.go\", \"internal/web/templates/memory_session_detail.html\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && make test && make build\", \"acceptanceCriteria\": [\"GET /memory/sessions/{valid} renders 200 with transcript\", \"missing session → 404\", \"other-user session → 404 (no leak)\", \"banner present\", \"messages role-labeled and timestamped\"]}\n```"
+    },
+    {
+      "id": 4,
+      "subject": "Task 4: Search page (/memory/search)",
+      "status": "completed",
+      "blockedBy": [1],
+      "description": "**Goal:** Add /memory/search page with form-submit GET. Empty q renders just form. Non-empty q renders ranked results.\n\n**Files:**\n- Modify: `internal/web/memory_dashboard.go` (HandleMemorySearch)\n- Modify: `internal/web/handlers.go` (template registration + /memory/search route)\n- Create: `internal/web/templates/memory_search.html`\n\n**Verify:** `make test && make build`. Manual: search for 'arc-relay' (unquoted hyphen) and confirm hits via the FTS5/regex fallback already in service.\n\n**Acceptance:** form renders without query; with q= renders ranked results with snippets + session links + score; user-scoped.\n\n```json:metadata\n{\"files\": [\"internal/web/memory_dashboard.go\", \"internal/web/handlers.go\", \"internal/web/templates/memory_search.html\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && make test && make build\", \"acceptanceCriteria\": [\"GET /memory/search renders form\", \"GET /memory/search?q=foo renders results\", \"each hit links to session detail\", \"hyphenated queries work (uses service's FTS5/regex fallback)\", \"banner present\", \"user-scoped\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-04-27T14:00:00-04:00"
+}

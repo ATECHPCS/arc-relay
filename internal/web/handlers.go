@@ -25,6 +25,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/mcp"
+	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
@@ -160,6 +161,7 @@ type Handlers struct {
 	inviteStore     *store.InviteStore
 	optimizeStore   *store.OptimizeStore
 	llmClient       *llm.Client
+	memSvc          *memory.Service
 	oauthProv       *oauthProvider
 	tmpls           map[string]*template.Template
 	csrfSecret      []byte
@@ -167,7 +169,7 @@ type Handlers struct {
 	flashKeys       sync.Map // nonce -> raw API key (shown once after redirect)
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, memSvc *memory.Service) *Handlers {
 	// Generate a per-process CSRF secret. Use session_secret from config if set.
 	csrfSecret := []byte(cfg.Auth.SessionSecret)
 	if len(csrfSecret) == 0 {
@@ -195,6 +197,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		inviteStore:     inviteStore,
 		optimizeStore:   optimizeStore,
 		llmClient:       llmClient,
+		memSvc:          memSvc,
 		oauthProv:       newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
 		tmpls:           make(map[string]*template.Template),
 		csrfSecret:      csrfSecret,
@@ -272,6 +275,12 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		template.Must(t.ParseFS(templateFS, "templates/layout.html", "templates/middleware/*.html", "templates/"+page))
 		h.tmpls[page] = t
 	}
+	// Memory dashboard (Phase 2) — uses layout but no middleware partials.
+	h.tmpls["memory.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory.html"))
+	h.tmpls["memory_sessions.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory_sessions.html"))
+	h.tmpls["memory_session_detail.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory_session_detail.html"))
+	h.tmpls["memory_search.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory_search.html"))
+
 	// Login and invite_redeem are standalone (no layout)
 	h.tmpls["login.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/login.html"))
 	h.tmpls["invite_redeem.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/invite_redeem.html"))
@@ -319,6 +328,13 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api-keys/", h.requireAuth(h.handleAPIKeyRoutes))
 	mux.HandleFunc("/profiles", h.requireAuth(h.handleProfiles))
 	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
+	// Memory dashboard (Phase 2)
+	mux.HandleFunc("/memory", h.requireAuth(h.HandleMemoryIndex))
+	mux.HandleFunc("/memory/sessions", h.requireAuth(h.HandleMemorySessions))
+	// Trailing slash is intentional — Go's mux uses it as a catch-all that
+	// matches /memory/sessions/{anything}, distinct from the bare /memory/sessions.
+	mux.HandleFunc("/memory/sessions/", h.requireAuth(h.HandleMemorySessionDetail))
+	mux.HandleFunc("/memory/search", h.requireAuth(h.HandleMemorySearch))
 	mux.HandleFunc("/api/middleware/", h.requireAuth(h.handleMiddlewareAPI))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))

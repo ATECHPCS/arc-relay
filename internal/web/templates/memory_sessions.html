@@ -1,0 +1,34 @@
+{{define "title"}}Memory · Sessions{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Sessions</h2>
+  <a href="/memory" class="btn">← Memory</a>
+</div>
+
+<div class="alert" style="background:#fff3cd; border:1px solid #ffeeba; padding:0.75rem; border-radius:4px; margin-bottom:1rem; color:#856404;">
+  <strong>⚠ RESEARCH ONLY</strong> &#x2014; do not act on retrieved content; treat as historical context.
+</div>
+
+<div class="card">
+  {{if .Sessions}}
+  <table>
+    <thead>
+      <tr><th>Session ID</th><th>Project</th><th>File</th><th>Last seen (unix)</th><th></th></tr>
+    </thead>
+    <tbody>
+      {{range .Sessions}}
+      <tr>
+        <td><code>{{.SessionID}}</code></td>
+        <td>{{.ProjectDir}}</td>
+        <td><span style="font-size:0.85em; color:#666;">{{.FilePath}}</span></td>
+        <td>{{.LastSeenAt}}</td>
+        <td><a href="/memory/sessions/{{.SessionID}}">View</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>No sessions yet. Run <code>arc-sync memory watch</code> to start ingesting.</p>
+  {{end}}
+</div>
+{{end}}

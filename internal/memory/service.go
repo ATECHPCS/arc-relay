@@ -153,6 +153,30 @@ func (s *Service) SessionExtract(userID, sessionID string, fromEpoch int) ([]*st
 	return s.messages.GetSession(sessionID, fromEpoch)
 }
 
+// GetSessionWithMessages returns session metadata + messages for a single
+// session, with the same user-scope check as SessionExtract (returns
+// "session not found" for both missing and wrong-user cases). Used by
+// the web detail page which needs both the header (project_dir, file_path,
+// last_seen_at) AND the message body in one call.
+func (s *Service) GetSessionWithMessages(userID, sessionID string, fromEpoch int) (*store.MemorySession, []*store.Message, error) {
+	sess, err := s.sessions.Get(sessionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil, fmt.Errorf("session not found")
+		}
+		return nil, nil, fmt.Errorf("get session: %w", err)
+	}
+	if sess.UserID != userID {
+		// Same error as missing — don't reveal existence to wrong user.
+		return nil, nil, fmt.Errorf("session not found")
+	}
+	msgs, err := s.messages.GetSession(sessionID, fromEpoch)
+	if err != nil {
+		return nil, nil, err
+	}
+	return sess, msgs, nil
+}
+
 // Recent lists the calling user's most-recent sessions.
 func (s *Service) Recent(userID string, limit int) ([]*store.MemorySession, error) {
 	return s.sessions.ListByUser(userID, limit)
