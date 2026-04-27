@@ -65,7 +65,7 @@
     {
       "id": 8,
       "subject": "Task 8: arc-sync memory search CLI",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [5],
       "description": "**Goal:** Mirror cc-search-chats-plugin's `/search-chat` UX, hitting arc-relay.\n\n**Files:** modify `internal/cli/sync/memory.go` (MemorySearchClient), `cmd/arc-sync/main.go`, add test.\n\n**Acceptance:** `--limit/--project/--session/--json`; safety banner first; `--json` returns wire payload verbatim.\n\n**Verify:** `CGO_ENABLED=0 go test ./internal/cli/sync/ -run TestMemorySearchClient -v`\n\n```json:metadata\n{\"files\": [\"internal/cli/sync/memory.go\", \"internal/cli/sync/memory_search_test.go\", \"cmd/arc-sync/main.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=0 go test ./internal/cli/sync/ -run TestMemorySearchClient -v\", \"acceptanceCriteria\": [\"--limit/--project/--session/--json flags\", \"RESEARCH ONLY banner\", \"--json verbatim wire output\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T21:30:00-04:00"
+  "lastUpdated": "2026-04-26T22:00:00-04:00"
 }
