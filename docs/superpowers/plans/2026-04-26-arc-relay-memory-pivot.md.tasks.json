@@ -72,7 +72,7 @@
     {
       "id": 9,
       "subject": "Task 9: /recall slash command",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [8],
       "description": "**Goal:** Native Claude Code slash command wrapping `arc-sync memory search`.\n\n**Files:** `~/.claude/commands/recall.md`, `~/.claude/commands/recall.sh` (chmod +x).\n\n**Acceptance:** allowed-tools restricted to wrapper script; `## RESEARCH ONLY` banner survives; description tells Claude this is recall-only.\n\n**Verify:** Manual — `/recall \"BM25\"` in fresh session shows banner + hits.\n\n```json:metadata\n{\"files\": [\"~/.claude/commands/recall.md\", \"~/.claude/commands/recall.sh\"], \"verifyCommand\": \"manual: /recall \\\"BM25\\\" in fresh Claude Code session\", \"acceptanceCriteria\": [\"allowed-tools constrained to wrapper\", \"RESEARCH ONLY banner visible first\", \"description marks as recall-only\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T22:00:00-04:00"
+  "lastUpdated": "2026-04-26T22:15:00-04:00"
 }
