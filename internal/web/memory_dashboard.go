@@ -40,3 +40,25 @@ func (h *Handlers) HandleMemoryIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	h.render(w, r, "memory.html", data)
 }
+
+// HandleMemorySessions renders /memory/sessions — a flat table of the user's
+// recent sessions, sorted by last_seen_at DESC. No filters in MVP.
+func (h *Handlers) HandleMemorySessions(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/memory/sessions" {
+		http.NotFound(w, r)
+		return
+	}
+	user := getUser(r)
+
+	sessions, err := h.memSvc.Recent(user.ID, 50)
+	if err != nil {
+		http.Error(w, "recent: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := map[string]any{
+		"Nav":      "memory",
+		"User":     user,
+		"Sessions": sessions,
+	}
+	h.render(w, r, "memory_sessions.html", data)
+}

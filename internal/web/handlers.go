@@ -277,6 +277,7 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	}
 	// Memory dashboard (Phase 2) — uses layout but no middleware partials.
 	h.tmpls["memory.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory.html"))
+	h.tmpls["memory_sessions.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory_sessions.html"))
 
 	// Login and invite_redeem are standalone (no layout)
 	h.tmpls["login.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/login.html"))
@@ -327,6 +328,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/profiles/", h.requireAuth(h.handleProfileRoutes))
 	// Memory dashboard (Phase 2)
 	mux.HandleFunc("/memory", h.requireAuth(h.HandleMemoryIndex))
+	mux.HandleFunc("/memory/sessions", h.requireAuth(h.HandleMemorySessions))
 	mux.HandleFunc("/api/middleware/", h.requireAuth(h.handleMiddlewareAPI))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))
