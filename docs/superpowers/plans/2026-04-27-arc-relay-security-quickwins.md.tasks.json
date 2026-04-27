@@ -1,0 +1,18 @@
+{
+  "planPath": "docs/superpowers/plans/2026-04-27-arc-relay-security-quickwins.md",
+  "tasks": [
+    {
+      "id": 0,
+      "subject": "Task 0: Generic IP rate limiter + apply to 4 endpoints",
+      "status": "pending",
+      "description": "**Goal:** Generalize loginRateLimiter → ipRateLimiter (parameterized window+max, type alias for login compat). Add 4 limiter fields on Handlers. Apply guards on /oauth/register (10/hour), /api/auth/device (20/15min), /api/auth/device/token (60/min), /api/auth/invite (10/15min). HTTP 429 + Retry-After on limit hit.\n\n**Files:** internal/web/handlers.go (struct generalization, 4 fields, init, rateLimitResponse helper, invite guard), internal/web/device_auth.go (start + token guards), internal/web/oauth_provider.go (register guard), internal/web/ratelimiter_test.go (new — 5 subtests covering threshold, isolation, expiry, login backcompat).\n\n**Verify:** `cd /Users/ian/code/arc-relay-memory-pivot && CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/web/ -run \"TestIPRateLimiter|TestLoginRateLimiter\" -v && make test`\n\n```json:metadata\n{\"files\": [\"internal/web/handlers.go\", \"internal/web/device_auth.go\", \"internal/web/oauth_provider.go\", \"internal/web/ratelimiter_test.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/web/ -run \\\"TestIPRateLimiter|TestLoginRateLimiter\\\" -v\", \"acceptanceCriteria\": [\"ipRateLimiter parameterized\", \"loginRateLimiter type alias preserves backcompat\", \"4 new limiter fields on Handlers\", \"4 handlers return HTTP 429 + Retry-After at threshold\", \"per-IP isolation\", \"window expiry prunes\", \"make test passes\"]}\n```"
+    },
+    {
+      "id": 1,
+      "subject": "Task 1: DB file mode 0600 + process umask 0o077",
+      "status": "pending",
+      "description": "**Goal:** os.Chmod(path, 0o600) after integrity check in store.Open (best-effort, slog.Warn on failure). syscall.Umask(0o077) as first line of main(). Skips :memory:. Tests verify both paths.\n\n**Files:** internal/store/db.go (chmod after integrity_check), internal/store/db_test.go (new tests), cmd/arc-relay/main.go (umask first line).\n\n**Verify:** `cd /Users/ian/code/arc-relay-memory-pivot && CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/store/ -run \"TestOpen_Sets|TestOpen_Memory\" -v && make test && make build`\n\n```json:metadata\n{\"files\": [\"internal/store/db.go\", \"internal/store/db_test.go\", \"cmd/arc-relay/main.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay-memory-pivot && CGO_ENABLED=1 go test -tags sqlite_fts5 ./internal/store/ -run \\\"TestOpen_Sets|TestOpen_Memory\\\" -v && make test && make build\", \"acceptanceCriteria\": [\"Open chmods main .db to 0600 on success\", \"failure logs slog.Warn but does not fail boot\", \":memory: skipped\", \"main() umask 0o077 first line\", \"tests verify both code paths\", \"make test + make build pass\"]}\n```"
+    }
+  ],
+  "lastUpdated": "2026-04-27T15:30:00-04:00"
+}

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -83,24 +84,33 @@ type MiddlewareCard struct {
 	CustomData map[string]any // middleware-specific data (e.g. ArchiveQueueStatus)
 }
 
-// loginRateLimiter tracks failed login attempts per IP.
-type loginRateLimiter struct {
+// ipRateLimiter tracks request timestamps per client IP within a sliding
+// window. Used for failed-login throttling AND for the unauth public auth-
+// init endpoints. Per-IP map; cleanup goroutine prunes expired entries
+// every window/3 (min 5 minutes) to bound memory.
+type ipRateLimiter struct {
 	mu       sync.Mutex
 	attempts map[string][]time.Time
+	window   time.Duration
+	max      int
 }
 
-func newLoginRateLimiter() *loginRateLimiter {
-	rl := &loginRateLimiter{attempts: make(map[string][]time.Time)}
+func newIPRateLimiter(window time.Duration, max int) *ipRateLimiter {
+	rl := &ipRateLimiter{
+		attempts: make(map[string][]time.Time),
+		window:   window,
+		max:      max,
+	}
 	go rl.cleanup()
 	return rl
 }
 
-// allow returns true if the IP is allowed to attempt login.
-// Limit: 5 attempts per 15 minutes.
-func (rl *loginRateLimiter) allow(ip string) bool {
+// allow returns true iff the IP has fewer than `max` recent attempts in the
+// past `window`. Trims stale entries as a side effect.
+func (rl *ipRateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	cutoff := time.Now().Add(-15 * time.Minute)
+	cutoff := time.Now().Add(-rl.window)
 	recent := rl.attempts[ip]
 	filtered := recent[:0]
 	for _, t := range recent {
@@ -109,21 +119,26 @@ func (rl *loginRateLimiter) allow(ip string) bool {
 		}
 	}
 	rl.attempts[ip] = filtered
-	return len(filtered) < 5
+	return len(filtered) < rl.max
 }
 
-func (rl *loginRateLimiter) record(ip string) {
+// record adds a new attempt at time.Now() for the given IP.
+func (rl *ipRateLimiter) record(ip string) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	rl.attempts[ip] = append(rl.attempts[ip], time.Now())
 }
 
-func (rl *loginRateLimiter) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
+func (rl *ipRateLimiter) cleanup() {
+	tick := rl.window / 3
+	if tick < 5*time.Minute {
+		tick = 5 * time.Minute
+	}
+	ticker := time.NewTicker(tick)
 	defer ticker.Stop()
 	for range ticker.C {
 		rl.mu.Lock()
-		cutoff := time.Now().Add(-15 * time.Minute)
+		cutoff := time.Now().Add(-rl.window)
 		for ip, attempts := range rl.attempts {
 			filtered := attempts[:0]
 			for _, t := range attempts {
@@ -139,6 +154,14 @@ func (rl *loginRateLimiter) cleanup() {
 		}
 		rl.mu.Unlock()
 	}
+}
+
+// loginRateLimiter is the per-IP failed-login throttle. Kept as a type alias
+// so existing call sites compile unchanged.
+type loginRateLimiter = ipRateLimiter
+
+func newLoginRateLimiter() *loginRateLimiter {
+	return newIPRateLimiter(15*time.Minute, 5)
 }
 
 // Handlers holds dependencies for web UI handlers.
@@ -164,9 +187,13 @@ type Handlers struct {
 	memSvc          *memory.Service
 	oauthProv       *oauthProvider
 	tmpls           map[string]*template.Template
-	csrfSecret      []byte
-	loginLimiter    *loginRateLimiter
-	flashKeys       sync.Map // nonce -> raw API key (shown once after redirect)
+	csrfSecret           []byte
+	loginLimiter         *loginRateLimiter
+	oauthRegisterLimiter *ipRateLimiter
+	deviceStartLimiter   *ipRateLimiter
+	deviceTokenLimiter   *ipRateLimiter
+	inviteLimiter        *ipRateLimiter
+	flashKeys            sync.Map // nonce -> raw API key (shown once after redirect)
 }
 
 func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, memSvc *memory.Service) *Handlers {
@@ -200,8 +227,12 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		memSvc:          memSvc,
 		oauthProv:       newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
 		tmpls:           make(map[string]*template.Template),
-		csrfSecret:      csrfSecret,
-		loginLimiter:    newLoginRateLimiter(),
+		csrfSecret:           csrfSecret,
+		loginLimiter:         newLoginRateLimiter(),
+		oauthRegisterLimiter: newIPRateLimiter(1*time.Hour, 10),
+		deviceStartLimiter:   newIPRateLimiter(15*time.Minute, 20),
+		deviceTokenLimiter:   newIPRateLimiter(1*time.Minute, 60),
+		inviteLimiter:        newIPRateLimiter(15*time.Minute, 10),
 	}
 
 	// Template helper functions
@@ -378,6 +409,16 @@ func (h *Handlers) validateCSRF(r *http.Request, sessionID string) bool {
 	}
 	expected := h.csrfToken(sessionID)
 	return hmac.Equal([]byte(token), []byte(expected))
+}
+
+// rateLimitResponse writes HTTP 429 with a Retry-After header (seconds, floor
+// of the limiter's window) and a JSON error body. Used by the four public
+// auth-init endpoint guards.
+func (h *Handlers) rateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
+	w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusTooManyRequests)
+	_, _ = fmt.Fprint(w, `{"error":"rate limit exceeded"}`)
 }
 
 // clientIP extracts the client IP from the request for rate limiting.
@@ -1740,6 +1781,12 @@ func (h *Handlers) handleCreateAccountInvite(w http.ResponseWriter, r *http.Requ
 
 // handleInviteExchange handles POST /api/auth/invite - creates account and returns API key.
 func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) {
+	if !h.inviteLimiter.allow(clientIP(r)) {
+		h.rateLimitResponse(w, 15*time.Minute)
+		return
+	}
+	h.inviteLimiter.record(clientIP(r))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return

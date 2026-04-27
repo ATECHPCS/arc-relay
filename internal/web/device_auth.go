@@ -175,6 +175,12 @@ func generateUserCode() (string, error) {
 
 // handleDeviceAuthStart handles POST /api/auth/device — initiates device auth flow.
 func (h *Handlers) handleDeviceAuthStart(w http.ResponseWriter, r *http.Request) {
+	if !h.deviceStartLimiter.allow(clientIP(r)) {
+		h.rateLimitResponse(w, 15*time.Minute)
+		return
+	}
+	h.deviceStartLimiter.record(clientIP(r))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return
@@ -204,6 +210,12 @@ func (h *Handlers) handleDeviceAuthStart(w http.ResponseWriter, r *http.Request)
 
 // handleDeviceAuthToken handles POST /api/auth/device/token — polls for token.
 func (h *Handlers) handleDeviceAuthToken(w http.ResponseWriter, r *http.Request) {
+	if !h.deviceTokenLimiter.allow(clientIP(r)) {
+		h.rateLimitResponse(w, 1*time.Minute)
+		return
+	}
+	h.deviceTokenLimiter.record(clientIP(r))
+
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 		return

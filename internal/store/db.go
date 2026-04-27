@@ -44,6 +44,15 @@ func Open(path string, migrationsFS fs.FS) (*DB, error) {
 		return nil, fmt.Errorf("database integrity check failed: %s (recover with: sqlite3 db '.recover' | sqlite3 new.db)", result)
 	}
 
+	// Set restrictive mode on the DB file. Best-effort — we log on failure
+	// but don't fail boot, since :memory: paths don't have a backing file
+	// and a read-only filesystem would also fail here legitimately.
+	if path != ":memory:" && path != "" {
+		if err := os.Chmod(path, 0o600); err != nil {
+			slog.Warn("could not set db file mode 0600", "path", path, "err", err)
+		}
+	}
+
 	db := &DB{DB: sqlDB, path: path, stopCh: make(chan struct{})}
 	if err := db.migrate(migrationsFS); err != nil {
 		_ = sqlDB.Close()
