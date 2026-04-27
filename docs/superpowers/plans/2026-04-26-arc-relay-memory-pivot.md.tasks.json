@@ -44,7 +44,7 @@
     {
       "id": 5,
       "subject": "Task 5: Search + extract REST endpoints",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [4],
       "description": "**Goal:** `GET /api/memory/search`, `/api/memory/sessions`, `/api/memory/sessions/{id}` scoped by user_id from bearer.\n\n**Files:** modify `internal/web/memory_handlers.go`, `internal/web/context.go`, add `internal/web/memory_search_test.go`.\n\n**Acceptance:** q/limit/project/session params; 240-char trim snippets; user_id scope enforced; tail+from_epoch on session extract.\n\n**Verify:** `CGO_ENABLED=1 go test ./internal/web/ -run TestMemorySearch -v`\n\n```json:metadata\n{\"files\": [\"internal/web/memory_handlers.go\", \"internal/web/memory_search_test.go\", \"internal/web/context.go\"], \"verifyCommand\": \"cd /Users/ian/code/arc-relay && CGO_ENABLED=1 go test ./internal/web/ -run TestMemorySearch -v\", \"acceptanceCriteria\": [\"GET /api/memory/search returns hits[]\", \"GET /api/memory/sessions recent-first\", \"session extract tail+from_epoch\", \"user_id scope enforced\"]}\n```"
     },
@@ -91,5 +91,5 @@
       "description": "**Goal (deferred):** Layer claude-mem-style structured observations on the FTS5 store via internal/llm.Client (haiku-4-5).\n\n**Defer signal:** ship 0-10 first; queue this only if FTS5 recall quality is measurably worse than the prior claude-mem flow.\n\n**Sketch:** `migrations/016_memory_observations.sql` (claude-mem schema), `internal/memory/extractor.go` worker, MCP tool `memory_observations_search`.\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"DEFERRED — only queue if FTS5 recall quality is insufficient\"]}\n```"
     }
   ],
-  "lastUpdated": "2026-04-26T20:05:00-04:00"
+  "lastUpdated": "2026-04-26T20:30:00-04:00"
 }
