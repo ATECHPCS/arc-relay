@@ -239,3 +239,31 @@ func TestMemorySearch_BannerPresent(t *testing.T) {
 		t.Fatalf("banner field mismatch: got %q, want %q", resp.Banner, banner)
 	}
 }
+
+func TestMemorySearch_HyphenedQueryFallsBack(t *testing.T) {
+	svc, mux, user := newSearchTestRig(t)
+	ingest(t, svc, user.ID, "s1",
+		`{"type":"user","uuid":"u1","timestamp":"t","message":{"role":"user","content":"the arc-relay project is great"}}`,
+	)
+	rw := httptest.NewRecorder()
+	mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/memory/search?q=arc-relay", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rw.Code, rw.Body.String())
+	}
+	var resp struct {
+		Hits []struct {
+			Snippet string `json:"snippet"`
+		} `json:"hits"`
+		Banner string `json:"banner"`
+	}
+	_ = json.Unmarshal(rw.Body.Bytes(), &resp)
+	if len(resp.Hits) == 0 {
+		t.Fatal("hyphen-query produced no hits — phrase fallback broken")
+	}
+	if !strings.Contains(resp.Hits[0].Snippet, "arc-relay") {
+		t.Fatalf("snippet missing 'arc-relay': %q", resp.Hits[0].Snippet)
+	}
+	if resp.Banner != banner {
+		t.Fatalf("banner mismatch: %q", resp.Banner)
+	}
+}

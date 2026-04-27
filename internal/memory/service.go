@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/comma-compliance/arc-relay/internal/memory/parser"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -97,11 +99,41 @@ func (s *Service) Ingest(userID string, req *IngestRequest) (*IngestResponse, er
 // Search routes the query through FTS5 BM25 by default, falling back to a Go
 // regexp scan when the query contains regex metacharacters and is not wrapped
 // in double quotes (escape hatch for users who want a literal match).
+//
+// Three-tier escalation handles FTS5 syntax errors (e.g. hyphens parsed as NOT,
+// colons as column scopes):
+//  1. Try FTS5 with the raw query.
+//  2. On error, retry as a quoted phrase ("...") which treats all metacharacters
+//     literally. Embedded double quotes are doubled per FTS5 phrase-string rules.
+//  3. On second error, fall back to Go regex scan. If that also fails, return the
+//     original FTS5 error — it is the most informative.
 func (s *Service) Search(userID, query string, opts store.SearchOpts) ([]*store.SearchHit, error) {
 	if hasRegexMeta(query) {
 		return s.messages.SearchRegex(userID, query, opts)
 	}
-	return s.messages.Search(userID, query, opts)
+	// First try: raw query as FTS5 input.
+	hits, err := s.messages.Search(userID, query, opts)
+	if err == nil {
+		return hits, nil
+	}
+	// Second try: wrap as a phrase (handles hyphens, colons, and other FTS5
+	// metacharacters that the user didn't intend as syntax).
+	quoted := `"` + strings.ReplaceAll(query, `"`, `""`) + `"`
+	slog.Debug("memory search: FTS5 raw query failed, retrying as phrase",
+		"query", query, "quoted", quoted, "err", err)
+	hits, err2 := s.messages.Search(userID, quoted, opts)
+	if err2 == nil {
+		return hits, nil
+	}
+	// Third try: regex fallback.
+	slog.Debug("memory search: phrase retry also failed, falling back to regex",
+		"query", query, "err", err2)
+	hits, err3 := s.messages.SearchRegex(userID, query, opts)
+	if err3 != nil {
+		// Surface the ORIGINAL FTS5 error since it's the most informative.
+		return nil, fmt.Errorf("fts5 + phrase + regex all failed; first error: %w", err)
+	}
+	return hits, nil
 }
 
 // SessionExtract returns the messages of one session, with a user-scope check
