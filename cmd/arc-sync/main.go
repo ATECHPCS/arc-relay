@@ -1844,6 +1844,22 @@ func runMemoryWatch() {
 	}
 }
 
+// resolveSelfPath returns the absolute path of the running arc-sync binary.
+// Used by install-service to substitute the correct path into the launchd
+// plist / systemd unit instead of hardcoding /usr/local/bin/arc-sync.
+func resolveSelfPath() (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		if abs, err := filepath.EvalSymlinks(exe); err == nil {
+			return abs, nil
+		}
+		return exe, nil
+	}
+	if path, err := exec.LookPath("arc-sync"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("cannot determine arc-sync binary path; install-service requires it")
+}
+
 func runMemoryInstallService() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1868,6 +1884,13 @@ func installLaunchd(home string) {
 		fmt.Fprintf(os.Stderr, "reading template %s: %v\n", src, err)
 		os.Exit(1)
 	}
+	// Substitute hardcoded /usr/local/bin/arc-sync with the actual binary path
+	selfPath, err := resolveSelfPath()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	data = bytes.ReplaceAll(data, []byte("/usr/local/bin/arc-sync"), []byte(selfPath))
 	dstDir := filepath.Join(home, "Library", "LaunchAgents")
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -1885,9 +1908,10 @@ func installLaunchd(home string) {
 		fmt.Fprintf(os.Stderr, "launchctl load failed: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("launchd unit installed at %s and loaded.\n", dst)
-	fmt.Printf("  Note: the plist hardcodes HOME=%s.\n", home)
-	fmt.Printf("  If your home directory differs, edit the file and run:\n")
+	fmt.Printf("✔ launchd unit installed at %s and loaded.\n", dst)
+	fmt.Printf("  Binary path: %s\n", selfPath)
+	fmt.Printf("  Note: the plist hardcodes HOME=%s.\n", os.Getenv("HOME"))
+	fmt.Printf("  If your home directory differs (or after binary moves), edit the file and run:\n")
 	fmt.Printf("    launchctl unload %s && launchctl load -w %s\n", dst, dst)
 }
 
@@ -1898,6 +1922,13 @@ func installSystemd(home string) {
 		fmt.Fprintf(os.Stderr, "reading template %s: %v\n", src, err)
 		os.Exit(1)
 	}
+	// Substitute hardcoded /usr/local/bin/arc-sync with the actual binary path
+	selfPath, err := resolveSelfPath()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	data = bytes.ReplaceAll(data, []byte("/usr/local/bin/arc-sync"), []byte(selfPath))
 	dstDir := filepath.Join(home, ".config", "systemd", "user")
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -1920,7 +1951,11 @@ func installSystemd(home string) {
 			os.Exit(1)
 		}
 	}
-	fmt.Printf("systemd user unit installed at %s and enabled.\n", dst)
+	fmt.Printf("✔ systemd user unit installed at %s and enabled.\n", dst)
+	fmt.Printf("  Binary path: %s\n", selfPath)
+	fmt.Printf("  Note: the unit hardcodes HOME=%s.\n", os.Getenv("HOME"))
+	fmt.Printf("  If your home directory differs (or after binary moves), edit the file and run:\n")
+	fmt.Printf("    systemctl --user daemon-reload && systemctl --user restart arc-sync-memory.service\n")
 }
 
 // getCommandAfterDash returns everything after a bare "--" in the args.
