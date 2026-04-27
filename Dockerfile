@@ -8,7 +8,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=1 go build -o /arc-relay ./cmd/arc-relay
+# -tags sqlite_fts5: enable FTS5 in mattn/go-sqlite3 (the bundled sqlite
+# build does NOT include FTS5 by default; required for memory_messages_fts).
+RUN CGO_ENABLED=1 go build -tags sqlite_fts5 -o /arc-relay ./cmd/arc-relay
 
 FROM alpine:3.21
 
