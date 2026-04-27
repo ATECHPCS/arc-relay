@@ -11,6 +11,8 @@ package web
 import (
 	"net/http"
 	"strings"
+
+	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // HandleMemoryIndex renders /memory — the landing page with stats and a
@@ -92,4 +94,33 @@ func (h *Handlers) HandleMemorySessionDetail(w http.ResponseWriter, r *http.Requ
 		"Messages": msgs,
 	}
 	h.render(w, r, "memory_session_detail.html", data)
+}
+
+// HandleMemorySearch renders /memory/search — a form-submit search page.
+// Empty q renders just the form. Non-empty q runs the same FTS5/regex
+// fallback escalation as the API/CLI search surfaces, then renders ranked
+// hits below the form.
+func (h *Handlers) HandleMemorySearch(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/memory/search" {
+		http.NotFound(w, r)
+		return
+	}
+	user := getUser(r)
+	q := r.URL.Query().Get("q")
+
+	data := map[string]any{
+		"Nav":   "memory",
+		"User":  user,
+		"Query": q,
+		"Hits":  nil,
+	}
+	if q != "" {
+		hits, err := h.memSvc.Search(user.ID, q, store.SearchOpts{Limit: 25})
+		if err != nil {
+			http.Error(w, "search: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		data["Hits"] = hits
+	}
+	h.render(w, r, "memory_search.html", data)
 }
