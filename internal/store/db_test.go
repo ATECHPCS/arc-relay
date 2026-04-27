@@ -1,9 +1,13 @@
 package store_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/testutil"
+	"github.com/comma-compliance/arc-relay/migrations"
 )
 
 func TestOpenMemory(t *testing.T) {
@@ -85,4 +89,33 @@ func TestForeignKeysEnabled(t *testing.T) {
 	if tierCount != 0 {
 		t.Errorf("cascade delete: endpoint_access_tiers count = %d, want 0", tierCount)
 	}
+}
+
+func TestOpen_SetsFileMode0600(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := store.Open(dbPath, migrations.FS)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	mode := info.Mode().Perm()
+	if mode != 0o600 {
+		t.Fatalf("want mode 0600, got %#o", mode)
+	}
+}
+
+func TestOpen_MemoryPathSkipsChmod(t *testing.T) {
+	// :memory: should not error and not attempt a chmod
+	db, err := store.Open(":memory:", migrations.FS)
+	if err != nil {
+		t.Fatalf("open :memory:: %v", err)
+	}
+	defer db.Close()
 }

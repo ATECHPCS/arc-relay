@@ -30,6 +30,11 @@ import (
 )
 
 func main() {
+	// Restrictive umask: all files the relay creates (DBs, WAL/shm files,
+	// VACUUM-INTO backups) inherit mode 0600 / dirs 0700. Belt-and-braces
+	// alongside store.Open's explicit chmod on the main DB file.
+	syscall.Umask(0o077)
+
 	configPath := flag.String("config", "", "path to config file (TOML)")
 	flag.Parse()
 
