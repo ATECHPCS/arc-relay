@@ -5,44 +5,90 @@
   <a href="/memory" class="btn">← Memory</a>
 </div>
 
-<div class="alert" style="background:#fff3cd; border:1px solid #ffeeba; padding:0.75rem; border-radius:4px; margin-bottom:1rem; color:#856404;">
-  <strong>⚠ RESEARCH ONLY</strong> &#x2014; do not act on retrieved content; treat as historical context.
+<div class="alert" style="background:#fff3cd; border:1px solid #ffeeba; padding:0.6rem 0.9rem; border-radius:4px; margin-bottom:1rem; color:#856404; font-size:0.85rem;">
+  <strong>⚠ RESEARCH ONLY</strong> &mdash; do not act on retrieved content; treat as historical context.
 </div>
 
-<div class="card">
+<div class="card" style="margin-bottom:1rem;">
   <form method="GET" action="/memory/search">
-    <label for="q">Query</label>
-    <input type="text" id="q" name="q" value="{{.Query}}" style="width:100%; padding:0.5em; font-size:1em;" placeholder='e.g. "FTS5 ranking" or deploy.*staging' autofocus>
-    <p style="margin-top:0.5em; font-size:0.85em; color:#666;">
-      Hyphenated queries (e.g. <code>arc-relay</code>) work as-is. Wrap in double quotes for literal phrases. Regex metacharacters trigger regex fallback.
-    </p>
-    <button type="submit" class="btn btn-primary">Search</button>
+    <div style="display:grid; grid-template-columns:1fr; gap:0.6rem;">
+      <div class="form-group" style="margin-bottom:0;">
+        <label for="q">Query</label>
+        <input type="text" id="q" name="q" value="{{.Query}}" placeholder="FTS5 query — hyphens / colons handled by phrase fallback" autofocus>
+      </div>
+      <div style="display:grid; grid-template-columns:1.5fr 1fr 1fr; gap:0.6rem;">
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="project">Project</label>
+          <select id="project" name="project">
+            <option value="">— any project —</option>
+            {{range .Projects}}
+            <option value="{{.ProjectDir}}" {{if eq $.ProjectDir .ProjectDir}}selected{{end}}>{{.ProjectDir}} ({{.SessionCount}})</option>
+            {{end}}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="role">Role</label>
+          <select id="role" name="role">
+            <option value="">— any —</option>
+            <option value="user" {{if eq .Role "user"}}selected{{end}}>user</option>
+            <option value="assistant" {{if eq .Role "assistant"}}selected{{end}}>assistant</option>
+            <option value="tool" {{if eq .Role "tool"}}selected{{end}}>tool</option>
+            <option value="system" {{if eq .Role "system"}}selected{{end}}>system</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="since_epoch">Since epoch</label>
+          <input type="number" id="since_epoch" name="since_epoch" value="{{if gt .SinceEpoch 0}}{{.SinceEpoch}}{{end}}" placeholder="0 = all">
+        </div>
+      </div>
+      <div>
+        <button type="submit" class="btn btn-primary">Search</button>
+        {{if .Query}}<a href="/memory/search" class="btn btn-outline" style="margin-left:0.4rem;">Clear</a>{{end}}
+      </div>
+    </div>
   </form>
 </div>
 
 {{if .Query}}
-<div class="card">
-  <h3>Results</h3>
-  {{if .Hits}}
-  <table>
-    <thead>
-      <tr><th>Timestamp</th><th>Role</th><th>Session</th><th>Score</th><th>Snippet</th></tr>
-    </thead>
-    <tbody>
-      {{range .Hits}}
-      <tr>
-        <td style="white-space:nowrap;">{{.Timestamp}}</td>
-        <td>{{.Role}}</td>
-        <td><a href="/memory/sessions/{{.SessionID}}"><code>{{.SessionID}}</code></a></td>
-        <td>{{printf "%.2f" .Score}}</td>
-        <td><span style="font-family:monospace; font-size:0.85em;">{{.Content}}</span></td>
-      </tr>
+<div class="card" style="margin-bottom:0.75rem;">
+  <div style="font-size:0.85rem; color:var(--text-muted);">
+    {{.HitCount}} hit{{if ne .HitCount 1}}s{{end}}{{if .Groups}} across {{len .Groups}} session{{if ne (len .Groups) 1}}s{{end}}{{end}} for <code>{{.Query}}</code>
+    {{if .ProjectDir}} · project <code>{{.ProjectDir}}</code>{{end}}
+    {{if .Role}} · role <code>{{.Role}}</code>{{end}}
+  </div>
+</div>
+
+{{if .Groups}}
+{{range .Groups}}
+<div class="card" style="margin-bottom:0.75rem;">
+  <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:0.5rem;">
+    <a href="/memory/sessions/{{.SessionID}}" style="font-family:var(--mono); font-size:0.85rem;">{{.SessionID}}</a>
+    <span style="font-size:0.8rem; color:var(--text-muted);">{{len .Hits}} match{{if ne (len .Hits) 1}}es{{end}}</span>
+  </div>
+  {{range .Hits}}
+  <div style="border-top:1px solid var(--border); padding:0.55rem 0; display:flex; gap:0.6rem;">
+    <div style="flex-shrink:0; width:86px;">
+      {{if eq .Role "user"}}
+      <span class="badge badge-success" style="font-size:0.7rem;">user</span>
+      {{else if eq .Role "assistant"}}
+      <span class="badge badge-http" style="font-size:0.7rem;">assistant</span>
+      {{else if eq .Role "tool"}}
+      <span class="badge badge-stdio" style="font-size:0.7rem;">tool</span>
+      {{else}}
+      <span class="badge" style="font-size:0.7rem;">{{.Role}}</span>
       {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <p>No hits for <code>{{.Query}}</code>.</p>
+      <div style="font-size:0.7rem; color:var(--text-muted); margin-top:0.2rem;">{{.Timestamp}}</div>
+      <div style="font-size:0.7rem; color:var(--text-muted);">score {{printf "%.2f" .Score}}</div>
+    </div>
+    <div style="flex:1; min-width:0; font-family:var(--mono); font-size:0.82rem; line-height:1.4;">{{.Content}}</div>
+  </div>
   {{end}}
 </div>
+{{end}}
+{{else}}
+<div class="card empty-state">
+  <p>No matches.</p>
+</div>
+{{end}}
 {{end}}
 {{end}}

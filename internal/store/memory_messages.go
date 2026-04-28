@@ -30,6 +30,7 @@ type SearchOpts struct {
 	Limit      int
 	ProjectDir string // optional filter
 	SessionID  string // optional filter
+	Role       string // optional filter — exact match on memory_messages.role
 	SinceEpoch int    // 0 = all
 }
 
@@ -113,6 +114,10 @@ func (s *MessageStore) Search(userID, query string, opts SearchOpts) ([]*SearchH
 		where = append(where, "m.session_id = ?")
 		args = append(args, opts.SessionID)
 	}
+	if opts.Role != "" {
+		where = append(where, "m.role = ?")
+		args = append(args, opts.Role)
+	}
 	if opts.SinceEpoch > 0 {
 		where = append(where, "m.epoch >= ?")
 		args = append(args, opts.SinceEpoch)
@@ -158,6 +163,10 @@ func (s *MessageStore) SearchRegex(userID, pattern string, opts SearchOpts) ([]*
 	if opts.SessionID != "" {
 		where = append(where, "m.session_id = ?")
 		args = append(args, opts.SessionID)
+	}
+	if opts.Role != "" {
+		where = append(where, "m.role = ?")
+		args = append(args, opts.Role)
 	}
 	q := fmt.Sprintf(`
 SELECT m.id, COALESCE(m.uuid,''), m.session_id, COALESCE(m.parent_uuid,''),

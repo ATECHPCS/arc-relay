@@ -182,6 +182,24 @@ func (s *Service) Recent(userID string, limit int) ([]*store.MemorySession, erro
 	return s.sessions.ListByUser(userID, limit)
 }
 
+// RecentByProject groups the calling user's sessions by project_dir, sorted
+// by most-recent activity. Used by the dashboard landing page.
+func (s *Service) RecentByProject(userID string, limit int) ([]*store.ProjectGroup, error) {
+	return s.sessions.GroupByProject(userID, limit)
+}
+
+// SessionsPaged returns one page of sessions with optional project_dir filter.
+// Returns the page slice + total count (for pagination UI).
+func (s *Service) SessionsPaged(userID, projectDir string, limit, offset int) ([]*store.MemorySession, int, error) {
+	return s.sessions.ListByUserPaged(userID, projectDir, limit, offset)
+}
+
+// SessionMessageCount is a fast COUNT(*) for the session-detail header — lets
+// the page render the "N messages" stat without re-scanning the body.
+func (s *Service) SessionMessageCount(sessionID string) (int, error) {
+	return s.sessions.CountMessages(sessionID)
+}
+
 // Stats is the diagnostic shape returned by HandleStats — global counts,
 // not user-scoped (count != content; safe to surface).
 type Stats struct {

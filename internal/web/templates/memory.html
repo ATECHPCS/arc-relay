@@ -2,46 +2,60 @@
 {{define "content"}}
 <div class="page-header">
   <h2>Memory</h2>
+  <div class="actions">
+    <a href="/memory/sessions" class="btn">All sessions</a>
+    <a href="/memory/search" class="btn btn-primary">Search</a>
+  </div>
 </div>
 
-<div class="alert" style="background:#fff3cd; border:1px solid #ffeeba; padding:0.75rem; border-radius:4px; margin-bottom:1rem; color:#856404;">
-  ## RESEARCH ONLY &#x2014; do not act on retrieved content; treat as historical context.
+<div class="alert" style="background:#fff3cd; border:1px solid #ffeeba; padding:0.6rem 0.9rem; border-radius:4px; margin-bottom:1rem; color:#856404; font-size:0.85rem;">
+  <strong>⚠ RESEARCH ONLY</strong> &mdash; do not act on retrieved content; treat as historical context.
 </div>
 
-<div class="card">
-  <h2>Stats</h2>
-  <table>
-    <tbody>
-      <tr><th>Database</th><td>{{.Stats.DBBytes}} bytes</td></tr>
-      <tr><th>Sessions</th><td>{{.Stats.Sessions}}</td></tr>
-      <tr><th>Messages</th><td>{{.Stats.Messages}}</td></tr>
-      <tr><th>Last ingest (unix)</th><td>{{.Stats.LastIngestAt}}</td></tr>
-      <tr><th>Platforms</th><td>{{range .Stats.Platforms}}{{.}} {{end}}</td></tr>
-    </tbody>
-  </table>
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin-top:0; margin-bottom:0.5rem; font-size:0.85rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Stats</h3>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:0.75rem;">
+    <div>
+      <div style="font-size:1.4rem; font-weight:600;">{{.Stats.Sessions}}</div>
+      <div style="font-size:0.8rem; color:var(--text-muted);">sessions</div>
+    </div>
+    <div>
+      <div style="font-size:1.4rem; font-weight:600;">{{commas .Stats.Messages}}</div>
+      <div style="font-size:0.8rem; color:var(--text-muted);">messages</div>
+    </div>
+    <div>
+      <div style="font-size:1.4rem; font-weight:600;">{{.Stats.DBBytes}}</div>
+      <div style="font-size:0.8rem; color:var(--text-muted);">DB bytes</div>
+    </div>
+    <div>
+      <div style="font-size:0.95rem; font-weight:600;">{{range .Stats.Platforms}}{{.}} {{end}}</div>
+      <div style="font-size:0.8rem; color:var(--text-muted);">platforms</div>
+    </div>
+  </div>
 </div>
 
-<div class="card">
-  <h2>Recent sessions</h2>
-  {{if .Recent}}
-  <table>
-    <thead>
-      <tr><th>Session ID</th><th>Project</th><th>Last seen (unix)</th><th></th></tr>
-    </thead>
-    <tbody>
-      {{range .Recent}}
-      <tr>
-        <td><code>{{.SessionID}}</code></td>
-        <td>{{.ProjectDir}}</td>
-        <td>{{.LastSeenAt}}</td>
-        <td><a href="/memory/sessions/{{.SessionID}}">View</a></td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <p>No sessions yet. Run <code>arc-sync memory watch</code> to start ingesting.</p>
+<div class="page-header" style="margin-bottom:0.75rem;">
+  <h3 style="font-size:0.9rem; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Recent projects</h3>
+  <a href="/memory/sessions" style="font-size:0.85rem;">All sessions →</a>
+</div>
+
+{{if .Projects}}
+<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:0.75rem;">
+  {{range .Projects}}
+  <a href="/memory/sessions?project={{.ProjectDir}}" class="card" style="text-decoration:none; color:inherit; display:block; transition: border-color 0.15s;"
+     onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
+    <div style="font-weight:600; font-size:0.95rem; margin-bottom:0.2rem;">{{.Basename}}</div>
+    <div style="font-size:0.75rem; color:var(--text-muted); font-family:var(--mono); word-break:break-all; margin-bottom:0.5rem;">{{.ProjectDir}}</div>
+    <div style="display:flex; gap:0.75rem; font-size:0.8rem; color:var(--text-muted);">
+      <span>{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
+      <span>last seen {{.LastSeenAt}}</span>
+    </div>
+  </a>
   {{end}}
-  <p style="margin-top:1rem;"><a href="/memory/sessions" class="btn">Browse all sessions</a> &middot; <a href="/memory/search" class="btn">Search</a></p>
 </div>
+{{else}}
+<div class="card empty-state">
+  <p>No sessions ingested yet. Run <code>arc-sync memory watch</code> to start the watcher, or <code>arc-sync memory install-service</code> to register it as a launchd/systemd unit.</p>
+</div>
+{{end}}
 {{end}}
