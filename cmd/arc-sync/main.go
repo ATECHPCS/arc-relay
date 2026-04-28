@@ -412,8 +412,12 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 	if _, err := os.Stat(skillPath); err == nil {
 		hasSkill = true
 	}
+	// If the existing skill install is the embed-only flavor (no marker), treat
+	// it as upgradeable rather than "already installed" — we want to pick up
+	// the relay-managed bundle on this run.
+	canUpgradeSkill := hasSkill && isEmbedInstall(skillPath)
 
-	if hasInstructions && hasSkill {
+	if hasInstructions && hasSkill && !canUpgradeSkill {
 		fmt.Println("   Claude Code integration: already installed ✓")
 		fmt.Println()
 		return
@@ -427,6 +431,8 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 	}
 	if !hasSkill {
 		fmt.Println("     • ~/.claude/skills/arc-sync/SKILL.md  — the /arc-sync skill")
+	} else if canUpgradeSkill {
+		fmt.Println("     • upgrade ~/.claude/skills/arc-sync/SKILL.md to relay-managed (sync via 'arc-sync skill sync')")
 	}
 	fmt.Println()
 	fmt.Print("   Install Claude Code integration? [Y/n] ")
@@ -469,16 +475,28 @@ func offerClaudeIntegration(scanner *bufio.Scanner) {
 		}
 	}
 
-	// Install skill
-	if !hasSkill {
-		if err := installSkillFromEmbed(skillDir, skillPath); err != nil {
+	// Install skill: relay-first, embed-fallback. If the relay has the
+	// arc-sync skill published, future `arc-sync skill sync` will keep it
+	// fresh via the .arc-sync-version marker. Embed-only installs leave no
+	// marker (so sync won't touch them) — the user re-runs setup-claude to
+	// re-attempt the relay path once the skill is published.
+	if !hasSkill || isEmbedInstall(skillPath) {
+		source, err := installArcSyncSkill(skillDir, skillPath)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "   Warning: could not install skill: %v\n", err)
 			fmt.Println("   Install manually:")
 			fmt.Println("     mkdir -p ~/.claude/skills/arc-sync")
 			fmt.Println("     curl -fsSL https://raw.githubusercontent.com/comma-compliance/arc-relay/main/skills/arc-sync/SKILL.md \\")
 			fmt.Println("       -o ~/.claude/skills/arc-sync/SKILL.md")
 		} else {
-			fmt.Printf("   ✓ Installed skill to %s\n", skillPath)
+			suffix := ""
+			switch source {
+			case "relay":
+				suffix = " (from relay; sync via 'arc-sync skill sync')"
+			case "embed":
+				suffix = " (from embedded fallback)"
+			}
+			fmt.Printf("   ✓ Installed skill to %s%s\n", skillPath, suffix)
 			installed++
 		}
 	}
@@ -681,6 +699,86 @@ func hasProjectClaude(projectDir string) bool {
 func hasProjectCodex(projectDir string) bool {
 	agentsPath := filepath.Join(projectDir, "AGENTS.md")
 	return hasMarker(agentsPath, projectCodexMarker)
+}
+
+// installArcSyncSkill bootstraps the arc-sync skill into ~/.claude/skills/arc-sync/.
+// Prefers the relay-served bundle (carrying the .arc-sync-version marker so future
+// `arc-sync skill sync` keeps it fresh); falls back to the //go:embed'd skill.md
+// when the relay is unreachable, unconfigured, or has no published arc-sync skill.
+//
+// Returns the source ("relay" or "embed") so the caller can surface where the
+// content came from. Errors only on filesystem failures — relay misses are
+// silently handled by falling back to the embed.
+func installArcSyncSkill(skillDir, skillPath string) (source string, err error) {
+	if isEmbedInstall(skillPath) {
+		// We previously dropped the embed-only file here. Clear it so the
+		// relay-first install doesn't trip on the marker-less directory check.
+		if removeErr := os.RemoveAll(skillDir); removeErr != nil {
+			// Non-fatal — try the embed path with a fresh write below.
+			fmt.Fprintf(os.Stderr, "   Warning: cannot replace previous embed install at %s: %v\n", skillDir, removeErr)
+		}
+	}
+
+	if err := tryRelaySkillInstall(skillDir); err == nil {
+		return "relay", nil
+	}
+	return "embed", installSkillFromEmbed(skillDir, skillPath)
+}
+
+// tryRelaySkillInstall attempts to pull arc-sync from the configured relay.
+// Returns nil on success; any error (no creds, network failure, skill not
+// published, install conflict) signals the caller to fall back to the embed.
+// Does not log relay-side failures since they're an expected branch on
+// fresh setups before the admin has pushed the skill.
+func tryRelaySkillInstall(skillDir string) error {
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		return err
+	}
+	creds, err := config.ResolveCredentials(configDir)
+	if err != nil {
+		return err
+	}
+	if creds.RelayURL == "" || creds.APIKey == "" {
+		return fmt.Errorf("no relay credentials")
+	}
+	client := &relay.Client{
+		BaseURL:    strings.TrimRight(creds.RelayURL, "/"),
+		APIKey:     creds.APIKey,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+	}
+	detail, err := client.GetSkill("arc-sync")
+	if err != nil {
+		return err
+	}
+	if detail == nil || detail.Skill.LatestVersion == "" {
+		return fmt.Errorf("arc-sync skill not published on relay")
+	}
+	mgr := &sync.SkillManager{Client: client, SkillsDir: filepath.Dir(skillDir)}
+	if _, err := mgr.Install("arc-sync", detail.Skill.LatestVersion); err != nil {
+		return err
+	}
+	return nil
+}
+
+// isEmbedInstall reports whether the existing skill.md at path is byte-identical
+// to our embedded copy AND nothing else lives next to it. Used to safely
+// transition users who previously ran the embed-only install over to the
+// relay-managed bundle without clobbering hand-edited content.
+func isEmbedInstall(skillPath string) bool {
+	skillDir := filepath.Dir(skillPath)
+	entries, err := os.ReadDir(skillDir)
+	if err != nil {
+		return false
+	}
+	if len(entries) != 1 || entries[0].Name() != "SKILL.md" {
+		return false
+	}
+	got, err := os.ReadFile(skillPath)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(got, embeddedSkillMD)
 }
 
 func installSkillFromEmbed(skillDir, skillPath string) error {
