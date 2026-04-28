@@ -65,6 +65,8 @@ func main() {
 		runMemory()
 	case "skill":
 		runSkill()
+	case "recipe":
+		runRecipe()
 	case "--version", "version":
 		fmt.Printf("arc-sync %s\n", version)
 	case "--help", "help", "-h":
@@ -95,6 +97,8 @@ Commands:
                 Subcommands: watch, install-service, search, list, stats, show
   skill         Manage centrally-distributed Claude Code skills
                 Subcommands: list, install, remove, sync, push
+  recipe        Manage centrally-distributed Claude Code plugin install recipes
+                Subcommands: list, install, uninstall, sync, push
 
 Flags (for sync/add):
   --non-interactive, -y    Auto-accept all new servers
