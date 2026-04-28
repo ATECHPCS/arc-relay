@@ -63,6 +63,8 @@ func main() {
 		runSetupProject()
 	case "memory":
 		runMemory()
+	case "skill":
+		runSkill()
 	case "--version", "version":
 		fmt.Printf("arc-sync %s\n", version)
 	case "--help", "help", "-h":
@@ -91,6 +93,8 @@ Commands:
   server        Manage servers on the relay instance (add, remove, start, stop)
   memory        Tail Claude Code transcripts and POST deltas to the relay
                 Subcommands: watch, install-service, search, list, stats, show
+  skill         Manage centrally-distributed Claude Code skills
+                Subcommands: list, install, remove, sync, push
 
 Flags (for sync/add):
   --non-interactive, -y    Auto-accept all new servers
