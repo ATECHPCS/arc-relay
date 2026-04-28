@@ -23,6 +23,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
 	"github.com/comma-compliance/arc-relay/internal/server"
+	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
 	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
@@ -200,6 +201,20 @@ func main() {
 		return ""
 	})
 
+	// Skill repository wiring (Phase 1).
+	skillBundlesDir := cfg.Skills.BundlesDir
+	if skillBundlesDir == "" {
+		skillBundlesDir = filepath.Join(filepath.Dir(cfg.Database.Path), "skills")
+	}
+	if err := os.MkdirAll(skillBundlesDir, 0o700); err != nil {
+		slog.Error("failed to create skills bundles dir", "path", skillBundlesDir, "err", err)
+		os.Exit(1)
+	}
+	slog.Info("skills bundles dir", "path", skillBundlesDir)
+	skillStore := store.NewSkillStore(db)
+	skillSvc := skills.New(skillStore, skillBundlesDir)
+	skillHandlers := web.NewSkillsHandlers(skillSvc, skillStore, server.UserFromContext)
+
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)
 
@@ -223,7 +238,7 @@ func main() {
 	proxyMgr.OptimizeStore = optimizeStore
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp, memSvc)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp, memSvc, skillStore, skillSvc, skillHandlers)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
