@@ -54,13 +54,74 @@ func (h *Handlers) HandleMemoryIndex(w http.ResponseWriter, r *http.Request) {
 		views[i] = projectView{ProjectGroup: p, Basename: filepath.Base(p.ProjectDir)}
 	}
 
+	// Pre-format stats counts to strings — the `commas` template func is
+	// typed `func(int)`, but Stats fields are int64. Calling commas on
+	// int64 silently aborts template rendering mid-page.
+	statsView := map[string]any{
+		"Sessions":     formatInt64(stats.Sessions),
+		"Messages":     formatInt64(stats.Messages),
+		"DBBytes":      formatBytes(stats.DBBytes),
+		"LastIngestAt": stats.LastIngestAt,
+		"Platforms":    stats.Platforms,
+	}
+
 	data := map[string]any{
 		"Nav":      "memory",
 		"User":     user,
-		"Stats":    stats,
+		"Stats":    statsView,
 		"Projects": views,
 	}
 	h.render(w, r, "memory.html", data)
+}
+
+// formatInt64 returns "1,234,567" for an int64. Avoids the mismatch with the
+// existing `commas` template func, which only accepts int (32-bit on some
+// platforms).
+func formatInt64(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	neg := false
+	if len(s) > 0 && s[0] == '-' {
+		neg = true
+		s = s[1:]
+	}
+	if len(s) <= 3 {
+		if neg {
+			return "-" + s
+		}
+		return s
+	}
+	// Insert commas every 3 digits from the right.
+	var out []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, byte(c))
+	}
+	if neg {
+		return "-" + string(out)
+	}
+	return string(out)
+}
+
+// formatBytes renders a byte count as KiB/MiB/GiB to ~2 sig figs. Used for
+// the DB-size stat on the memory landing page.
+func formatBytes(n int64) string {
+	const (
+		KiB = 1 << 10
+		MiB = 1 << 20
+		GiB = 1 << 30
+	)
+	switch {
+	case n >= GiB:
+		return strconv.FormatFloat(float64(n)/GiB, 'f', 2, 64) + " GiB"
+	case n >= MiB:
+		return strconv.FormatFloat(float64(n)/MiB, 'f', 2, 64) + " MiB"
+	case n >= KiB:
+		return strconv.FormatFloat(float64(n)/KiB, 'f', 2, 64) + " KiB"
+	default:
+		return strconv.FormatInt(n, 10) + " B"
+	}
 }
 
 // HandleMemorySessions renders /memory/sessions — paginated session list with
