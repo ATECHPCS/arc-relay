@@ -1,0 +1,52 @@
+{{define "title"}}Skills{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Skills</h2>
+  {{if and .User (eq .User.Role "admin")}}
+  <a href="/skills/new" class="btn btn-primary">+ Upload skill</a>
+  {{end}}
+</div>
+
+<div class="card">
+  {{if .Skills}}
+  <table>
+    <thead>
+      <tr>
+        <th>Slug</th>
+        <th>Display name</th>
+        <th>Visibility</th>
+        <th>Latest version</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Skills}}
+      <tr>
+        <td><code>{{.Slug}}</code></td>
+        <td>{{.DisplayName}}</td>
+        <td>
+          {{if eq .Visibility "public"}}
+            <span style="background:#e7f5ee; color:#1d6f3a; padding:0.15rem 0.5rem; border-radius:0.25rem; font-size:0.85em;">public</span>
+          {{else}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem; font-size:0.85em;">restricted</span>
+          {{end}}
+        </td>
+        <td>{{if .LatestVersion}}<code>{{.LatestVersion}}</code>{{else}}<span style="color:#999;">—</span>{{end}}</td>
+        <td>
+          {{if .YankedAt}}
+            <span style="color:#dc3545;">yanked</span>
+          {{else}}
+            <span style="color:#1d6f3a;">active</span>
+          {{end}}
+        </td>
+        <td><a href="/skills/{{.Slug}}">View</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>No skills available.{{if and .User (eq .User.Role "admin")}} <a href="/skills/new">Upload one →</a>{{end}}</p>
+  {{end}}
+</div>
+{{end}}

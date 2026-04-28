@@ -1,0 +1,58 @@
+{{define "title"}}Skills · Upload{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Upload skill</h2>
+  <a href="/skills" class="btn">← Skills</a>
+</div>
+
+<div class="card">
+  {{if .Error}}
+  <div class="alert alert-danger">{{.Error}}</div>
+  {{end}}
+
+  <form method="POST" action="/skills/new" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="slug">Slug</label>
+        <input type="text" id="slug" name="slug" value="{{with .Form}}{{.Slug}}{{end}}" required
+               pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" placeholder="my-skill">
+        <div class="help">Must match the <code>name:</code> field in the archive's <code>SKILL.md</code> frontmatter. Lowercase, hyphens only.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="version">Version</label>
+        <input type="text" id="version" name="version" value="{{with .Form}}{{.Version}}{{end}}" required
+               pattern="[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?" placeholder="1.0.0">
+        <div class="help">Semver <code>MAJOR.MINOR.PATCH</code>. Re-uploading the same version is rejected.</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="visibility">Visibility</label>
+      <select id="visibility" name="visibility">
+        <option value="restricted" {{if or (not .Form) (ne (index .Form "Visibility") "public")}}selected{{end}}>restricted (default)</option>
+        <option value="public" {{if and .Form (eq (index .Form "Visibility") "public")}}selected{{end}}>public</option>
+      </select>
+      <div class="help">
+        <strong>restricted</strong>: only users you explicitly assign see this skill.
+        <strong>public</strong>: visible to all authenticated users automatically.
+        Visibility is set on first upload only — re-publishing a new version preserves the existing visibility.
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="archive">Archive (.tar.gz)</label>
+      <input type="file" id="archive" name="archive" accept=".tar.gz,.tgz,application/gzip" required>
+      <div class="help">
+        Must contain a <code>SKILL.md</code> at the archive root with YAML frontmatter (<code>name</code> required).
+        Maximum 5 MiB.
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Upload</button>
+    <a href="/skills" class="btn" style="margin-left:0.5rem;">Cancel</a>
+  </form>
+</div>
+{{end}}

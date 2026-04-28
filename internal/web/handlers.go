@@ -30,6 +30,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -185,6 +186,8 @@ type Handlers struct {
 	optimizeStore   *store.OptimizeStore
 	llmClient       *llm.Client
 	memSvc          *memory.Service
+	skillSvc        *skills.Service
+	skillStore      *store.SkillStore
 	oauthProv       *oauthProvider
 	tmpls           map[string]*template.Template
 	csrfSecret           []byte
@@ -196,7 +199,7 @@ type Handlers struct {
 	flashKeys            sync.Map // nonce -> raw API key (shown once after redirect)
 }
 
-func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, memSvc *memory.Service) *Handlers {
+func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, memSvc *memory.Service, skillSvc *skills.Service, skillStore *store.SkillStore) *Handlers {
 	// Generate a per-process CSRF secret. Use session_secret from config if set.
 	csrfSecret := []byte(cfg.Auth.SessionSecret)
 	if len(csrfSecret) == 0 {
@@ -225,6 +228,8 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 		optimizeStore:   optimizeStore,
 		llmClient:       llmClient,
 		memSvc:          memSvc,
+		skillSvc:        skillSvc,
+		skillStore:      skillStore,
 		oauthProv:       newOAuthProvider(oauthTokenStore, store.NewOAuthClientStore(oauthTokenStore.DB()), store.NewOAuthRefreshTokenStore(oauthTokenStore.DB())),
 		tmpls:           make(map[string]*template.Template),
 		csrfSecret:           csrfSecret,
@@ -312,6 +317,11 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 	h.tmpls["memory_session_detail.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory_session_detail.html"))
 	h.tmpls["memory_search.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/memory_search.html"))
 
+	// Skill repository dashboard (Phase 2).
+	h.tmpls["skills.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/skills.html"))
+	h.tmpls["skill_detail.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/skill_detail.html"))
+	h.tmpls["skill_new.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/layout.html", "templates/skill_new.html"))
+
 	// Login and invite_redeem are standalone (no layout)
 	h.tmpls["login.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/login.html"))
 	h.tmpls["invite_redeem.html"] = template.Must(template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/invite_redeem.html"))
@@ -366,6 +376,11 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	// matches /memory/sessions/{anything}, distinct from the bare /memory/sessions.
 	mux.HandleFunc("/memory/sessions/", h.requireAuth(h.HandleMemorySessionDetail))
 	mux.HandleFunc("/memory/search", h.requireAuth(h.HandleMemorySearch))
+	// Skill repository dashboard (Phase 2). /skills/new must register before
+	// /skills/ so the longer pattern wins for ServeMux's longest-prefix match.
+	mux.HandleFunc("/skills", h.requireAuth(h.HandleSkillsList))
+	mux.HandleFunc("/skills/new", h.requireAuth(h.HandleSkillNew))
+	mux.HandleFunc("/skills/", h.requireAuth(h.HandleSkillRoutes))
 	mux.HandleFunc("/api/middleware/", h.requireAuth(h.handleMiddlewareAPI))
 	mux.HandleFunc("/api/catalog/search", h.requireAuth(h.handleCatalogSearch))
 	mux.HandleFunc("/api/catalog/discover-oauth", h.requireAuth(h.handleCatalogDiscoverOAuth))

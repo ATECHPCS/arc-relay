@@ -1,0 +1,140 @@
+{{define "title"}}Skills · {{.Skill.Slug}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>{{.Skill.DisplayName}} <small style="color:#666; font-weight:normal;">/ <code>{{.Skill.Slug}}</code></small></h2>
+  <a href="/skills" class="btn">← Skills</a>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Metadata</h3>
+  <table>
+    <tbody>
+      <tr><th>Slug</th><td><code>{{.Skill.Slug}}</code></td></tr>
+      <tr><th>Display name</th><td>{{.Skill.DisplayName}}</td></tr>
+      <tr><th>Description</th><td>{{if .Skill.Description}}{{.Skill.Description}}{{else}}<span style="color:#999;">—</span>{{end}}</td></tr>
+      <tr><th>Visibility</th>
+        <td>
+          {{if eq .Skill.Visibility "public"}}
+            <span style="background:#e7f5ee; color:#1d6f3a; padding:0.15rem 0.5rem; border-radius:0.25rem;">public</span>
+          {{else}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem;">restricted</span>
+          {{end}}
+        </td>
+      </tr>
+      <tr><th>Latest version</th><td>{{if .Skill.LatestVersion}}<code>{{.Skill.LatestVersion}}</code>{{else}}<span style="color:#999;">—</span>{{end}}</td></tr>
+      <tr><th>Status</th>
+        <td>
+          {{if .Skill.YankedAt}}
+            <span style="color:#dc3545;">yanked</span>
+            (clients still installed keep working until next sync)
+          {{else}}
+            <span style="color:#1d6f3a;">active</span>
+          {{end}}
+        </td>
+      </tr>
+      <tr><th>Created</th><td>{{.Skill.CreatedAt}}</td></tr>
+      <tr><th>Updated</th><td>{{.Skill.UpdatedAt}}</td></tr>
+    </tbody>
+  </table>
+
+  {{if and .User (eq .User.Role "admin")}}
+  <div style="margin-top:1rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+    {{if .Skill.YankedAt}}
+    <form method="POST" action="/skills/{{.Skill.Slug}}/unyank" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn">Unyank skill</button>
+    </form>
+    {{else}}
+    <form method="POST" action="/skills/{{.Skill.Slug}}/yank" style="display:inline;"
+          onsubmit="return confirm('Yank this skill? It hides from listings but keeps archives available for already-synced clients.');">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn">Yank skill</button>
+    </form>
+    {{end}}
+    <form method="POST" action="/skills/{{.Skill.Slug}}/delete" style="display:inline;"
+          onsubmit="return confirm('Permanently delete this skill, ALL its versions, and ALL its assignments? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn" style="background:#dc3545; color:#fff;">Hard delete</button>
+    </form>
+  </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Versions</h3>
+  {{if .Versions}}
+  <table>
+    <thead>
+      <tr>
+        <th>Version</th>
+        <th>Size</th>
+        <th>SHA-256</th>
+        <th>Uploaded</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Versions}}
+      <tr>
+        <td><code>{{.Version}}</code></td>
+        <td>{{.ArchiveSize}} bytes</td>
+        <td><code style="font-size:0.8em;">{{.ArchiveSHA256}}</code></td>
+        <td>{{.UploadedAt}}</td>
+        <td>
+          {{if .YankedAt}}
+            <span style="color:#dc3545;">yanked</span>
+          {{else}}
+            <span style="color:#1d6f3a;">active</span>
+          {{end}}
+        </td>
+        <td>
+          <a href="{{$.DownloadBase}}/{{.Version}}/archive" class="btn">Download</a>
+          {{if and $.User (eq $.User.Role "admin")}}
+            {{if .YankedAt}}
+            <form method="POST" action="/skills/{{$.Skill.Slug}}/versions/{{.Version}}/unyank" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button class="btn">Unyank</button>
+            </form>
+            {{else}}
+            <form method="POST" action="/skills/{{$.Skill.Slug}}/versions/{{.Version}}/yank" style="display:inline;"
+                  onsubmit="return confirm('Yank version {{.Version}}? Existing clients on this version keep working until they sync.');">
+              <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+              <button class="btn">Yank</button>
+            </form>
+            {{end}}
+          {{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>No versions uploaded yet.</p>
+  {{end}}
+</div>
+
+{{if and .User (eq .User.Role "admin")}}
+<div class="card">
+  <h3 style="margin-top:0;">Assignments (admin only)</h3>
+  {{if .Assignments}}
+  <table>
+    <thead>
+      <tr><th>User ID</th><th>Pinned version</th><th>Assigned</th></tr>
+    </thead>
+    <tbody>
+      {{range .Assignments}}
+      <tr>
+        <td><code>{{.UserID}}</code></td>
+        <td>{{if .Version}}<code>{{deref .Version}}</code>{{else}}<span style="color:#999;">latest</span>{{end}}</td>
+        <td>{{.AssignedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p style="color:#666;">No explicit assignments. Public skills are visible to all users automatically.</p>
+  {{end}}
+</div>
+{{end}}
+{{end}}
