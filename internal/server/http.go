@@ -431,8 +431,12 @@ func (s *Server) handleMCPProxy(w http.ResponseWriter, r *http.Request) {
 		resp, _ = s.optimizer.ProcessResponse(r.Context(), &mcpReq, resp, mwMeta)
 	}
 
-	// Filter list responses to only include endpoints the user has permission for
-	if user != nil && user.ProfileID != nil && s.profileStore != nil {
+	// Filter list responses to only include endpoints the user has permission for.
+	// Admins bypass the filter so tools/list mirrors their bypass on tools/call
+	// (see checkEndpointAccess) — otherwise an admin assigned to a profile that
+	// happens to have no permissions for this server gets an empty tools array
+	// while invocations still succeed.
+	if user != nil && user.Role != "admin" && user.ProfileID != nil && s.profileStore != nil {
 		resp = s.filterListResponse(resp, mcpReq.Method, user, srv.ID)
 	}
 
@@ -508,7 +512,15 @@ func (s *Server) checkEndpointAccess(r *http.Request, serverID string, req *mcp.
 // to only include endpoints the user's profile grants access to. This reduces the
 // context window for LLM clients to only the actions they can actually perform.
 func (s *Server) filterListResponse(resp *mcp.Response, method string, user *store.User, serverID string) *mcp.Response {
-	if resp == nil || resp.Error != nil || user.ProfileID == nil {
+	if resp == nil || resp.Error != nil || user == nil || user.ProfileID == nil {
+		return resp
+	}
+	// Admins bypass profile-based list filtering so discovery mirrors their
+	// invocation-time bypass in checkEndpointAccess. Without this, an admin
+	// whose effective profile has no permissions for the target server gets
+	// an empty tools/list while tools/call still succeeds — confusing clients
+	// like Claude Code that build tool menus from the list response.
+	if user.Role == "admin" {
 		return resp
 	}
 
