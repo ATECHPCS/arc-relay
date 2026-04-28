@@ -21,6 +21,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/recipes"
 	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
@@ -53,11 +54,14 @@ type Server struct {
 	skillStore         *store.SkillStore
 	skillSvc           *skills.Service
 	skillHandlers      *web.SkillsHandlers
+	recipeStore        *store.SetupRecipeStore
+	recipeSvc          *recipes.Service
+	recipeHandlers     *web.RecipesHandlers
 	mux                *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server, memSvc *memory.Service, skillStore *store.SkillStore, skillSvc *skills.Service, skillHandlers *web.SkillsHandlers) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server, memSvc *memory.Service, skillStore *store.SkillStore, skillSvc *skills.Service, skillHandlers *web.SkillsHandlers, recipeStore *store.SetupRecipeStore, recipeSvc *recipes.Service, recipeHandlers *web.RecipesHandlers) *Server {
 	s := &Server{
 		cfg:                cfg,
 		servers:            servers,
@@ -84,6 +88,9 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		skillStore:         skillStore,
 		skillSvc:           skillSvc,
 		skillHandlers:      skillHandlers,
+		recipeStore:        recipeStore,
+		recipeSvc:          recipeSvc,
+		recipeHandlers:     recipeHandlers,
 		mux:                http.NewServeMux(),
 	}
 	s.routes()
@@ -120,6 +127,12 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/skills/assigned", apiAuth(http.HandlerFunc(s.skillHandlers.HandleAssigned)))
 	s.mux.Handle("/api/skills",          apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkills)))
 	s.mux.Handle("/api/skills/",         apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkillByPath)))
+
+	// Setup-recipe registry endpoints (API key auth only). Same routing
+	// gotcha as skills: /api/recipes/assigned ahead of /api/recipes/.
+	s.mux.Handle("/api/recipes/assigned", apiAuth(http.HandlerFunc(s.recipeHandlers.HandleAssigned)))
+	s.mux.Handle("/api/recipes",          apiAuth(http.HandlerFunc(s.recipeHandlers.HandleRecipes)))
+	s.mux.Handle("/api/recipes/",         apiAuth(http.HandlerFunc(s.recipeHandlers.HandleRecipeByPath)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

@@ -76,8 +76,12 @@ type CreateInput struct {
 }
 
 // Create validates the recipe shape (per recipe_type) and persists it.
-// Returns ErrInvalidRecipe wrapping a diagnostic on validation failure.
+// Returns ErrInvalidRecipe wrapping a diagnostic on validation failure
+// (including slug regex violations and CHECK-constraint failures).
 func (s *Service) Create(in *CreateInput) (*store.SetupRecipe, error) {
+	if err := store.ValidateSlug(in.Slug); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidRecipe, err)
+	}
 	normalized, err := ValidateRecipeData(in.RecipeType, in.RecipeData)
 	if err != nil {
 		return nil, err
@@ -96,6 +100,17 @@ func (s *Service) Create(in *CreateInput) (*store.SetupRecipe, error) {
 		CreatedBy:   nullable(in.CreatedBy),
 	}
 	if err := s.store.CreateRecipe(r); err != nil {
+		// Slug-already-exists is its own sentinel; preserve so handlers
+		// can render 409. Everything else here is treated as invalid input.
+		if errors.Is(err, store.ErrRecipeSlugConflict) {
+			return nil, err
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "CHECK constraint failed") ||
+			strings.Contains(msg, "invalid visibility") ||
+			strings.Contains(msg, "recipe_type is required") {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidRecipe, err)
+		}
 		return nil, err
 	}
 	return r, nil

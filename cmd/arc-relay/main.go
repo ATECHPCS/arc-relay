@@ -22,6 +22,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/recipes"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
@@ -215,6 +216,11 @@ func main() {
 	skillSvc := skills.New(skillStore, skillBundlesDir)
 	skillHandlers := web.NewSkillsHandlers(skillSvc, skillStore, server.UserFromContext)
 
+	// Setup-recipe registry wiring (Phase 1).
+	recipeStore := store.NewSetupRecipeStore(db)
+	recipeSvc := recipes.New(recipeStore)
+	recipeHandlers := web.NewRecipesHandlers(recipeSvc, recipeStore, server.UserFromContext)
+
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)
 
@@ -238,7 +244,7 @@ func main() {
 	proxyMgr.OptimizeStore = optimizeStore
 
 	// Start HTTP server
-	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp, memSvc, skillStore, skillSvc, skillHandlers)
+	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp, memSvc, skillStore, skillSvc, skillHandlers, recipeStore, recipeSvc, recipeHandlers)
 
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
