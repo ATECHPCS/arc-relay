@@ -5,6 +5,26 @@ All notable changes to Arc Relay (formerly MCP Wrangler) are documented here.
 ## [Unreleased]
 
 ### Added
+- **Skill repository** - centralized Claude Code skill distribution
+  - Three new tables (migration 015): `skills`, `skill_versions`, `skill_assignments` with public/restricted visibility, semver version pins, yank ≠ delete semantics
+  - Tar.gz archives stored on disk under `<bundles_dir>/<slug>/<version>.tar.gz` (default `<db_dir>/skills`, mode 0700, atomic temp+rename); SHA-256 verified on download via `X-Skill-SHA256` response header
+  - Validation gate on every upload: SKILL.md at archive root, YAML frontmatter parse, `name` field equals slug, no path-traversal entries, ≤5 MiB cap, semver `MAJOR.MINOR.PATCH` enforcement
+  - Eight REST endpoints under `/api/skills/*` (admin-tier required for upload/delete; reads scoped per visibility ACL); `MaxBytesReader` enforces the 5 MiB cap pre-allocation
+  - Web dashboard at `/skills`, `/skills/{slug}`, `/skills/new` with CSRF-checked admin yank/unyank/hard-delete + admin-only assignments table
+  - `arc-sync skill {list,install,remove,sync,push}` subcommands; `.arc-sync-version` marker discriminates arc-sync-managed installs from hand-installed dirs (sync/remove refuse to touch unmarkered dirs); pinned-version preferred over latest
+  - `arc-sync setup-claude` is now relay-first with embed fallback; prior embed-only installs are auto-upgraded to relay-managed on next run via SHA-check against the embed
+  - Config: `ARC_RELAY_SKILLS_DIR` env var, `[skills] bundles_dir` TOML key
+- **Centralized memory** - transcript ingestion + recall across machines
+  - Separate SQLite file (`memory.db`, env `ARC_RELAY_MEMORY_DB_PATH`) with isolated WAL/VACUUM/backup so heavy ingest does not contend with auth-critical writes
+  - External-content FTS5 + BM25 ranking; three-tier search escalation (raw FTS5 → quoted phrase → Go regex) handles unquoted hyphenated queries (`arc-relay`) and other FTS5 metacharacter edge cases
+  - Parser registry pattern under `internal/memory/parser/` (claudecode v1; Codex/Gemini drop in via `register("<platform>", ...)`)
+  - Five REST endpoints under `/api/memory/*`; native MCP server at `/mcp/memory` (8 tools, accepts API keys OR OAuth tokens); web dashboard at `/memory`, `/memory/sessions[/{id}]`, `/memory/search`
+  - Per-user scoping at every read surface; user ID derived from authenticated context, never the request body
+  - All read surfaces prepend a `## RESEARCH ONLY ...` banner so an LLM consumer cannot mistake recalled history for live instructions
+  - `arc-sync memory watch` (launchd/systemd user service) tails `~/.claude/projects/**/*.jsonl`, watermarks per-file, reacts to a Stop-hook wakeup flag for instant ingest at session end
+  - `arc-sync memory {search,list,stats,show}` and a `/recall` Claude Code slash command
+  - Per-IP rate limits (commit `e9e1844`) on public auth-init endpoints: `/oauth/register` (10/hr), `/api/auth/device` (20/15min), `/api/auth/device/token` (60/min), `/api/auth/invite` (10/15min) — return HTTP 429 + `Retry-After` when exhausted
+  - DB files now created mode 0600 via `os.Chmod` in `store.Open` plus `syscall.Umask(0o077)` in `main()` — defense in depth against accidentally permissive volume defaults
 - **Stateful archive handoff** - "Set up the Comma Compliance Archive" flow now mints a server-side nonce before opening the compliance popup and validates it on the return trip
   - Without the nonce, any crafted `#mw-archive?...` fragment on an authenticated page could silently reconfigure archive credentials
   - New endpoints: `POST /api/archive/handoff/begin`, `POST /api/archive/handoff/complete`
