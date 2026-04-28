@@ -214,12 +214,12 @@ func main() {
 	slog.Info("skills bundles dir", "path", skillBundlesDir)
 	skillStore := store.NewSkillStore(db)
 	skillSvc := skills.New(skillStore, skillBundlesDir)
-	skillHandlers := web.NewSkillsHandlers(skillSvc, skillStore, server.UserFromContext)
+	skillHandlers := web.NewSkillsHandlers(skillSvc, skillStore, userStore, server.UserFromContext)
 
 	// Setup-recipe registry wiring (Phase 1).
 	recipeStore := store.NewSetupRecipeStore(db)
 	recipeSvc := recipes.New(recipeStore)
-	recipeHandlers := web.NewRecipesHandlers(recipeSvc, recipeStore, server.UserFromContext)
+	recipeHandlers := web.NewRecipesHandlers(recipeSvc, recipeStore, userStore, server.UserFromContext)
 
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)

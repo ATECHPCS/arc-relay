@@ -167,6 +167,55 @@ func (c *Client) UploadSkill(slug, version, visibility string, archive []byte) (
 	return &out, nil
 }
 
+// AssignSkill grants a user access to a restricted skill.
+// POST /api/skills/{slug}/assignments with body {username, version?}.
+// Idempotent: re-assigning replaces any prior version pin.
+func (c *Client) AssignSkill(slug, username, version string) error {
+	body, err := json.Marshal(map[string]string{"username": username, "version": version})
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	endpoint := fmt.Sprintf("/api/skills/%s/assignments", url.PathEscape(slug))
+	req, err := http.NewRequest(http.MethodPost, c.BaseURL+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return handleErrorResponse(resp, respBody, fmt.Sprintf("skill %q assign %q", slug, username))
+	}
+	return nil
+}
+
+// UnassignSkill revokes a user's grant.
+// DELETE /api/skills/{slug}/assignments/{username}.
+func (c *Client) UnassignSkill(slug, username string) error {
+	endpoint := fmt.Sprintf("/api/skills/%s/assignments/%s",
+		url.PathEscape(slug), url.PathEscape(username))
+	req, err := http.NewRequest(http.MethodDelete, c.BaseURL+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return handleErrorResponse(resp, body, fmt.Sprintf("skill %q unassign %q", slug, username))
+	}
+	return nil
+}
+
 // YankSkill calls DELETE /api/skills/{slug}. Yank is the default; pass hard=true
 // to truly delete (admin only on the relay either way).
 func (c *Client) YankSkill(slug string, hard bool) error {

@@ -39,7 +39,7 @@ func newRecipesRig(t *testing.T) *recipesRig {
 		t.Fatalf("seed admin: %v", err)
 	}
 
-	h := web.NewRecipesHandlers(svc, st, func(ctx context.Context) *store.User {
+	h := web.NewRecipesHandlers(svc, st, users, func(ctx context.Context) *store.User {
 		return server.UserFromContext(ctx)
 	})
 
@@ -285,6 +285,100 @@ func TestRecipesHandlers_DeleteAndHardDelete(t *testing.T) {
 	got, _ = rig.store.GetRecipeBySlug("dele")
 	if got != nil {
 		t.Errorf("expected gone, got %+v", got)
+	}
+}
+
+func TestRecipesHandlers_AssignmentLifecycle(t *testing.T) {
+	rig := newRecipesRig(t)
+	rig.userToInject = rig.admin
+
+	// Restricted recipe — only admin sees by default.
+	if _, err := rig.svc.Create(&recipes.CreateInput{
+		Slug: "secret-tool", RecipeType: store.RecipeTypeClaudePlugin,
+		RecipeData: json.RawMessage(`{"marketplace_source":"a/b","plugin":"x"}`),
+		Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	alice := rig.regularUser(t, "alice")
+
+	// Pre-grant: alice can't see it.
+	rig.userToInject = alice
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/recipes/secret-tool", nil))
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("pre-grant = %d, want 404", rw.Code)
+	}
+
+	// Admin grants.
+	rig.userToInject = rig.admin
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/recipes/secret-tool/assignments",
+		strings.NewReader(`{"username":"alice"}`)))
+	if rw.Code != http.StatusCreated {
+		t.Fatalf("assign = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	// Alice now sees it via direct GET and via /assigned.
+	rig.userToInject = alice
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/recipes/secret-tool", nil))
+	if rw.Code != http.StatusOK {
+		t.Errorf("post-grant direct GET = %d, want 200", rw.Code)
+	}
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/recipes/assigned", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("post-grant assigned = %d", rw.Code)
+	}
+	if !bytes.Contains(rw.Body.Bytes(), []byte("secret-tool")) {
+		t.Errorf("/assigned missing secret-tool: %s", rw.Body.String())
+	}
+
+	// Admin lists assignments.
+	rig.userToInject = rig.admin
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/recipes/secret-tool/assignments", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("list assignments = %d", rw.Code)
+	}
+	if !bytes.Contains(rw.Body.Bytes(), []byte(alice.ID)) {
+		t.Errorf("list missing alice: %s", rw.Body.String())
+	}
+
+	// Unassign.
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("DELETE", "/api/recipes/secret-tool/assignments/alice", nil))
+	if rw.Code != http.StatusNoContent {
+		t.Fatalf("unassign = %d", rw.Code)
+	}
+
+	// Post-unassign alice loses access.
+	rig.userToInject = alice
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/recipes/secret-tool", nil))
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("post-unassign = %d, want 404", rw.Code)
+	}
+}
+
+func TestRecipesHandlers_AssignNonAdminForbidden(t *testing.T) {
+	rig := newRecipesRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Create(&recipes.CreateInput{
+		Slug: "rec", RecipeType: store.RecipeTypeClaudePlugin,
+		RecipeData: json.RawMessage(`{"marketplace_source":"a/b","plugin":"x"}`),
+		Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rig.regularUser(t, "alice")
+	rig.userToInject = rig.regularUser(t, "bob")
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/recipes/rec/assignments",
+		strings.NewReader(`{"username":"alice"}`)))
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("non-admin assign = %d, want 403", rw.Code)
 	}
 }
 

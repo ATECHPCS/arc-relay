@@ -128,6 +128,55 @@ func (c *Client) CreateRecipe(req *CreateRecipeRequest) (*Recipe, error) {
 	return &out, nil
 }
 
+// AssignRecipe grants a user access to a restricted recipe.
+// POST /api/recipes/{slug}/assignments with body {username}.
+// Idempotent: re-assigning replaces the prior assigned_by/at fields.
+func (c *Client) AssignRecipe(slug, username string) error {
+	body, err := json.Marshal(map[string]string{"username": username})
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	endpoint := fmt.Sprintf("/api/recipes/%s/assignments", url.PathEscape(slug))
+	req, err := http.NewRequest(http.MethodPost, c.BaseURL+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return handleErrorResponse(resp, respBody, fmt.Sprintf("recipe %q assign %q", slug, username))
+	}
+	return nil
+}
+
+// UnassignRecipe revokes a user's grant.
+// DELETE /api/recipes/{slug}/assignments/{username}.
+func (c *Client) UnassignRecipe(slug, username string) error {
+	endpoint := fmt.Sprintf("/api/recipes/%s/assignments/%s",
+		url.PathEscape(slug), url.PathEscape(username))
+	req, err := http.NewRequest(http.MethodDelete, c.BaseURL+endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return handleErrorResponse(resp, body, fmt.Sprintf("recipe %q unassign %q", slug, username))
+	}
+	return nil
+}
+
 // YankRecipe calls DELETE /api/recipes/{slug}. Pass hard=true for true delete
 // (admin only on the relay either way).
 func (c *Client) YankRecipe(slug string, hard bool) error {

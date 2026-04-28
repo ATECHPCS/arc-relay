@@ -20,17 +20,19 @@ const recipesBodyLimit = 64 * 1024 // 64 KiB
 
 // RecipesHandlers wraps recipes.Service for HTTP. Like SkillsHandlers, it
 // uses a closure to pull the authenticated user from context so the package
-// stays free of an import-cycle dependency on internal/server.
+// stays free of an import-cycle dependency on internal/server. UserStore is
+// used only to resolve username → user_id for the assignment endpoints.
 type RecipesHandlers struct {
 	svc         *recipes.Service
 	store       *store.SetupRecipeStore
+	users       *store.UserStore
 	userFromCtx func(context.Context) *store.User
 }
 
-// NewRecipesHandlers creates RecipesHandlers wired to a recipes.Service and
-// the underlying store.
-func NewRecipesHandlers(svc *recipes.Service, st *store.SetupRecipeStore, userFromCtx func(context.Context) *store.User) *RecipesHandlers {
-	return &RecipesHandlers{svc: svc, store: st, userFromCtx: userFromCtx}
+// NewRecipesHandlers creates RecipesHandlers wired to the recipes service +
+// stores. userStore is for assignment endpoints (username → user_id resolution).
+func NewRecipesHandlers(svc *recipes.Service, st *store.SetupRecipeStore, users *store.UserStore, userFromCtx func(context.Context) *store.User) *RecipesHandlers {
+	return &RecipesHandlers{svc: svc, store: st, users: users, userFromCtx: userFromCtx}
 }
 
 // HandleRecipes routes /api/recipes. GET = list-for-user, POST = create (admin).
@@ -85,8 +87,8 @@ func (h *RecipesHandlers) HandleRecipeByPath(w http.ResponseWriter, r *http.Requ
 	rest := strings.TrimPrefix(r.URL.Path, "/api/recipes/")
 	parts := strings.Split(rest, "/")
 	slug := parts[0]
-	if slug == "" || len(parts) > 1 {
-		writeJSONError(w, http.StatusNotFound, "unknown subresource")
+	if slug == "" {
+		writeJSONError(w, http.StatusNotFound, "missing slug")
 		return
 	}
 	recipe, err := h.store.GetRecipeBySlug(slug)
@@ -101,30 +103,74 @@ func (h *RecipesHandlers) HandleRecipeByPath(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Read-side ACL: non-admins see public + their own assignments only.
-	if r.Method == http.MethodGet && user.Role != "admin" {
+	if r.Method == http.MethodGet && len(parts) == 1 && user.Role != "admin" {
 		if !h.userCanRead(user, recipe) {
 			writeJSONError(w, http.StatusNotFound, "recipe not found")
 			return
 		}
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, recipe)
-	case http.MethodPatch:
+	switch len(parts) {
+	case 1:
+		// /api/recipes/{slug}
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, recipe)
+		case http.MethodPatch:
+			if user.Role != "admin" {
+				writeJSONError(w, http.StatusForbidden, "admin access required")
+				return
+			}
+			h.update(w, r, recipe)
+		case http.MethodDelete:
+			if user.Role != "admin" {
+				writeJSONError(w, http.StatusForbidden, "admin access required")
+				return
+			}
+			h.delete(w, r, recipe)
+		default:
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case 2:
+		// /api/recipes/{slug}/assignments — admin only
+		if parts[1] != "assignments" {
+			writeJSONError(w, http.StatusNotFound, "unknown subresource")
+			return
+		}
 		if user.Role != "admin" {
 			writeJSONError(w, http.StatusForbidden, "admin access required")
 			return
 		}
-		h.update(w, r, recipe)
-	case http.MethodDelete:
+		switch r.Method {
+		case http.MethodGet:
+			h.listAssignments(w, recipe)
+		case http.MethodPost:
+			h.assignRecipe(w, r, recipe, user.ID)
+		default:
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case 3:
+		// /api/recipes/{slug}/assignments/{username} — DELETE only (admin)
+		if parts[1] != "assignments" {
+			writeJSONError(w, http.StatusNotFound, "unknown subresource")
+			return
+		}
 		if user.Role != "admin" {
 			writeJSONError(w, http.StatusForbidden, "admin access required")
 			return
 		}
-		h.delete(w, r, recipe)
+		username := parts[2]
+		if username == "" {
+			writeJSONError(w, http.StatusBadRequest, "missing username")
+			return
+		}
+		if r.Method != http.MethodDelete {
+			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.unassignRecipe(w, recipe, username)
 	default:
-		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeJSONError(w, http.StatusNotFound, "unknown subresource")
 	}
 }
 
@@ -291,4 +337,79 @@ func (h *RecipesHandlers) userCanRead(user *store.User, recipe *store.SetupRecip
 		}
 	}
 	return false
+}
+
+// listAssignments returns the existing grants for a recipe. Admin-only at the
+// route level — all callers reaching here have already passed the admin check.
+func (h *RecipesHandlers) listAssignments(w http.ResponseWriter, recipe *store.SetupRecipe) {
+	rows, err := h.store.ListAssignmentsForRecipe(recipe.ID)
+	if err != nil {
+		slog.Warn("recipes list assignments", "slug", recipe.Slug, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"assignments": rows})
+}
+
+// assignRecipe grants a user access to a restricted recipe. Body shape:
+//   {"username":"alice"}
+// Idempotent: re-assigning replaces the prior grant.
+func (h *RecipesHandlers) assignRecipe(w http.ResponseWriter, r *http.Request, recipe *store.SetupRecipe, adminID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "body unreadable")
+		return
+	}
+	var in assignBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if strings.TrimSpace(in.Username) == "" {
+		writeJSONError(w, http.StatusBadRequest, "username is required")
+		return
+	}
+	target, err := h.users.GetByUsername(in.Username)
+	if err != nil {
+		slog.Warn("recipes assign user lookup", "username", in.Username, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if target == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	a := &store.SetupRecipeAssignment{RecipeID: recipe.ID, UserID: target.ID}
+	if adminID != "" {
+		a.AssignedBy = &adminID
+	}
+	if err := h.store.AssignRecipe(a); err != nil {
+		slog.Warn("recipes assign", "slug", recipe.Slug, "user", in.Username, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusCreated, a)
+}
+
+// unassignRecipe revokes a grant. Returns 404 on unknown username so a typo
+// doesn't pass silently as an idempotent no-op.
+func (h *RecipesHandlers) unassignRecipe(w http.ResponseWriter, recipe *store.SetupRecipe, username string) {
+	target, err := h.users.GetByUsername(username)
+	if err != nil {
+		slog.Warn("recipes unassign user lookup", "username", username, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if target == nil {
+		writeJSONError(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err := h.store.UnassignRecipe(recipe.ID, target.ID); err != nil {
+		slog.Warn("recipes unassign", "slug", recipe.Slug, "user", username, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -54,7 +54,7 @@ func newSkillsRig(t *testing.T) *skillsRig {
 		t.Fatalf("seed admin: %v", err)
 	}
 
-	h := web.NewSkillsHandlers(svc, st, func(ctx context.Context) *store.User {
+	h := web.NewSkillsHandlers(svc, st, users, func(ctx context.Context) *store.User {
 		return server.UserFromContext(ctx)
 	})
 
@@ -446,6 +446,120 @@ func readGzipFirstFile(t *testing.T, b []byte) string {
 		t.Fatalf("tar read: %v", err)
 	}
 	return hdr.Name + ":" + string(contents)
+}
+
+func TestSkillsHandlers_AssignmentLifecycle(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	// Seed a restricted skill so visibility-gated reads matter.
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	alice := rig.regularUser(t, "alice")
+
+	// Pre-grant: alice cannot see the restricted skill.
+	rig.userToInject = alice
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/demo-skill", nil))
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("pre-grant non-admin GET = %d, want 404", rw.Code)
+	}
+
+	// Admin grants alice access (with a version pin).
+	rig.userToInject = rig.admin
+	body := `{"username":"alice","version":"1.0.0"}`
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/demo-skill/assignments", strings.NewReader(body)))
+	if rw.Code != http.StatusCreated {
+		t.Fatalf("assign = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	// Post-grant: alice now sees it.
+	rig.userToInject = alice
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/demo-skill", nil))
+	if rw.Code != http.StatusOK {
+		t.Errorf("post-grant non-admin GET = %d, want 200", rw.Code)
+	}
+
+	// Admin lists assignments and sees alice.
+	rig.userToInject = rig.admin
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/demo-skill/assignments", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("list assignments = %d", rw.Code)
+	}
+	if !bytes.Contains(rw.Body.Bytes(), []byte(`"user_id":"`+alice.ID+`"`)) {
+		t.Errorf("list missing alice: %s", rw.Body.String())
+	}
+
+	// Re-assign with a different version (should upsert, not error).
+	body2 := `{"username":"alice","version":"2.0.0"}`
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/demo-skill/assignments", strings.NewReader(body2)))
+	if rw.Code != http.StatusCreated {
+		t.Fatalf("re-assign = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	// Unassign.
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("DELETE", "/api/skills/demo-skill/assignments/alice", nil))
+	if rw.Code != http.StatusNoContent {
+		t.Fatalf("unassign = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	// Post-unassign: alice no longer sees the skill.
+	rig.userToInject = alice
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/demo-skill", nil))
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("post-unassign non-admin GET = %d, want 404", rw.Code)
+	}
+}
+
+func TestSkillsHandlers_AssignNonAdminForbidden(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rig.regularUser(t, "alice")
+	rig.userToInject = rig.regularUser(t, "bob")
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/demo-skill/assignments",
+		strings.NewReader(`{"username":"alice"}`)))
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("non-admin assign = %d, want 403", rw.Code)
+	}
+
+	rw = httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("DELETE", "/api/skills/demo-skill/assignments/alice", nil))
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("non-admin unassign = %d, want 403", rw.Code)
+	}
+}
+
+func TestSkillsHandlers_AssignRejectsUnknownUser(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "restricted",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/demo-skill/assignments",
+		strings.NewReader(`{"username":"nobody-such-user"}`)))
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("assign unknown user = %d, want 404", rw.Code)
+	}
 }
 
 func TestSkillsHandlers_DownloadArchiveContents(t *testing.T) {

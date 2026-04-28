@@ -31,6 +31,10 @@ func runSkill() {
 		runSkillSync()
 	case "push":
 		runSkillPush()
+	case "assign":
+		runSkillAssign()
+	case "unassign":
+		runSkillUnassign()
 	case "--help", "-h", "help":
 		printSkillUsage()
 	default:
@@ -60,6 +64,12 @@ Commands:
   push <dir> [--version V] [--visibility public|restricted]
                         Admin-only: package <dir> as a tar.gz and upload.
                         <dir> must contain SKILL.md at its root.
+  assign <slug> <username> [--version V]
+                        Admin-only: grant <username> access to a restricted
+                        skill. Optional --version pins them to a specific
+                        version (default: follow latest). Idempotent.
+  unassign <slug> <username>
+                        Admin-only: revoke <username>'s access to a skill.
 
 Skills install to ~/.claude/skills/<slug>/. arc-sync only touches directories
 it created (those carrying a .arc-sync-version marker file); manually-installed
@@ -313,6 +323,43 @@ func runSkillPush() {
 	}
 	fmt.Printf("Published %s@%s (%d bytes, sha256=%s)\n",
 		res.Skill.Slug, res.Version.Version, res.Version.ArchiveSize, res.Version.ArchiveSHA256)
+}
+
+func runSkillAssign() {
+	args := os.Args[3:]
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync skill assign <slug> <username> [--version V]")
+		os.Exit(1)
+	}
+	slug := args[0]
+	username := args[1]
+	version := getFlagValue(args[2:], "--version")
+	mgr := newSkillManager()
+	if err := mgr.Client.AssignSkill(slug, username, version); err != nil {
+		fmt.Fprintln(os.Stderr, "skill assign:", err)
+		os.Exit(1)
+	}
+	if version != "" {
+		fmt.Printf("Granted %s access to skill %s pinned at version %s\n", username, slug, version)
+	} else {
+		fmt.Printf("Granted %s access to skill %s (follows latest)\n", username, slug)
+	}
+}
+
+func runSkillUnassign() {
+	args := os.Args[3:]
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync skill unassign <slug> <username>")
+		os.Exit(1)
+	}
+	slug := args[0]
+	username := args[1]
+	mgr := newSkillManager()
+	if err := mgr.Client.UnassignSkill(slug, username); err != nil {
+		fmt.Fprintln(os.Stderr, "skill unassign:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Revoked %s access to skill %s\n", username, slug)
 }
 
 // emitJSON marshals v as pretty JSON and writes it to stdout. Used by the

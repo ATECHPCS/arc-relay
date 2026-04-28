@@ -34,6 +34,10 @@ func runRecipe() {
 		runRecipeSync()
 	case "push":
 		runRecipePush()
+	case "assign":
+		runRecipeAssign()
+	case "unassign":
+		runRecipeUnassign()
 	case "--help", "-h", "help":
 		printRecipeUsage()
 	default:
@@ -63,6 +67,11 @@ Commands:
                         is install-only and never auto-uninstalls (claude
                         plugin list does not distinguish recipe-installed
                         from hand-installed plugins).
+  assign <slug> <username>
+                        Admin-only: grant <username> access to a restricted
+                        recipe. Idempotent.
+  unassign <slug> <username>
+                        Admin-only: revoke <username>'s access to a recipe.
   push <slug>           Admin-only. Create a new claude_plugin recipe.
                         Required flags:
                           --marketplace SOURCE   github owner/repo, git URL, or local path
@@ -295,6 +304,38 @@ func runRecipePush() {
 		os.Exit(1)
 	}
 	fmt.Printf("Published recipe %s (plugin: %s, visibility: %s)\n", res.Slug, plugin, res.Visibility)
+}
+
+func runRecipeAssign() {
+	args := os.Args[3:]
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync recipe assign <slug> <username>")
+		os.Exit(1)
+	}
+	slug := args[0]
+	username := args[1]
+	mgr := newRecipeManager()
+	if err := mgr.Client.AssignRecipe(slug, username); err != nil {
+		fmt.Fprintln(os.Stderr, "recipe assign:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Granted %s access to recipe %s\n", username, slug)
+}
+
+func runRecipeUnassign() {
+	args := os.Args[3:]
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync recipe unassign <slug> <username>")
+		os.Exit(1)
+	}
+	slug := args[0]
+	username := args[1]
+	mgr := newRecipeManager()
+	if err := mgr.Client.UnassignRecipe(slug, username); err != nil {
+		fmt.Fprintln(os.Stderr, "recipe unassign:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Revoked %s access to recipe %s\n", username, slug)
 }
 
 // pluginField extracts the "plugin" field from raw recipe_data JSON for
