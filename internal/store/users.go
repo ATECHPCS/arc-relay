@@ -91,6 +91,10 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 		FROM users WHERE username = ?`, username,
 	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.Role, &user.AccessLevel, &user.DefaultProfileID, &user.MustChangePassword, &user.CreatedAt)
 	if err == sql.ErrNoRows {
+		// Run bcrypt against a dummy hash so the user-not-found path costs
+		// the same as the wrong-password path. Without this, response time
+		// (microseconds vs ~50ms) leaks which usernames exist.
+		_ = bcrypt.CompareHashAndPassword(dummyBcryptHash, []byte(password))
 		return nil, nil
 	}
 	if err != nil {
@@ -102,6 +106,21 @@ func (s *UserStore) Authenticate(username, password string) (*User, error) {
 	}
 
 	return user, nil
+}
+
+// dummyBcryptHash is a precomputed bcrypt hash used to pad timing on the
+// user-not-found path in Authenticate, mitigating username enumeration.
+// The plaintext is irrelevant — the hash exists only to give bcrypt
+// something legitimately shaped to verify against, and the comparison
+// always fails because no real account password matches.
+var dummyBcryptHash = mustGenerateDummyBcryptHash()
+
+func mustGenerateDummyBcryptHash() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing-padding"), bcrypt.DefaultCost)
+	if err != nil {
+		panic("bcrypt: failed to generate dummy hash for timing padding: " + err.Error())
+	}
+	return h
 }
 
 func (s *UserStore) Get(id string) (*User, error) {
