@@ -1,0 +1,93 @@
+{{define "title"}}Recipes · {{.Recipe.Slug}}{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>{{.Recipe.DisplayName}} <small style="color:#666; font-weight:normal;">/ <code>{{.Recipe.Slug}}</code></small></h2>
+  <a href="/recipes" class="btn">← Recipes</a>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Metadata</h3>
+  <table>
+    <tbody>
+      <tr><th>Slug</th><td><code>{{.Recipe.Slug}}</code></td></tr>
+      <tr><th>Display name</th><td>{{.Recipe.DisplayName}}</td></tr>
+      <tr><th>Description</th><td>{{if .Recipe.Description}}{{.Recipe.Description}}{{else}}<span style="color:#999;">—</span>{{end}}</td></tr>
+      <tr><th>Recipe type</th><td><code>{{.Recipe.RecipeType}}</code></td></tr>
+      <tr><th>Visibility</th>
+        <td>
+          {{if eq .Recipe.Visibility "public"}}
+            <span style="background:#e7f5ee; color:#1d6f3a; padding:0.15rem 0.5rem; border-radius:0.25rem;">public</span>
+          {{else}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem;">restricted</span>
+          {{end}}
+        </td>
+      </tr>
+      <tr><th>Status</th>
+        <td>
+          {{if .Recipe.YankedAt}}
+            <span style="color:#dc3545;">yanked</span>
+            (clients still on it keep working until next sync)
+          {{else}}
+            <span style="color:#1d6f3a;">active</span>
+          {{end}}
+        </td>
+      </tr>
+      <tr><th>Created</th><td>{{.Recipe.CreatedAt}}</td></tr>
+      <tr><th>Updated</th><td>{{.Recipe.UpdatedAt}}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Recipe payload</h3>
+  <p style="color:#666; font-size:0.9em;">Type-specific JSON used by <code>arc-sync recipe install</code> on the client. For <code>claude_plugin</code> recipes this is consumed as <code>claude plugin marketplace add &lt;marketplace_source&gt;</code> followed by <code>claude plugin install &lt;plugin&gt;</code>.</p>
+  <pre style="background:#1f2937; color:#e5e7eb; padding:0.75rem; border-radius:4px; overflow-x:auto; font-size:0.85em;">{{.PrettyData}}</pre>
+</div>
+
+{{if and .User (eq .User.Role "admin")}}
+<div class="card">
+  <h3 style="margin-top:0;">Admin actions</h3>
+  <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    {{if .Recipe.YankedAt}}
+    <form method="POST" action="/recipes/{{.Recipe.Slug}}/unyank" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn">Unyank recipe</button>
+    </form>
+    {{else}}
+    <form method="POST" action="/recipes/{{.Recipe.Slug}}/yank" style="display:inline;"
+          onsubmit="return confirm('Yank this recipe? Hides it from listings; clients that already installed the underlying plugin keep working.');">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn">Yank recipe</button>
+    </form>
+    {{end}}
+    <form method="POST" action="/recipes/{{.Recipe.Slug}}/delete" style="display:inline;"
+          onsubmit="return confirm('Permanently delete this recipe AND all its assignments? This cannot be undone.');">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button class="btn" style="background:#dc3545; color:#fff;">Hard delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Assignments (admin only)</h3>
+  {{if .Assignments}}
+  <table>
+    <thead>
+      <tr><th>User ID</th><th>Assigned by</th><th>Assigned at</th></tr>
+    </thead>
+    <tbody>
+      {{range .Assignments}}
+      <tr>
+        <td><code>{{.UserID}}</code></td>
+        <td>{{if .AssignedBy}}<code>{{deref .AssignedBy}}</code>{{else}}<span style="color:#999;">—</span>{{end}}</td>
+        <td>{{.AssignedAt}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p style="color:#666;">No explicit assignments. Public recipes are visible to all authenticated users automatically.</p>
+  {{end}}
+</div>
+{{end}}
+{{end}}

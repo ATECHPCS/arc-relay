@@ -1,0 +1,90 @@
+{{define "title"}}Recipes · New{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>New setup recipe</h2>
+  <a href="/recipes" class="btn">← Recipes</a>
+</div>
+
+<div class="card">
+  <p style="color:#666; font-size:0.9em;">v1 supports the <code>claude_plugin</code> recipe type. Each recipe describes one Claude Code plugin to install via <code>claude plugin marketplace add</code> + <code>claude plugin install</code>. <code>arc-sync recipe sync</code> on a new machine replays every assigned recipe.</p>
+</div>
+
+<div class="card">
+  {{if .Error}}
+  <div class="alert alert-danger">{{.Error}}</div>
+  {{end}}
+
+  <form method="POST" action="/recipes/new">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="slug">Slug</label>
+        <input type="text" id="slug" name="slug" value="{{index .Form "slug"}}" required
+               pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" placeholder="claude-mem">
+        <div class="help">Lowercase, hyphens only, ≥2 chars. Used in arc-sync CLI references.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="display_name">Display name (optional)</label>
+        <input type="text" id="display_name" name="display_name" value="{{index .Form "display_name"}}"
+               placeholder="Claude Mem">
+        <div class="help">Defaults to the slug.</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="description">Description (optional)</label>
+      <input type="text" id="description" name="description" value="{{index .Form "description"}}"
+             placeholder="Memory compression plugin for Claude Code">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="marketplace_source">Marketplace source</label>
+        <input type="text" id="marketplace_source" name="marketplace_source" value="{{index .Form "marketplace_source"}}" required
+               placeholder="thedotmack/claude-mem">
+        <div class="help">Argument to <code>claude plugin marketplace add</code>. Accepts <code>owner/repo</code>, git URL, or local path.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="plugin">Plugin identifier</label>
+        <input type="text" id="plugin" name="plugin" value="{{index .Form "plugin"}}" required
+               placeholder="claude-mem@thedotmack">
+        <div class="help">Argument to <code>claude plugin install</code>. Typical form is <code>name@marketplace</code>.</div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label for="sparse_paths">Sparse-checkout paths (optional)</label>
+      <input type="text" id="sparse_paths" name="sparse_paths" value="{{index .Form "sparse_paths"}}"
+             placeholder=".claude-plugin, plugins">
+      <div class="help">Comma-separated. Restricts the marketplace clone to specific directories (for monorepos). Leave blank for full clone.</div>
+    </div>
+
+    <div class="form-group">
+      <label>
+        <input type="checkbox" name="enabled" value="on"
+               {{if or (not .Form) (ne (index .Form "enabled") "off")}}checked{{end}}>
+        Enable plugin after install (default)
+      </label>
+      <div class="help">If unchecked, the recipe installs the plugin disabled — user has to <code>claude plugin enable</code> manually.</div>
+    </div>
+
+    <div class="form-group">
+      <label for="visibility">Visibility</label>
+      <select id="visibility" name="visibility">
+        <option value="restricted" {{if or (not .Form) (ne (index .Form "visibility") "public")}}selected{{end}}>restricted (default)</option>
+        <option value="public" {{if and .Form (eq (index .Form "visibility") "public")}}selected{{end}}>public</option>
+      </select>
+      <div class="help">
+        <strong>restricted</strong>: only users you explicitly assign see this recipe.
+        <strong>public</strong>: visible to all authenticated users automatically.
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Create recipe</button>
+    <a href="/recipes" class="btn" style="margin-left:0.5rem;">Cancel</a>
+  </form>
+</div>
+{{end}}

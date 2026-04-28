@@ -1,0 +1,58 @@
+{{define "title"}}Recipes{{end}}
+{{define "content"}}
+<div class="page-header">
+  <h2>Setup Recipes</h2>
+  {{if and .User (eq .User.Role "admin")}}
+  <a href="/recipes/new" class="btn btn-primary">+ New recipe</a>
+  {{end}}
+</div>
+
+<div class="card" style="background:#eef5fb; border:1px solid #b7d8eb; padding:0.75rem; border-radius:4px; margin-bottom:1rem; color:#235579;">
+  <strong>Setup recipes describe HOW to install third-party Claude Code plugins from upstream sources.</strong>
+  Unlike skills (your own bytes), recipes point at marketplaces clients install via <code>claude plugin install</code>.
+  Run <code>arc-sync recipe sync</code> on a new machine to replay every assigned recipe.
+</div>
+
+<div class="card">
+  {{if .Recipes}}
+  <table>
+    <thead>
+      <tr>
+        <th>Slug</th>
+        <th>Display name</th>
+        <th>Type</th>
+        <th>Visibility</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Recipes}}
+      <tr>
+        <td><code>{{.Slug}}</code></td>
+        <td>{{.DisplayName}}</td>
+        <td><span style="font-family: var(--mono); font-size:0.85em;">{{.RecipeType}}</span></td>
+        <td>
+          {{if eq .Visibility "public"}}
+            <span style="background:#e7f5ee; color:#1d6f3a; padding:0.15rem 0.5rem; border-radius:0.25rem; font-size:0.85em;">public</span>
+          {{else}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem; font-size:0.85em;">restricted</span>
+          {{end}}
+        </td>
+        <td>
+          {{if .YankedAt}}
+            <span style="color:#dc3545;">yanked</span>
+          {{else}}
+            <span style="color:#1d6f3a;">active</span>
+          {{end}}
+        </td>
+        <td><a href="/recipes/{{.Slug}}">View</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p>No recipes published.{{if and .User (eq .User.Role "admin")}} <a href="/recipes/new">Create one →</a>{{end}}</p>
+  {{end}}
+</div>
+{{end}}

@@ -141,7 +141,7 @@ func (s *Server) routes() {
 	})
 
 	// Web UI
-	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient, s.memSvc, s.skillSvc, s.skillStore)
+	webHandlers := web.NewHandlers(s.cfg, s.servers, s.users, s.proxy, s.oauthMgr, s.accessStore, s.profileStore, s.requestLogs, s.sessionStore, s.middlewareStore, s.mwRegistry, s.healthMon, s.inviteStore, s.oauthTokenStore, s.optimizeStore, s.llmClient, s.memSvc, s.skillSvc, s.skillStore, s.recipeSvc, s.recipeStore)
 	webHandlers.StartSessionCleanup(15 * time.Minute)
 	webHandlers.RegisterRoutes(s.mux)
 }
