@@ -21,6 +21,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
 	"github.com/comma-compliance/arc-relay/internal/proxy"
+	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
 )
@@ -49,11 +50,14 @@ type Server struct {
 	memHandlers        *web.MemoryHandlers
 	memMcp             *mcpmemory.Server
 	memSvc             *memory.Service
+	skillStore         *store.SkillStore
+	skillSvc           *skills.Service
+	skillHandlers      *web.SkillsHandlers
 	mux                *http.ServeMux
 }
 
 // New creates a new HTTP server.
-func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server, memSvc *memory.Service) *Server {
+func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore, proxyMgr *proxy.Manager, oauthMgr *oauth.Manager, accessStore *store.AccessStore, profileStore *store.ProfileStore, requestLogs *store.RequestLogStore, sessionStore *store.SessionStore, middlewareStore *store.MiddlewareStore, mwRegistry *middleware.Registry, healthMon *proxy.HealthMonitor, inviteStore *store.InviteStore, oauthTokenStore *store.OAuthTokenStore, optimizeStore *store.OptimizeStore, llmClient *llm.Client, messageStore *store.MessageStore, sessionMemoryStore *store.SessionMemoryStore, memHandlers *web.MemoryHandlers, memMcp *mcpmemory.Server, memSvc *memory.Service, skillStore *store.SkillStore, skillSvc *skills.Service, skillHandlers *web.SkillsHandlers) *Server {
 	s := &Server{
 		cfg:                cfg,
 		servers:            servers,
@@ -77,6 +81,9 @@ func New(cfg *config.Config, servers *store.ServerStore, users *store.UserStore,
 		memHandlers:        memHandlers,
 		memMcp:             memMcp,
 		memSvc:             memSvc,
+		skillStore:         skillStore,
+		skillSvc:           skillSvc,
+		skillHandlers:      skillHandlers,
 		mux:                http.NewServeMux(),
 	}
 	s.routes()
@@ -106,6 +113,13 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/memory/sessions",  apiAuth(http.HandlerFunc(s.memHandlers.HandleSessions)))
 	s.mux.Handle("/api/memory/sessions/", apiAuth(http.HandlerFunc(s.memHandlers.HandleSessionExtract)))
 	s.mux.Handle("/api/memory/stats",     apiAuth(http.HandlerFunc(s.memHandlers.HandleStats)))
+
+	// Skill repository endpoints (API key auth only).
+	// /api/skills/assigned must register BEFORE /api/skills/ so the longer
+	// path wins the ServeMux match.
+	s.mux.Handle("/api/skills/assigned", apiAuth(http.HandlerFunc(s.skillHandlers.HandleAssigned)))
+	s.mux.Handle("/api/skills",          apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkills)))
+	s.mux.Handle("/api/skills/",         apiAuth(http.HandlerFunc(s.skillHandlers.HandleSkillByPath)))
 
 	// Health check
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

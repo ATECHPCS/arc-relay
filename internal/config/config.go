@@ -16,8 +16,16 @@ type Config struct {
 	Encryption EncryptionConfig `toml:"encryption"`
 	Auth       AuthConfig       `toml:"auth"`
 	LLM        LLMConfig        `toml:"llm"`
+	Skills     SkillsConfig     `toml:"skills"`
 	SentryDSN  string           `toml:"sentry_dsn"`
 	LogLevel   string           `toml:"log_level"`
+}
+
+// SkillsConfig holds the on-disk location for skill bundle archives. Defaults
+// to "<dataDir>/skills" where dataDir is the directory containing Database.Path.
+// Override via TOML [skills] bundles_dir or env ARC_RELAY_SKILLS_DIR.
+type SkillsConfig struct {
+	BundlesDir string `toml:"bundles_dir"`
 }
 
 type LLMConfig struct {
@@ -99,6 +107,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("ARC_RELAY_MEMORY_DB_PATH"); v != "" {
 		cfg.Database.MemoryPath = v
+	}
+	if v := os.Getenv("ARC_RELAY_SKILLS_DIR"); v != "" {
+		cfg.Skills.BundlesDir = v
 	}
 	if v := os.Getenv("ARC_RELAY_BASE_URL"); v != "" {
 		cfg.Server.BaseURL = v
