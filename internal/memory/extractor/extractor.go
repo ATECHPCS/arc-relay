@@ -212,31 +212,30 @@ func (s *Service) coveredUUIDs(sessionID string) (map[string]bool, error) {
 	return out, nil
 }
 
-// addMemoryArgs is what we send to mem0.add_memory. mem0 accepts user_id +
-// agent_id + run_id as separate top-level keys; metadata is a free-form
-// dict for our own provenance fields.
+// addMemoryArgs is what we send to the code-memory MCP server's add_memory
+// tool. The wrapper exposes content/user_id/agent_id/metadata only — it does
+// NOT pass through run_id or custom_instructions to mem0. Session ID lives
+// in metadata.session_id; mem0 uses its default extractor (no steering).
+//
+// If extraction quality turns out poor, the lever is to either upgrade the
+// code-memory MCP server to expose custom_instructions, or pre-classify on
+// our side before sending — both deferred until we see real numbers.
 type addMemoryArgs struct {
-	Memory             string         `json:"memory"`
-	UserID             string         `json:"user_id"`
-	AgentID            string         `json:"agent_id"`
-	RunID              string         `json:"run_id"`
-	Metadata           map[string]any `json:"metadata"`
-	CustomInstructions string         `json:"custom_instructions,omitempty"`
+	Content  string         `json:"content"`
+	UserID   string         `json:"user_id"`
+	AgentID  string         `json:"agent_id,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // callAddMemory issues one tools/call against the code-memory MCP backend
-// and parses out the returned mem0 memory IDs. mem0's response shape (via
-// the code-memory MCP wrapper) is text content containing a JSON array of
-// memory objects with `id` fields; we tolerate either explicit list shapes
-// or a free-text wrap.
+// and parses out the returned mem0 memory IDs.
 func (s *Service) callAddMemory(ctx context.Context, backend Backend, c Chunk,
 	agentID string, sess *store.MemorySession) ([]string, error) {
 
 	args := addMemoryArgs{
-		Memory:             c.Text,
-		UserID:             sess.UserID,
-		AgentID:            agentID,
-		RunID:              sess.SessionID,
+		Content: c.Text,
+		UserID:  sess.UserID,
+		AgentID: agentID,
 		Metadata: map[string]any{
 			"project_dir":      sess.ProjectDir,
 			"session_id":       sess.SessionID,
@@ -244,7 +243,6 @@ func (s *Service) callAddMemory(ctx context.Context, backend Backend, c Chunk,
 			"last_seen_at":     sess.LastSeenAt,
 			"source_msg_uuids": c.UUIDs,
 		},
-		CustomInstructions: CustomInstructions,
 	}
 
 	params := map[string]any{
