@@ -5,6 +5,17 @@ All notable changes to Arc Relay (formerly MCP Wrangler) are documented here.
 ## [Unreleased]
 
 ### Added
+- **Memory dashboard Tier 1 UX upgrade** - `/memory` landing replaced the flat 5-row teaser with a project-clustered card grid; sessions list gained 25/page pagination + project filter; session detail gained a rich header (msg count / total chars / platform / last-seen) plus collapsible `<details>` for messages over 2,000 chars; search gained project + role + since-epoch filters and groups results by session. Epoch timestamps render as relative ("3m ago", "2h ago") with absolute UTC on hover; pre-formats int64 stats in the handler to dodge the int-only `commas` template helper.
+- **Memory extraction → mem0 (Phase B)** - distil transcripts into structured memories, surfaced via `/recall` alongside FTS5 hits.
+  - New `internal/memory/extractor` package: rule-based filter (drops tool/system messages, sub-20-character acknowledgements, bash/JSON envelopes), 5,000-char message-aligned chunker, `agent_id="transcripts-<sanitized-basename>"` derivation
+  - mem0 wired through the existing `code-memory` MCP backend (no direct mem0 client); username resolver maps relay UUID → `User.Username` so extracted memories share a namespace with the user's interactive `mcp__code-memory__*` calls
+  - New schema (`migrations-memory/002_memory_extractions.sql`): `last_extracted_at` column on `memory_sessions`, `memory_extractions` provenance table mapping each chunk to its returned mem0 memory IDs
+  - Three triggers: watcher 60s mtime quiescence after a successful ingest, server-side cron sweep every 30 minutes (cap 50 sessions/cycle, gates on `last_seen_at > 1h ago AND last_extracted_at < last_seen_at`), and manual `arc-sync memory extract <session-id>`
+  - Async extract endpoint — `POST /api/memory/extract` returns `202 Accepted` immediately and runs in a detached goroutine with a 30-minute timeout (sized for 100+ chunk sessions that exceed Cloudflare-tunnel-style 100s origin timeouts)
+  - Per-session `sync.Mutex` serializes overlapping cron + on-demand calls; idempotency guard skips chunks whose source UUIDs are already covered by a successful prior extraction row
+  - Blended `/recall` — `GET /api/memory/search` now fans out to mem0 in parallel and returns a new `memory_hits[]` array alongside FTS5 `hits[]`; CLI renders distilled memories above transcript hits with `[memory] (repo)` prefix
+  - `arc-sync memory extract <session-id>` CLI subcommand for forcing extraction
+  - Spec at `docs/superpowers/specs/2026-04-28-arc-relay-memory-extraction-design.md`
 - **Skill repository** - centralized Claude Code skill distribution
   - Three new tables (migration 015): `skills`, `skill_versions`, `skill_assignments` with public/restricted visibility, semver version pins, yank ≠ delete semantics
   - Tar.gz archives stored on disk under `<bundles_dir>/<slug>/<version>.tar.gz` (default `<db_dir>/skills`, mode 0700, atomic temp+rename); SHA-256 verified on download via `X-Skill-SHA256` response header
