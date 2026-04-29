@@ -180,6 +180,11 @@ func (s *Service) Extract(ctx context.Context, sessionID string) (*ExtractResult
 			row.Error.String = callErr.Error()
 			row.Error.Valid = true
 			result.Errors = append(result.Errors, callErr.Error())
+			slog.Warn("extract: chunk failed",
+				"session", sessionID,
+				"chunk", i,
+				"chunk_chars", c.Chars,
+				"err", callErr.Error())
 		} else {
 			result.MemoriesCreated += len(memIDs)
 		}
