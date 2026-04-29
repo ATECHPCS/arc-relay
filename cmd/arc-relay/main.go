@@ -204,6 +204,16 @@ func main() {
 			}
 			b, ok := proxyMgr.GetBackend(srv.ID)
 			return b, ok
+		},
+		// Username resolver: relay UUID → username. So mem0 stores under
+		// "ian" instead of "363e03f9-...", merging with the user's
+		// interactive code-memory namespace.
+		func(userID string) (string, bool) {
+			u, err := userStore.Get(userID)
+			if err != nil || u == nil {
+				return "", false
+			}
+			return u.Username, true
 		})
 	// extractorSvc.RunCron is started below after ctx is created.
 

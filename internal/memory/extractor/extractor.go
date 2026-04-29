@@ -23,6 +23,15 @@ type Backend interface {
 // time so the extractor survives backend reconnects without restart.
 type BackendResolver func() (Backend, bool)
 
+// UsernameResolver maps a relay user_id (UUID) to the user's username — the
+// human-readable identifier mem0 uses for its `user_id` field. We resolve at
+// extract time (not at session-ingest time) so renames flow through cleanly.
+//
+// Returns ("", false) if the user can't be resolved; callers fall back to
+// sending the UUID, which still works but namespaces the memory differently
+// than Claude Code's interactive `mcp__code-memory__*` calls.
+type UsernameResolver func(userID string) (string, bool)
+
 // Service orchestrates the extraction pipeline for a single transcript memory
 // store. One instance per arc-relay process.
 type Service struct {
@@ -30,21 +39,32 @@ type Service struct {
 	messages     *store.MessageStore
 	extractions  *store.ExtractionStore
 	backend      BackendResolver
+	resolveUser  UsernameResolver
 	chunkTarget  int
 	requestTimeout time.Duration
 	locks        sync.Map // session_id -> *sync.Mutex
 }
 
-// NewService builds an extractor wired to the given stores and backend
-// resolver. The resolver is called once per Extract — return (nil, false)
-// when mem0 isn't registered yet, and the call fails fast.
+// NewService builds an extractor wired to the given stores, backend
+// resolver, and username resolver. The backend resolver is called once
+// per Extract — return (nil, false) when mem0 isn't registered yet, and
+// the call fails fast.
+//
+// resolveUser may be nil — in which case the extractor sends the relay's
+// internal UUID to mem0. Strongly recommended to wire it: otherwise
+// extracted memories live under a different mem0 user_id than the user's
+// interactive Claude Code memories.
 func NewService(sessions *store.SessionMemoryStore, messages *store.MessageStore,
-	extractions *store.ExtractionStore, backend BackendResolver) *Service {
+	extractions *store.ExtractionStore, backend BackendResolver, resolveUser UsernameResolver) *Service {
+	if resolveUser == nil {
+		resolveUser = func(id string) (string, bool) { return "", false }
+	}
 	return &Service{
 		sessions:       sessions,
 		messages:       messages,
 		extractions:    extractions,
 		backend:        backend,
+		resolveUser:    resolveUser,
 		chunkTarget:    5000,
 		requestTimeout: 60 * time.Second,
 	}
@@ -232,9 +252,17 @@ type addMemoryArgs struct {
 func (s *Service) callAddMemory(ctx context.Context, backend Backend, c Chunk,
 	agentID string, sess *store.MemorySession) ([]string, error) {
 
+	// Resolve username so mem0 stores under the human-readable user_id ("ian")
+	// and shares a namespace with the user's interactive code-memory calls.
+	// Falls back to the relay UUID if the resolver can't find the user.
+	userID := sess.UserID
+	if name, ok := s.resolveUser(sess.UserID); ok && name != "" {
+		userID = name
+	}
+
 	args := addMemoryArgs{
 		Content: c.Text,
-		UserID:  sess.UserID,
+		UserID:  userID,
 		AgentID: agentID,
 		Metadata: map[string]any{
 			"project_dir":      sess.ProjectDir,
@@ -299,9 +327,16 @@ func (s *Service) SearchTranscriptMemories(ctx context.Context, userID, query st
 		return nil, nil // mem0 not wired; just no memory hits
 	}
 
+	// Map relay UUID → username so we hit the same mem0 namespace the
+	// extractor wrote into.
+	mem0UserID := userID
+	if name, ok := s.resolveUser(userID); ok && name != "" {
+		mem0UserID = name
+	}
+
 	args := map[string]any{
 		"query":   query,
-		"user_id": userID,
+		"user_id": mem0UserID,
 		"limit":   limit,
 	}
 	params := map[string]any{
