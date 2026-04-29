@@ -40,7 +40,7 @@
         </td>
         <td><span style="font-family:var(--mono); font-size:0.8rem;">{{.ProjectDir}}</span></td>
         <td><span class="badge badge-stdio" style="text-transform:none;">{{.Platform}}</span></td>
-        <td style="font-size:0.8rem; color:var(--text-muted);">{{.LastSeenAt}}</td>
+        <td style="font-size:0.8rem; color:var(--text-muted);" title="{{epochFmt .LastSeenAt}}">{{epochAgo .LastSeenAt}}</td>
         <td style="font-size:0.8rem; color:var(--text-muted);">{{.BytesSeen}}</td>
       </tr>
       {{end}}

@@ -28,8 +28,9 @@
       <div style="font-size:1.05rem; font-weight:600;">{{.Session.Platform}}</div>
     </div>
     <div>
-      <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Last seen (epoch)</div>
-      <div style="font-size:1.05rem; font-weight:600;">{{.Session.LastSeenAt}}</div>
+      <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Last seen</div>
+      <div style="font-size:1.05rem; font-weight:600;" title="{{epochFmt .Session.LastSeenAt}}">{{epochAgo .Session.LastSeenAt}}</div>
+      <div style="font-size:0.75rem; color:var(--text-muted); margin-top:0.15rem;">{{epochFmt .Session.LastSeenAt}}</div>
     </div>
   </div>
   <div style="margin-top:0.75rem; padding-top:0.75rem; border-top:1px solid var(--border); font-size:0.8rem; color:var(--text-muted);">

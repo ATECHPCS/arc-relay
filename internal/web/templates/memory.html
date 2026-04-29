@@ -48,7 +48,7 @@
     <div style="font-size:0.75rem; color:var(--text-muted); font-family:var(--mono); word-break:break-all; margin-bottom:0.5rem;">{{.ProjectDir}}</div>
     <div style="display:flex; gap:0.75rem; font-size:0.8rem; color:var(--text-muted);">
       <span>{{.SessionCount}} session{{if ne .SessionCount 1}}s{{end}}</span>
-      <span>last seen {{.LastSeenAt}}</span>
+      <span title="{{epochFmt .LastSeenAt}}">last seen {{epochAgo .LastSeenAt}}</span>
     </div>
   </a>
   {{end}}

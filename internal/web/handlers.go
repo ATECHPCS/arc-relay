@@ -262,6 +262,35 @@ func NewHandlers(cfg *config.Config, servers *store.ServerStore, users *store.Us
 			}
 			return commaFormat(s)
 		},
+		// epochFmt renders a Unix-epoch float64 as "2026-04-28 23:59 UTC".
+		// Returns "—" for zero/negative inputs (never-set fields).
+		"epochFmt": func(f float64) string {
+			if f <= 0 {
+				return "—"
+			}
+			return time.Unix(int64(f), 0).UTC().Format("2006-01-02 15:04 MST")
+		},
+		// epochAgo renders a Unix-epoch float64 as a compact relative duration
+		// ("3m ago", "2h ago", "5d ago"). Falls back to absolute date past 14 days.
+		"epochAgo": func(f float64) string {
+			if f <= 0 {
+				return "—"
+			}
+			t := time.Unix(int64(f), 0)
+			d := time.Since(t)
+			switch {
+			case d < time.Minute:
+				return "just now"
+			case d < time.Hour:
+				return fmt.Sprintf("%dm ago", int(d.Minutes()))
+			case d < 24*time.Hour:
+				return fmt.Sprintf("%dh ago", int(d.Hours()))
+			case d < 14*24*time.Hour:
+				return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+			default:
+				return t.UTC().Format("2006-01-02")
+			}
+		},
 		"pages": func(current, total int) []int {
 			// Returns page numbers to display, with -1 for ellipsis
 			if total <= 7 {
