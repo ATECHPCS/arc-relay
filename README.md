@@ -470,6 +470,71 @@ arc-sync memory install-service
 
 Distilled memories are stored in a mem0 instance reached via the `code-memory` MCP backend (e.g. `http://memory-mem0:8765/mcp` on a private Docker network). The relay never talks to mem0 directly — every call goes through the same `internal/proxy.Manager` that fronts every other MCP server, so credentials, retries, and connection pooling are uniform. If `code-memory` is not registered in the relay's server list, the extractor returns `ErrBackendUnavailable`, the cron loop logs and waits for the next cycle, and the rest of the relay continues normally.
 
+### Token economics
+
+Three different token consumers are involved. Knowing which calls cost what is the difference between a $1/month bill and a $50/month bill.
+
+#### Claude tokens (your Claude subscription)
+
+| Event | Claude tokens consumed | Notes |
+|---|---|---|
+| Cron extraction (every 30 min, server-side) | **0** | Runs inside `arc-relay` (Go), Claude is not involved |
+| Watcher quiescence (60s after session ends) | **0** | Runs inside `arc-sync` watcher (Go binary on your machine), Claude is not involved |
+| `arc-sync memory extract <id>` (manual) | **0** | Same — terminal CLI, no Claude in the path |
+| `/recall "query"` slash command | ~2–5K | Claude reads the blended response (distilled memories + FTS5 hits) into its conversation context |
+| Claude calling `mcp__code-memory__*` tools directly | ~500–2K per call | Tool call args + result both pass through the conversation |
+| **Session-start MCP load** (every new Claude Code session) | ~1.5–2.5K for code-memory's 8 tools | Paid even if no tool is ever invoked. This is in addition to every other MCP server's load cost |
+
+The pull-only model is the whole point of the pivot: with `claude-mem`, every SessionStart silently injected ~18K tokens of memory legend regardless of whether you needed it. With Phase B, the only Claude-billed costs are the per-session MCP load (~2K) plus whatever you explicitly recall during a session.
+
+#### OpenAI tokens (your mem0 instance's API key)
+
+This is where the real extraction cost lives. mem0 runs an LLM (gpt-4o-mini by default) on every `add_memory` call to perform the actual extraction.
+
+| Operation | Calls OpenAI? | Approx cost (gpt-4o-mini) |
+|---|---|---|
+| `add_memory` (cron, watcher, or manual extract) | Yes — full extraction pass | ~1.5K input + ~200 output tokens per chunk → **~$0.00035 per chunk** |
+| `search_memories` (used by `/recall` + interactive) | Yes — query embedding only | ~50 tokens, effectively free |
+| `delete_memory`, `get_all_memories`, `update_memory` | No LLM, just DB writes/reads | **$0** |
+
+At those rates, a typical session of 30 chunks costs ~$0.01 to extract. Steady-state at five sessions/day: ~$1.50/month. A full one-time backfill of ~1,000 historical sessions: ~$10.
+
+#### Cost-control levers
+
+- **The pre-extraction filter is your biggest knob.** Tiers 1–3 drop ~70% of messages before any LLM call (tool messages, sub-20-char acks, JSON/bash envelopes). If costs ever feel high, the next level is a similarity-dedup tier or a signal-regex pre-classifier.
+- **Cap on cron batches.** The cron loop processes at most 50 sessions per cycle. A worst-case sweep of 50 large sessions is bounded at roughly $0.50 in OpenAI cost.
+- **OpenAI spend cap.** Set a hard monthly limit on the API key in your OpenAI dashboard (`Settings → Billing → Usage limits`). The mem0 container's API key is the only thing this pipeline bills.
+
+### Monitoring mem0 spend
+
+The relay's `memory_extractions` table is the source of truth for what's been sent to mem0; OpenAI's billing dashboard is the source of truth for what was actually charged. Together they let you reconcile cost.
+
+**Counts via the relay**:
+
+```sql
+-- inside the arc-relay container's memory.db
+SELECT
+  COUNT(*)              AS total_chunks,
+  SUM(mem0_count)       AS total_mem0_memories,
+  SUM(chunk_chars)      AS total_chars_sent,
+  SUM(CASE WHEN error IS NOT NULL THEN 1 ELSE 0 END) AS failed_chunks,
+  date(extracted_at,'unixepoch')                    AS day
+FROM memory_extractions
+GROUP BY day
+ORDER BY day DESC
+LIMIT 14;
+```
+
+Multiply `total_chars_sent / 4` to get an approximate input-token count, then `× $0.00015 / 1000` for the gpt-4o-mini input cost.
+
+**Spend via OpenAI**:
+
+- Dashboard: https://platform.openai.com/usage — filter by the API key your mem0 container is using; daily/hourly granularity.
+- Programmatic: the `GET /v1/usage` endpoint returns per-day spend per API key. Useful if you want to wire a Grafana panel or a Slack alert.
+- Hard cap: `Settings → Billing → Usage limits` — set both a soft warning threshold and a hard monthly maximum on the API key.
+
+**Per-session inspection**: the dashboard's session detail page shows the source UUIDs and chunk count for any session, and the `memory_extractions.error` column captures any chunks that failed (so you can see whether you're paying for retries on a malformed transcript).
+
 ## Skill Repository
 
 Arc Relay can act as the source of truth for Claude Code skills. Admins publish skill bundles centrally; clients pull them on demand and reconcile via `arc-sync skill sync`. Replaces ad-hoc per-machine skill installs with a fleet model.
