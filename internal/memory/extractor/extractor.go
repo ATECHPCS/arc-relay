@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,8 +66,14 @@ func NewService(sessions *store.SessionMemoryStore, messages *store.MessageStore
 		extractions:    extractions,
 		backend:        backend,
 		resolveUser:    resolveUser,
-		chunkTarget:    5000,
-		requestTimeout: 60 * time.Second,
+		// 3000 chars (≈750-1000 tokens) keeps OpenAI's text-embedding-3-*
+		// model below its 8192-token input cap with comfortable headroom for
+		// mem0's internal concatenation of dedup-candidate metadata.
+		chunkTarget:    3000,
+		// 180s per add_memory call: production observation showed ~30% of
+		// chunks miss the previous 60s budget under load, while mem0's
+		// container is far from saturated — the wait is OpenAI latency.
+		requestTimeout: 180 * time.Second,
 	}
 }
 
@@ -161,9 +168,7 @@ func (s *Service) Extract(ctx context.Context, sessionID string) (*ExtractResult
 	agentID := Derive(sess.ProjectDir)
 	now := float64(time.Now().Unix())
 	for i, c := range chunks {
-		callCtx, cancel := context.WithTimeout(ctx, s.requestTimeout)
-		memIDs, callErr := s.callAddMemory(callCtx, backend, c, agentID, sess)
-		cancel()
+		memIDs, callErr := s.callAddMemoryWithRetry(ctx, backend, c, agentID, sess)
 
 		uuidsJSON, _ := json.Marshal(c.UUIDs)
 		idsJSON, _ := json.Marshal(memIDs)
@@ -250,6 +255,69 @@ type addMemoryArgs struct {
 	UserID   string         `json:"user_id"`
 	AgentID  string         `json:"agent_id,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+// callAddMemoryWithRetry calls mem0's add_memory tool once, retries on
+// transient errors (context-deadline-exceeded, context-canceled, SSE
+// stream errors). Each attempt gets a fresh requestTimeout context so the
+// retry has a full deadline budget.
+//
+// Two attempts max — if both fail, the chunk's row is written with the
+// final error and the cron loop will retry next time `last_seen_at`
+// advances.
+func (s *Service) callAddMemoryWithRetry(ctx context.Context, backend Backend, c Chunk,
+	agentID string, sess *store.MemorySession) ([]string, error) {
+
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		// Bail out if the parent context is already cancelled — no point
+		// burning a fresh per-call deadline on a doomed call.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		callCtx, cancel := context.WithTimeout(ctx, s.requestTimeout)
+		memIDs, err := s.callAddMemory(callCtx, backend, c, agentID, sess)
+		cancel()
+		if err == nil {
+			return memIDs, nil
+		}
+		lastErr = err
+		if !isRetryable(err) {
+			return nil, err
+		}
+		// Small jittered backoff so a thundering retry doesn't compound the
+		// load that caused the timeout in the first place.
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	return nil, lastErr
+}
+
+// isRetryable returns true for errors that are likely to succeed on a
+// retry — transient timeouts, context cancellations, and partial-stream
+// errors. Real protocol errors (mem0 4xx, malformed responses) are not
+// retried.
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "context deadline exceeded"):
+		return true
+	case strings.Contains(msg, "context canceled"):
+		return true
+	case strings.Contains(msg, "reading SSE stream"):
+		return true
+	case strings.Contains(msg, "EOF"):
+		return true
+	}
+	return false
 }
 
 // callAddMemory issues one tools/call against the code-memory MCP backend

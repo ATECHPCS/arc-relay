@@ -55,9 +55,10 @@ func (s *Service) cronCycle(ctx context.Context) {
 	var ok, fail int
 	for _, sid := range sessions {
 		// Per-session timeout via context — Extract uses its own per-call
-		// timeout for the mem0 send; this is just a circuit breaker on the
-		// whole extraction flow.
-		callCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		// timeout (180s) per chunk plus one retry on transient errors; this
+		// is just a circuit breaker on the whole extraction flow. 15 min
+		// fits a 30-chunk session at worst-case 30s/chunk with retries.
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 		_, err := s.Extract(callCtx, sid)
 		cancel()
 		if err != nil {
