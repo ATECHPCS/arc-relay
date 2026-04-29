@@ -215,6 +215,29 @@ func main() {
 			}
 			return u.Username, true
 		})
+
+	// Optional LLM classifier for memory categorization (Phase B Level 2).
+	// If ARC_RELAY_CLASSIFIER_API_KEY is set, every chunk gets a `category`
+	// metadata field (user/feedback/project/reference/none) before being
+	// sent to mem0. Adds ~$0.0002/chunk on top of mem0's extraction cost.
+	if classifierKey := os.Getenv("ARC_RELAY_CLASSIFIER_API_KEY"); classifierKey != "" {
+		classifierModel := os.Getenv("ARC_RELAY_CLASSIFIER_MODEL")
+		classifierBaseURL := os.Getenv("ARC_RELAY_CLASSIFIER_BASE_URL")
+		extractorSvc.SetClassifier(extractor.NewOpenAIClassifier(
+			classifierKey, classifierModel, classifierBaseURL))
+		modelLog := classifierModel
+		if modelLog == "" {
+			modelLog = "gpt-4o-mini"
+		}
+		baseLog := classifierBaseURL
+		if baseLog == "" {
+			baseLog = "https://api.openai.com/v1"
+		}
+		slog.Info("memory extractor classifier enabled",
+			"model", modelLog, "base_url", baseLog)
+	} else {
+		slog.Info("memory extractor classifier not configured (set ARC_RELAY_CLASSIFIER_API_KEY to enable)")
+	}
 	// extractorSvc.RunCron is started below after ctx is created.
 
 	memHandlers := web.NewMemoryHandlers(memSvc, extractorSvc, func(ctx context.Context) string {

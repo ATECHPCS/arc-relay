@@ -41,9 +41,18 @@ type Service struct {
 	extractions  *store.ExtractionStore
 	backend      BackendResolver
 	resolveUser  UsernameResolver
+	classifier   Classifier // optional; nil disables category metadata
 	chunkTarget  int
 	requestTimeout time.Duration
 	locks        sync.Map // session_id -> *sync.Mutex
+}
+
+// SetClassifier wires an optional classifier into the service. When set, every
+// chunk gets a `category` field added to its mem0 metadata before sending.
+// Pass nil (or never call this) to disable categorization — that keeps
+// behavior identical to the pre-classifier version.
+func (s *Service) SetClassifier(c Classifier) {
+	s.classifier = c
 }
 
 // NewService builds an extractor wired to the given stores, backend
@@ -333,17 +342,35 @@ func (s *Service) callAddMemory(ctx context.Context, backend Backend, c Chunk,
 		userID = name
 	}
 
+	metadata := map[string]any{
+		"project_dir":      sess.ProjectDir,
+		"session_id":       sess.SessionID,
+		"platform":         sess.Platform,
+		"last_seen_at":     sess.LastSeenAt,
+		"source_msg_uuids": c.UUIDs,
+	}
+
+	// Optional category from the LLM classifier. We deliberately don't fail
+	// the extraction on classifier errors — categorization is a nice-to-have,
+	// the underlying extraction is what matters. A classifier outage just
+	// produces uncategorized memories until the classifier comes back.
+	if s.classifier != nil {
+		clsCtx, clsCancel := context.WithTimeout(ctx, 30*time.Second)
+		category, err := s.classifier.Classify(clsCtx, c.Text)
+		clsCancel()
+		if err != nil {
+			slog.Warn("classifier failed",
+				"session", sess.SessionID, "err", err)
+		} else if category != "" {
+			metadata["category"] = category
+		}
+	}
+
 	args := addMemoryArgs{
-		Content: c.Text,
-		UserID:  userID,
-		AgentID: agentID,
-		Metadata: map[string]any{
-			"project_dir":      sess.ProjectDir,
-			"session_id":       sess.SessionID,
-			"platform":         sess.Platform,
-			"last_seen_at":     sess.LastSeenAt,
-			"source_msg_uuids": c.UUIDs,
-		},
+		Content:  c.Text,
+		UserID:   userID,
+		AgentID:  agentID,
+		Metadata: metadata,
 	}
 
 	params := map[string]any{
