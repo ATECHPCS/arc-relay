@@ -505,6 +505,20 @@ At those rates, a typical session of 30 chunks costs ~$0.01 to extract. Steady-s
 - **Cap on cron batches.** The cron loop processes at most 50 sessions per cycle. A worst-case sweep of 50 large sessions is bounded at roughly $0.50 in OpenAI cost.
 - **OpenAI spend cap.** Set a hard monthly limit on the API key in your OpenAI dashboard (`Settings → Billing → Usage limits`). The mem0 container's API key is the only thing this pipeline bills.
 
+#### Per-turn cost while a Claude Code session is active
+
+The Claude API is stateless — every turn re-sends the full conversation context plus all loaded MCP tool definitions. Without prompt caching this would be expensive; **with caching (which Claude Code uses automatically) the marginal cost per turn is small**.
+
+| Cache state | Rate (Opus 4.7) | Per 2K of `code-memory` definitions |
+|---|---|---|
+| Cache write (first turn or after expiry) | $18.75 / 1M tokens (1.25× input) | ~$0.0000375 |
+| Cache read (within 5 min idle window) | $1.50 / 1M tokens (0.10× input) | ~$0.000003 |
+| Cache TTL | 5 min default, 1 hour with extended cache | — |
+
+So having `code-memory` loaded adds roughly **$0.0001/hour** to an active session at ~30 turns/hour, all cache hits — well below noise. The dominant per-turn cost is whatever new content enters the conversation: your message + Claude's response + tool call/result pairs from any MCP tools you actually invoke.
+
+**Tool calls cost more than tool definitions.** A `search_memories` tool call returns 5–10K tokens of result content; `get_all_memories` without a tight `limit` can return 100K+. Those land in the conversation and inflate every subsequent turn's cached prefix. The economical way to use code-memory at runtime is `search_memories` with `limit ≤ 10` and avoid `get_all_memories` unless you need the dump.
+
 ### Monitoring mem0 spend
 
 The relay's `memory_extractions` table is the source of truth for what's been sent to mem0; OpenAI's billing dashboard is the source of truth for what was actually charged. Together they let you reconcile cost.
