@@ -53,8 +53,21 @@ type searchHit struct {
 }
 
 type searchResponse struct {
-	Hits   []searchHit `json:"hits"`
-	Banner string      `json:"banner"`
+	Hits       []searchHit `json:"hits"`
+	MemoryHits []memoryHit `json:"memory_hits"`
+	Banner     string      `json:"banner"`
+}
+
+// memoryHit is a distilled mem0 memory surfaced via /recall. Mirrors
+// extractor.MemoryHit on the relay side.
+type memoryHit struct {
+	ID         string  `json:"id"`
+	AgentID    string  `json:"agent_id"`
+	Memory     string  `json:"memory"`
+	Score      float64 `json:"score"`
+	SessionID  string  `json:"session_id,omitempty"`
+	ProjectDir string  `json:"project_dir,omitempty"`
+	LastSeenAt float64 `json:"last_seen_at,omitempty"`
 }
 
 // sessionRow mirrors store.MemorySession as marshaled by encoding/json with no
@@ -253,15 +266,40 @@ func formatSearchOutput(resp searchResponse) string {
 		b.WriteString(researchOnlyBanner)
 	}
 	b.WriteString("\n\n")
-	if len(resp.Hits) == 0 {
+
+	// Distilled mem0 memories first — they're already extracted facts, so
+	// they read better than 240-char transcript snippets.
+	if len(resp.MemoryHits) > 0 {
+		fmt.Fprintf(&b, "## %d distilled memor%s\n\n", len(resp.MemoryHits),
+			pluralize(len(resp.MemoryHits), "y", "ies"))
+		for _, m := range resp.MemoryHits {
+			repo := strings.TrimPrefix(m.AgentID, "transcripts-")
+			fmt.Fprintf(&b, "[memory] (%s) %s\n", repo, m.Memory)
+		}
+		b.WriteString("\n")
+	}
+
+	if len(resp.Hits) == 0 && len(resp.MemoryHits) == 0 {
 		b.WriteString("(no hits)\n")
 		return b.String()
 	}
-	for _, h := range resp.Hits {
-		fmt.Fprintf(&b, "[%s] %s  session=%s  score=%.2f\n%s\n\n",
-			h.Timestamp, strings.ToUpper(h.Role), h.SessionID, h.Score, h.Snippet)
+
+	if len(resp.Hits) > 0 {
+		fmt.Fprintf(&b, "## %d transcript hit%s\n\n", len(resp.Hits),
+			pluralize(len(resp.Hits), "", "s"))
+		for _, h := range resp.Hits {
+			fmt.Fprintf(&b, "[transcript %s] %s  session=%s  score=%.2f\n%s\n\n",
+				h.Timestamp, strings.ToUpper(h.Role), h.SessionID, h.Score, h.Snippet)
+		}
 	}
 	return b.String()
+}
+
+func pluralize(n int, single, plural string) string {
+	if n == 1 {
+		return single
+	}
+	return plural
 }
 
 func formatListOutput(rows []sessionRow) string {

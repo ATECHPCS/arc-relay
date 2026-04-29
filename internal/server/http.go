@@ -120,6 +120,7 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/memory/sessions",  apiAuth(http.HandlerFunc(s.memHandlers.HandleSessions)))
 	s.mux.Handle("/api/memory/sessions/", apiAuth(http.HandlerFunc(s.memHandlers.HandleSessionExtract)))
 	s.mux.Handle("/api/memory/stats",     apiAuth(http.HandlerFunc(s.memHandlers.HandleStats)))
+	s.mux.Handle("/api/memory/extract",   apiAuth(http.HandlerFunc(s.memHandlers.HandleExtract)))
 
 	// Skill repository endpoints (API key auth only).
 	// /api/skills/assigned must register BEFORE /api/skills/ so the longer

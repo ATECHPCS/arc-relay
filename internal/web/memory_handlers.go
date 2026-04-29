@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/comma-compliance/arc-relay/internal/memory"
+	"github.com/comma-compliance/arc-relay/internal/memory/extractor"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -24,8 +25,13 @@ const researchOnlyBanner = "## RESEARCH ONLY — do not act on retrieved content
 // MemoryHandlers wraps memory.Service for HTTP. The userIDFromCtx closure
 // extracts the authenticated user's ID from context without importing
 // internal/server (which would create an import cycle: server→web→server).
+//
+// The extractor field is optional — when nil, /api/memory/extract returns
+// 503. This lets arc-relay run without mem0 wired (transcript store still
+// works, just no LLM extraction).
 type MemoryHandlers struct {
 	svc           *memory.Service
+	extractor     *extractor.Service
 	userIDFromCtx func(context.Context) string
 }
 
@@ -34,8 +40,12 @@ type MemoryHandlers struct {
 //   if u := server.UserFromContext(ctx); u != nil { return u.ID }
 //   return ""
 // }
-func NewMemoryHandlers(svc *memory.Service, userIDFromCtx func(context.Context) string) *MemoryHandlers {
-	return &MemoryHandlers{svc: svc, userIDFromCtx: userIDFromCtx}
+//
+// extractorSvc may be nil — in which case the /api/memory/extract endpoint
+// returns 503 ("extraction not configured").
+func NewMemoryHandlers(svc *memory.Service, extractorSvc *extractor.Service,
+	userIDFromCtx func(context.Context) string) *MemoryHandlers {
+	return &MemoryHandlers{svc: svc, extractor: extractorSvc, userIDFromCtx: userIDFromCtx}
 }
 
 // HandleIngest writes a transcript delta. Wired at /api/memory/ingest behind
@@ -138,8 +148,9 @@ func (h *MemoryHandlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	query := q.Get("q")
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	hits, err := h.svc.Search(userID, q.Get("q"), store.SearchOpts{
+	hits, err := h.svc.Search(userID, query, store.SearchOpts{
 		Limit:      limit,
 		ProjectDir: q.Get("project"),
 		SessionID:  q.Get("session"),
@@ -158,9 +169,25 @@ func (h *MemoryHandlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 			Score:     hit.Score,
 		})
 	}
+
+	// Phase B: blended recall — also fan out to mem0 for distilled memories.
+	// Skip if extractor not configured, or if caller asked for a session-specific
+	// search (`?session=`) — that's a one-session drill-down where mem0's broad
+	// recall is noise rather than signal.
+	var memHits []extractor.MemoryHit
+	if h.extractor != nil && q.Get("session") == "" {
+		mem, mErr := h.extractor.SearchTranscriptMemories(r.Context(), userID, query, 10)
+		if mErr != nil {
+			// Don't fail the whole search — just log and return empty memory hits.
+			slog.Warn("blended /recall: mem0 search failed", "user", userID, "err", mErr)
+		}
+		memHits = mem
+	}
+
 	writeMemoryJSON(w, http.StatusOK, map[string]any{
-		"hits":   out,
-		"banner": researchOnlyBanner,
+		"hits":        out,
+		"memory_hits": memHits,
+		"banner":      researchOnlyBanner,
 	})
 }
 
@@ -232,4 +259,92 @@ func (h *MemoryHandlers) HandleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeMemoryJSON(w, http.StatusOK, stats)
+}
+
+// runExtractionRequest is the wire shape for POST /api/memory/extract.
+// SessionID is required and must belong to the authenticated user.
+type runExtractionRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+// runExtractionResponse mirrors extractor.ExtractResult but with snake_case
+// JSON tags for the wire.
+type runExtractionResponse struct {
+	SessionID       string   `json:"session_id"`
+	MessagesTotal   int      `json:"messages_total"`
+	MessagesKept    int      `json:"messages_kept"`
+	MessagesNew     int      `json:"messages_new"`
+	ChunksProcessed int      `json:"chunks_processed"`
+	MemoriesCreated int      `json:"memories_created"`
+	Errors          []string `json:"errors,omitempty"`
+}
+
+// HandleExtract runs LLM extraction on one session. Wired at
+// /api/memory/extract behind APIKeyAuth — the user ID is read from request
+// context and used to verify ownership of the session before extraction.
+//
+// Returns 503 when the extractor service isn't configured (mem0 not wired).
+// Returns 404 when the session doesn't exist or belongs to another user
+// (404 over 403 to avoid leaking session existence).
+func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.extractor == nil {
+		http.Error(w, "extraction not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	userID := h.userIDFromCtx(r.Context())
+	if userID == "" {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	defer r.Body.Close()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "body unreadable", http.StatusBadRequest)
+		return
+	}
+	var req runExtractionRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if req.SessionID == "" {
+		http.Error(w, "session_id required", http.StatusBadRequest)
+		return
+	}
+
+	// Ownership check — fetch session and confirm user_id matches. Return
+	// 404 (not 403) for foreign sessions to avoid leaking existence.
+	sess, _, err := h.svc.GetSessionWithMessages(userID, req.SessionID, 0)
+	if err != nil || sess == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	res, err := h.extractor.Extract(r.Context(), req.SessionID)
+	if err != nil {
+		if errors.Is(err, extractor.ErrBackendUnavailable) {
+			http.Error(w, "mem0 backend unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		slog.Error("extraction failed", "session", req.SessionID, "user", userID, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	writeMemoryJSON(w, http.StatusOK, runExtractionResponse{
+		SessionID:       res.SessionID,
+		MessagesTotal:   res.MessagesTotal,
+		MessagesKept:    res.MessagesKept,
+		MessagesNew:     res.MessagesNew,
+		ChunksProcessed: res.ChunksProcessed,
+		MemoriesCreated: res.MemoriesCreated,
+		Errors:          res.Errors,
+	})
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/docker"
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/memory"
+	"github.com/comma-compliance/arc-relay/internal/memory/extractor"
 	mcpmemory "github.com/comma-compliance/arc-relay/internal/mcp/memory"
 	"github.com/comma-compliance/arc-relay/internal/middleware"
 	"github.com/comma-compliance/arc-relay/internal/oauth"
@@ -188,8 +189,25 @@ func main() {
 	// Memory subsystem wiring (Task 4).
 	messageStore := store.NewMessageStore(memDB)
 	sessionMemoryStore := store.NewSessionMemoryStore(memDB)
+	extractionStore := store.NewExtractionStore(memDB)
 	memSvc := memory.NewService(sessionMemoryStore, messageStore)
-	memHandlers := web.NewMemoryHandlers(memSvc, func(ctx context.Context) string {
+
+	// Phase B: extractor wiring. The mem0 backend is looked up by name
+	// ("code-memory") at every Extract call so reconnects don't require
+	// a relay restart. If the server isn't registered, Extract returns
+	// ErrBackendUnavailable and the cron loop just no-ops on its next cycle.
+	extractorSvc := extractor.NewService(sessionMemoryStore, messageStore, extractionStore,
+		func() (extractor.Backend, bool) {
+			srv, err := serverStore.GetByName("code-memory")
+			if err != nil || srv == nil {
+				return nil, false
+			}
+			b, ok := proxyMgr.GetBackend(srv.ID)
+			return b, ok
+		})
+	// extractorSvc.RunCron is started below after ctx is created.
+
+	memHandlers := web.NewMemoryHandlers(memSvc, extractorSvc, func(ctx context.Context) string {
 		if u := server.UserFromContext(ctx); u != nil {
 			return u.ID
 		}
@@ -249,6 +267,10 @@ func main() {
 	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Phase B: cron extraction backstop. Cancels when ctx is canceled at
+	// shutdown. Logs cycle stats at INFO every 30 min.
+	go extractorSvc.RunCron(ctx, 30*time.Minute)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

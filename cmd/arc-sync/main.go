@@ -1789,7 +1789,7 @@ func getPositionalArg(args []string) string {
 
 func runMemory() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "usage: arc-sync memory <watch|install-service|search|list|stats|show> [args]")
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory <watch|install-service|search|list|stats|show|extract> [args]")
 		os.Exit(1)
 	}
 	switch os.Args[2] {
@@ -1805,10 +1805,61 @@ func runMemory() {
 		runMemoryStats()
 	case "show":
 		runMemoryShow()
+	case "extract":
+		runMemoryExtract()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown memory subcommand: %s\n", os.Args[2])
 		os.Exit(1)
 	}
+}
+
+// runMemoryExtract POSTs /api/memory/extract for one or more sessions.
+//   arc-sync memory extract <session-id>      # extract one session
+//   arc-sync memory extract --all-stale       # process every stale session
+func runMemoryExtract() {
+	if len(os.Args) < 4 {
+		fmt.Fprintln(os.Stderr, "usage: arc-sync memory extract <session-id|--all-stale>")
+		os.Exit(1)
+	}
+	configDir, err := config.DefaultConfigDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	creds, err := config.ResolveCredentials(configDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if creds.RelayURL == "" || creds.APIKey == "" {
+		fmt.Fprintln(os.Stderr, "no relay credentials")
+		os.Exit(1)
+	}
+	w := &sync.MemoryWatcher{
+		BaseURL:    creds.RelayURL,
+		APIKey:     creds.APIKey,
+		HTTPClient: &http.Client{Timeout: 5 * time.Minute},
+	}
+
+	if os.Args[3] == "--all-stale" {
+		// The relay's cron loop already does this. The CLI flag exists for
+		// "do it now, don't wait 30 minutes" — useful right after deploy
+		// or when debugging. We trigger it by calling the same endpoint
+		// the watcher uses for each known session, but we don't know the
+		// list from the CLI side. So instead, surface a hint:
+		fmt.Fprintln(os.Stderr,
+			"--all-stale runs server-side via the cron loop (every 30 min).")
+		fmt.Fprintln(os.Stderr,
+			"To extract a specific session immediately:  arc-sync memory extract <session-id>")
+		os.Exit(2)
+	}
+
+	sessionID := os.Args[3]
+	if err := w.PostExtract(sessionID); err != nil {
+		fmt.Fprintln(os.Stderr, "extract:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("extraction triggered for session %s\n", sessionID)
 }
 
 func runMemorySearch() {
@@ -1936,6 +1987,10 @@ func runMemoryWatch() {
 		StatePath:  filepath.Join(configDir, "memory_state.json"),
 		FlagPath:   filepath.Join(configDir, "wakeup.flag"),
 		HTTPClient: &http.Client{Timeout: 60 * time.Second},
+		// Phase B: 60s of mtime quiescence after a successful ingest signals
+		// "session ended" and triggers a POST /api/memory/extract. The cron
+		// loop on the relay backstops anything missed.
+		QuiescenceWindow: 60 * time.Second,
 	}
 	once := false
 	for _, a := range os.Args[3:] {

@@ -220,3 +220,49 @@ WHERE session_id = ?`, mtime, mtime, bytes, sessionID)
 	}
 	return nil
 }
+
+// MarkExtracted stamps last_extracted_at on a session. Cron + on-demand both
+// call this on a successful (or partial) Extract() pass; the column gates
+// whether ListStaleForExtraction picks the session up again.
+func (s *SessionMemoryStore) MarkExtracted(sessionID string, ts float64) error {
+	_, err := s.db.Exec(
+		`UPDATE memory_sessions SET last_extracted_at = ? WHERE session_id = ?`,
+		ts, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark extracted: %w", err)
+	}
+	return nil
+}
+
+// ListStaleForExtraction returns up to `limit` session IDs that are eligible
+// for the cron extraction backstop:
+//   - last_seen_at older than 1 hour ago (don't compete with watcher quiescence)
+//   - last_extracted_at is NULL OR strictly less than last_seen_at
+//
+// Ordered by last_seen_at DESC so newer-stale sessions extract first.
+func (s *SessionMemoryStore) ListStaleForExtraction(limit int) ([]string, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	rows, err := s.db.Query(`
+SELECT session_id
+FROM memory_sessions
+WHERE last_seen_at < (strftime('%s','now') - 3600)
+  AND (last_extracted_at IS NULL OR last_extracted_at < last_seen_at)
+ORDER BY last_seen_at DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list stale for extraction: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

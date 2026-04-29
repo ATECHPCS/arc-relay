@@ -32,7 +32,16 @@ type MemoryWatcher struct {
 	FlagPath   string // mtime change here triggers an immediate scan (Stop hook signal — Task 10)
 	HTTPClient *http.Client
 
+	// QuiescenceWindow is the silent period after a successful ingest that
+	// signals "session ended" — at which point we POST /api/memory/extract
+	// for that session. Zero (default) disables the extract trigger; the
+	// cron backstop on the relay still picks them up eventually.
+	QuiescenceWindow time.Duration
+
 	mu sync.Mutex
+	// quiescenceTimers maps session_id → pending timer. Reset on every
+	// ingest; fires PostExtract when the silence threshold is reached.
+	quiescenceTimers map[string]*time.Timer
 }
 
 type fileState struct {
@@ -215,18 +224,60 @@ func (w *MemoryWatcher) scan(st *stateFile) error {
 			JSONL:      delta,
 		}
 		body, _ := json.Marshal(req)
-		if err := w.post(body); err != nil {
+		resp, err := w.postIngest(body)
+		if err != nil {
 			fmt.Fprintln(os.Stderr, "memory watch ingest:", err)
 			return nil // do NOT advance watermark; retry next scan
 		}
 		fs.BytesSeen = size
 		fs.Mtime = mtime
+
+		// Phase B: schedule extract POST after a quiescence window. Reset
+		// the timer on every ingest for the same session; if no further
+		// bytes arrive within the window, fire the extract call.
+		if resp != nil && resp.MessagesAdded > 0 {
+			w.scheduleQuiescenceExtract(sessionID)
+		}
+
 		return w.saveState(st)
 	})
 }
 
-func (w *MemoryWatcher) post(body []byte) error {
-	req, err := http.NewRequest("POST", w.BaseURL+"/api/memory/ingest", bytes.NewReader(body))
+// scheduleQuiescenceExtract starts (or resets) a per-session timer. When
+// the timer fires, we POST /api/memory/extract for that session. If
+// QuiescenceWindow is 0, this is a no-op — the relay's cron loop is the
+// only extraction trigger.
+func (w *MemoryWatcher) scheduleQuiescenceExtract(sessionID string) {
+	if w.QuiescenceWindow <= 0 {
+		return
+	}
+	if w.quiescenceTimers == nil {
+		w.quiescenceTimers = map[string]*time.Timer{}
+	}
+	if t, ok := w.quiescenceTimers[sessionID]; ok {
+		t.Stop()
+	}
+	w.quiescenceTimers[sessionID] = time.AfterFunc(w.QuiescenceWindow, func() {
+		// Acquire the watcher lock so we don't race with concurrent scans
+		// modifying quiescenceTimers.
+		w.mu.Lock()
+		delete(w.quiescenceTimers, sessionID)
+		w.mu.Unlock()
+
+		if err := w.PostExtract(sessionID); err != nil {
+			fmt.Fprintln(os.Stderr, "memory watch extract:", err)
+			// Cron backstop on the relay will catch this on its next 30 min cycle.
+		}
+	})
+}
+
+// PostExtract POSTs /api/memory/extract for one session. Used by the
+// quiescence trigger and by `arc-sync memory extract <session-id>`.
+// Returns the relay's response decoded into ExtractResponse, or an error
+// if the call failed (network, auth, 4xx/5xx).
+func (w *MemoryWatcher) PostExtract(sessionID string) error {
+	body, _ := json.Marshal(map[string]string{"session_id": sessionID})
+	req, err := http.NewRequest("POST", w.BaseURL+"/api/memory/extract", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -239,10 +290,45 @@ func (w *MemoryWatcher) post(body []byte) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		buf, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ingest %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
+		return fmt.Errorf("extract %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+// ingestResponse mirrors memory.IngestResponse on the relay side.
+type ingestResponse struct {
+	MessagesAdded int   `json:"messages_added"`
+	EventsAdded   int   `json:"events_added"`
+	BytesSeen     int64 `json:"bytes_seen"`
+}
+
+// postIngest is the renamed-and-extended replacement for the previous
+// `post`. Returns the parsed ingest response so callers can decide whether
+// to schedule a follow-up extraction.
+func (w *MemoryWatcher) postIngest(body []byte) (*ingestResponse, error) {
+	req, err := http.NewRequest("POST", w.BaseURL+"/api/memory/ingest", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+w.APIKey)
+	resp, err := w.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		buf, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("ingest %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
+	}
+	var out ingestResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		// Don't fail the ingest on parse error — the bytes were accepted; we
+		// just can't trigger quiescence-based extraction for this delta.
+		return &ingestResponse{}, nil
+	}
+	return &out, nil
 }
 
 func readTail(path string, offset int64) ([]byte, error) {
