@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/memory"
 	"github.com/comma-compliance/arc-relay/internal/memory/extractor"
@@ -279,9 +280,14 @@ type runExtractionResponse struct {
 	Errors          []string `json:"errors,omitempty"`
 }
 
-// HandleExtract runs LLM extraction on one session. Wired at
-// /api/memory/extract behind APIKeyAuth — the user ID is read from request
-// context and used to verify ownership of the session before extraction.
+// HandleExtract kicks off LLM extraction on one session. Wired at
+// /api/memory/extract behind APIKeyAuth.
+//
+// Async by design: returns 202 (Accepted) immediately and runs extraction
+// in a detached goroutine. Large sessions (100+ chunks) take minutes to
+// process and would otherwise time out at the Cloudflare tunnel (524). The
+// response shape is intentionally minimal — caller polls Stats or watches
+// the dashboard for completion.
 //
 // Returns 503 when the extractor service isn't configured (mem0 not wired).
 // Returns 404 when the session doesn't exist or belongs to another user
@@ -327,24 +333,29 @@ func (h *MemoryHandlers) HandleExtract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.extractor.Extract(r.Context(), req.SessionID)
-	if err != nil {
-		if errors.Is(err, extractor.ErrBackendUnavailable) {
-			http.Error(w, "mem0 backend unavailable", http.StatusServiceUnavailable)
+	// Detach from request context so a client disconnect (CF 524, watcher
+	// goes away) doesn't cancel a multi-minute extraction. The per-session
+	// mutex inside extractor.Extract serializes if a duplicate request
+	// arrives.
+	go func(sid, uid string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		res, err := h.extractor.Extract(ctx, sid)
+		if err != nil {
+			slog.Error("async extraction failed", "session", sid, "user", uid, "err", err)
 			return
 		}
-		slog.Error("extraction failed", "session", req.SessionID, "user", userID, "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+		slog.Info("async extraction complete",
+			"session", sid,
+			"user", uid,
+			"chunks", res.ChunksProcessed,
+			"mems", res.MemoriesCreated,
+			"errors", len(res.Errors))
+	}(req.SessionID, userID)
 
-	writeMemoryJSON(w, http.StatusOK, runExtractionResponse{
-		SessionID:       res.SessionID,
-		MessagesTotal:   res.MessagesTotal,
-		MessagesKept:    res.MessagesKept,
-		MessagesNew:     res.MessagesNew,
-		ChunksProcessed: res.ChunksProcessed,
-		MemoriesCreated: res.MemoriesCreated,
-		Errors:          res.Errors,
+	writeMemoryJSON(w, http.StatusAccepted, map[string]any{
+		"session_id": req.SessionID,
+		"status":     "accepted",
+		"note":       "Extraction running asynchronously. Watch the relay log or query memory_extractions for completion.",
 	})
 }
