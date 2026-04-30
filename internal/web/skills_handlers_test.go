@@ -1142,6 +1142,173 @@ func TestSkillsHandlers_CheckDrift_405WrongMethod(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task 13: drift block on GET /api/skills and GET /api/skills/{slug}
+// ---------------------------------------------------------------------------
+
+// seedDriftedUpstream inserts an upstream row + writes a drift report so the
+// skill flips Outdated=1 with the full drift_* field set populated. Returns
+// the skill_id for follow-up assertions.
+func seedDriftedUpstream(t *testing.T, st *store.SkillStore, slug string) string {
+	t.Helper()
+	sk, err := st.GetSkillBySlug(slug)
+	if err != nil || sk == nil {
+		t.Fatalf("seedDriftedUpstream: skill %q lookup failed: %v", slug, err)
+	}
+	if err := st.UpsertUpstream(&store.SkillUpstream{
+		SkillID:      sk.ID,
+		UpstreamType: "git",
+		GitURL:       "https://github.com/example/repo",
+		GitSubpath:   "skills/demo",
+		GitRef:       "main",
+	}); err != nil {
+		t.Fatalf("seedDriftedUpstream: UpsertUpstream: %v", err)
+	}
+	if err := st.WriteDriftReport(sk.ID, &store.DriftReport{
+		RelayVersion:      "1.0.0",
+		RelayHash:         "relayhash-abcdef",
+		UpstreamSHA:       "deadbeef0000000000000000000000000000beef",
+		UpstreamHash:      "upstreamhash-abcdef",
+		CommitsAhead:      3,
+		Severity:          "major",
+		Summary:           "upstream introduced new features",
+		RecommendedAction: "review and pull",
+		LLMModel:          "test-model",
+		DetectedAt:        time.Now(),
+	}); err != nil {
+		t.Fatalf("seedDriftedUpstream: WriteDriftReport: %v", err)
+	}
+	return sk.ID
+}
+
+// TestSkillsHandlers_GetSkill_NoDrift: GET on a non-outdated skill should not
+// surface a drift key in the JSON response (omitempty contract).
+func TestSkillsHandlers_GetSkill_NoDrift(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/demo-skill", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("GET = %d body=%s", rw.Code, rw.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rw.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := raw["drift"]; ok {
+		t.Errorf("non-outdated skill response should omit drift key, got %s", rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_GetSkill_WithDrift: when Outdated=1 + a drift report is
+// recorded, the GET response includes a populated drift block with the
+// fields Task 14's CLI consumer will read.
+func TestSkillsHandlers_GetSkill_WithDrift(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed upload: %v", err)
+	}
+	seedDriftedUpstream(t, rig.store, "demo-skill")
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/demo-skill", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("GET = %d body=%s", rw.Code, rw.Body.String())
+	}
+	var resp struct {
+		Skill *store.Skill   `json:"skill"`
+		Drift map[string]any `json:"drift"`
+	}
+	if err := json.Unmarshal(rw.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Drift == nil {
+		t.Fatalf("drift block missing; body=%s", rw.Body.String())
+	}
+	for _, k := range []string{"severity", "summary", "recommended_action", "commits_ahead", "upstream_sha", "detected_at", "relay_version", "relay_hash", "llm_model"} {
+		if _, ok := resp.Drift[k]; !ok {
+			t.Errorf("drift.%s missing", k)
+		}
+	}
+	if got, _ := resp.Drift["severity"].(string); got != "major" {
+		t.Errorf("drift.severity = %q, want %q", got, "major")
+	}
+	if got, _ := resp.Drift["commits_ahead"].(float64); got != 3 {
+		t.Errorf("drift.commits_ahead = %v, want 3", resp.Drift["commits_ahead"])
+	}
+}
+
+// TestSkillsHandlers_ListSkills_MixedDrift: list endpoint with one outdated +
+// one fresh skill returns drift only on the outdated row.
+func TestSkillsHandlers_ListSkills_MixedDrift(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	// Outdated skill.
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, skillMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed outdated: %v", err)
+	}
+	seedDriftedUpstream(t, rig.store, "demo-skill")
+
+	// Fresh skill (no upstream, no drift).
+	freshMD := strings.Replace(skillMD, "demo-skill", "fresh-skill", 1)
+	if _, err := rig.svc.Upload(&skills.UploadInput{
+		Version: "1.0.0", Archive: makeArchive(t, freshMD), Visibility: "public",
+	}); err != nil {
+		t.Fatalf("seed fresh: %v", err)
+	}
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("list = %d body=%s", rw.Code, rw.Body.String())
+	}
+
+	// Decode into a permissive shape so we can probe per-row drift presence.
+	var resp struct {
+		Skills []map[string]json.RawMessage `json:"skills"`
+	}
+	if err := json.Unmarshal(rw.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Skills) != 2 {
+		t.Fatalf("skills len = %d, want 2; body=%s", len(resp.Skills), rw.Body.String())
+	}
+	var sawOutdated, sawFresh bool
+	for _, row := range resp.Skills {
+		var slug string
+		if err := json.Unmarshal(row["slug"], &slug); err != nil {
+			t.Fatalf("decode slug: %v", err)
+		}
+		_, hasDrift := row["drift"]
+		switch slug {
+		case "demo-skill":
+			sawOutdated = true
+			if !hasDrift {
+				t.Errorf("outdated skill missing drift key; row=%v", row)
+			}
+		case "fresh-skill":
+			sawFresh = true
+			if hasDrift {
+				t.Errorf("fresh skill should not include drift key; row=%v", row)
+			}
+		}
+	}
+	if !sawOutdated || !sawFresh {
+		t.Errorf("missing rows: outdated=%v fresh=%v", sawOutdated, sawFresh)
+	}
+}
+
 // TestSkillsHandlers_CheckDrift_503Disabled: rig built without a checker →
 // the handler reports 503. This is the production "cron disabled" path.
 func TestSkillsHandlers_CheckDrift_503Disabled(t *testing.T) {

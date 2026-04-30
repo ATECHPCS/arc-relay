@@ -65,7 +65,34 @@ func (h *SkillsHandlers) HandleSkills(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"skills": skillsList})
+	// Wrap each row so we can attach a per-skill drift block when present.
+	// Embedding *store.Skill keeps the existing wire shape intact for callers
+	// that ignore unknown fields; `omitempty` on Drift keeps non-outdated
+	// rows byte-identical to the pre-Task-13 response.
+	//
+	// N+1 query trade-off: GetUpstream runs once per outdated skill. Acceptable
+	// at admin scale (dozens of skills). If this ever lights up profiles, swap
+	// in a batched ListUpstreamsByIDs.
+	out := make([]skillResp, 0, len(skillsList))
+	for _, sk := range skillsList {
+		row := skillResp{Skill: sk}
+		if sk.Outdated == 1 {
+			if u, err := h.store.GetUpstream(sk.ID); err == nil {
+				row.Drift = driftBlockFromUpstream(u)
+			}
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"skills": out})
+}
+
+// skillResp is the per-row JSON shape for skill list/get endpoints. It embeds
+// *store.Skill so the existing field set is emitted unchanged, and adds an
+// optional drift block. `omitempty` ensures non-outdated rows match the pre-
+// Task-13 wire format byte-for-byte.
+type skillResp struct {
+	*store.Skill
+	Drift map[string]any `json:"drift,omitempty"`
 }
 
 // HandleAssigned returns the user's effective skill set: public + restricted-
@@ -290,10 +317,22 @@ func (h *SkillsHandlers) getSkill(w http.ResponseWriter, skill *store.Skill) {
 		writeJSONError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"skill":    skill,
 		"versions": versions,
-	})
+	}
+	// When the skill is flagged outdated, fetch the upstream row and surface
+	// the drift block alongside the skill. Same wire-shape contract as the
+	// list endpoint: missing/nil drift means the field is omitted entirely,
+	// so existing consumers stay unaffected.
+	if skill.Outdated == 1 {
+		if u, err := h.store.GetUpstream(skill.ID); err == nil {
+			if drift := driftBlockFromUpstream(u); drift != nil {
+				resp["drift"] = drift
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *SkillsHandlers) listVersions(w http.ResponseWriter, skill *store.Skill) {
