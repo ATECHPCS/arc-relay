@@ -366,6 +366,67 @@ func TestCheckoutSubpath_ExtractsContents(t *testing.T) {
 	}
 }
 
+func TestCheckoutSubpath_EmptySubpathExtractsFullTree(t *testing.T) {
+	src := makeTestRepo(t)
+	addCommit(t, src, map[string]string{
+		"a.txt":      "alpha",
+		"dir1/b.txt": "beta",
+	}, "fixture")
+
+	cache := filepath.Join(t.TempDir(), "cache")
+	if err := EnsureCache(context.Background(), cache, fileURL(src)); err != nil {
+		t.Fatalf("EnsureCache: %v", err)
+	}
+	sha, err := ResolveSHA(context.Background(), cache, "origin/main")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	if err := CheckoutSubpath(context.Background(), cache, sha, "", dest); err != nil {
+		t.Fatalf("CheckoutSubpath: %v", err)
+	}
+
+	if b, err := os.ReadFile(filepath.Join(dest, "a.txt")); err != nil {
+		t.Fatalf("expected dest/a.txt: %v", err)
+	} else if string(b) != "alpha" {
+		t.Fatalf("a.txt = %q, want %q", b, "alpha")
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "dir1", "b.txt")); err != nil {
+		t.Fatalf("expected dest/dir1/b.txt: %v", err)
+	} else if string(b) != "beta" {
+		t.Fatalf("dir1/b.txt = %q, want %q", b, "beta")
+	}
+}
+
+// TestLogPath_FullHistoryToSHA covers the fromSHA="" + toSHA != "" branch:
+// it should return every commit reachable from toSHA that touches the
+// subpath (i.e. full history, not a range).
+func TestLogPath_FullHistoryToSHA(t *testing.T) {
+	src := makeTestRepo(t)
+	// commit 2: only this one touches subpath/
+	addCommit(t, src, map[string]string{"unrelated1.txt": "x"}, "c1 unrelated")
+	addCommit(t, src, map[string]string{"subpath/file.txt": "v1"}, "c2 touches subpath")
+	addCommit(t, src, map[string]string{"unrelated2.txt": "y"}, "c3 unrelated")
+
+	cache := filepath.Join(t.TempDir(), "cache")
+	if err := EnsureCache(context.Background(), cache, fileURL(src)); err != nil {
+		t.Fatalf("EnsureCache: %v", err)
+	}
+	head, err := ResolveSHA(context.Background(), cache, "origin/main")
+	if err != nil {
+		t.Fatalf("resolve head: %v", err)
+	}
+
+	lines, err := LogPath(context.Background(), cache, "", head, "subpath/")
+	if err != nil {
+		t.Fatalf("LogPath: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly 1 commit touching subpath/, got %d: %v", len(lines), lines)
+	}
+}
+
 // ------------------------------------------------------------------
 // helpers
 // ------------------------------------------------------------------

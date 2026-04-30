@@ -130,9 +130,15 @@ func LogPath(ctx context.Context, cacheDir, fromSHA, toSHA, subpath string) ([]s
 // because it doesn't pollute cacheDir's index/HEAD and doesn't require us to
 // move files post-hoc.
 //
-// destDir is created if missing. After this returns, destDir contains exactly
-// what was at <sha>:<subpath>/ — no leading subpath component, no sibling
-// files.
+// destDir is created if missing. After this returns successfully, destDir
+// contains exactly what was at <sha>:<subpath>/ — no leading subpath
+// component, no sibling files.
+//
+// On error, destDir contents are undefined and may be partial or absent;
+// callers should treat destDir as opaque-on-error and either delete it or use
+// a fresh tempdir per call. (Implementation: on archive failure we kill tar
+// and best-effort `os.RemoveAll(destDir)` to avoid silently retaining a
+// partial extract.)
 func CheckoutSubpath(ctx context.Context, cacheDir, sha, subpath, destDir string) error {
 	if cacheDir == "" {
 		return fmt.Errorf("CheckoutSubpath: cacheDir must not be empty")
@@ -185,25 +191,38 @@ func CheckoutSubpath(ctx context.Context, cacheDir, sha, subpath, destDir string
 		_ = pr.Close()
 		return fmt.Errorf("CheckoutSubpath: start tar: %w", err)
 	}
+	// tar inherited a dup of pr; the parent doesn't need it any more. Defer
+	// so a panic between here and the end still releases the fd.
+	defer pr.Close()
+
 	if err := archiveCmd.Start(); err != nil {
 		_ = pw.Close()
-		_ = pr.Close()
 		_ = tarCmd.Process.Kill()
-		_, _ = tarCmd.Process.Wait()
+		_ = tarCmd.Wait()
 		return fmt.Errorf("CheckoutSubpath: start git archive: %w", err)
 	}
 
 	// archiveCmd writes to pw; once it exits we close pw so tar sees EOF.
+	// pw.Close() MUST be explicit (not deferred) because tar.Wait() blocks
+	// until tar sees EOF on its stdin — a deferred close would deadlock since
+	// defers run LIFO at function return, after tar.Wait().
 	archiveWait := archiveCmd.Wait()
-	_ = pw.Close()
-	tarWait := tarCmd.Wait()
-	_ = pr.Close()
-
 	if archiveWait != nil {
+		// Archive failed mid-stream. tar may still be sitting in read(2) on
+		// pr; kill it so it doesn't extract a partial archive into destDir
+		// and so tar.Wait() doesn't hang. Then nuke destDir best-effort to
+		// avoid leaving partial files for the caller to deal with.
+		_ = tarCmd.Process.Kill()
+		_ = tarCmd.Wait()
+		_ = pw.Close()
+		_ = os.RemoveAll(destDir)
 		return fmt.Errorf("CheckoutSubpath: git archive %s -- %s: %w: %s",
 			sha, clean, archiveWait, strings.TrimSpace(archiveErr.String()))
 	}
+	_ = pw.Close()
+	tarWait := tarCmd.Wait()
 	if tarWait != nil {
+		_ = os.RemoveAll(destDir)
 		return fmt.Errorf("CheckoutSubpath: tar extract: %w: %s",
 			tarWait, strings.TrimSpace(tarErr.String()))
 	}
