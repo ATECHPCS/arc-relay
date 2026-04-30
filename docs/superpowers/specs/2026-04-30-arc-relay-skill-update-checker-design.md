@@ -35,6 +35,7 @@ Skills like `odoo-toolbox@0.1.0` are pushed as frozen snapshots of upstream repo
 | 9 | Never auto-republish | Drift only updates the status flag; admin runs push manually after review |
 | 10 | LLM is optional — if no API key configured, fall back to `severity=unknown` + `git log --oneline` summary | Keeps the feature usable on relays without LLM credentials |
 | 11 | Drop drift-report history; inline latest drift fields on `skill_upstreams` row | Simpler schema; `git log` upstream gets full history back if ever needed |
+| 12 | Swap arc-relay's LLM client from Anthropic (`claude-haiku-4-5`) to OpenAI (`gpt-4o-mini`) as Phase 0 of this implementation | 6.7× cheaper input tokens; existing `mcp.OptimizeTools` callers keep working through the unchanged Go interface; production deploy needs an OpenAI API key swap at the same time |
 
 ## Architecture
 
@@ -398,9 +399,10 @@ Suggested phasing for the implementation plan that follows this spec:
 
 | Phase | Scope |
 |---|---|
+| 0 | Swap arc-relay LLM client from Anthropic (`claude-haiku-4-5`) to OpenAI (`gpt-4o-mini`). Re-implements `internal/llm/client.go` against OpenAI's chat completions API; existing `mcp.OptimizeTools` callers in `internal/web/handlers.go:3363` and `internal/server/http.go:1079` keep working through the unchanged Go interface. Update fixtures + production env var. |
 | 1 | Migration `017_skill_upstreams.sql`, `skill_upstreams` repo + Go bindings, push handler accepts upstream metadata, push clears drift fields. No checker yet. |
 | 2 | Subtree-hash function, sidecar TOML parser, CLI flags on `arc-sync skill push`. End-to-end push of a skill with upstream metadata. |
 | 3 | Drift checker (`internal/skills/checker/`), git fetch + log + hash diff, no LLM. Cron registration. Prometheus metrics. |
-| 4 | LLM integration (uses existing arc-relay client), structured output schema, fallback path, retries. |
+| 4 | LLM integration (reuses Phase 0's swapped client), structured output schema, fallback path, retries. |
 | 5 | `POST /api/skills/<slug>/check-drift` endpoint, `arc-sync skill check-updates` CLI command, list output extension. |
 | 6 | Tests across phases, doc updates (`docs/skills.md` if it exists), config knobs landed in `config.example.toml`. |
