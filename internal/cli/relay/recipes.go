@@ -202,7 +202,7 @@ func (c *Client) YankRecipe(slug string, hard bool) error {
 }
 
 // recipeHTTPError lets GetRecipe distinguish 404-not-found from network/auth
-// errors — symmetric with skillHTTPError.
+// errors — symmetric with SkillHTTPError.
 type recipeHTTPError struct {
 	Status int
 	err    error

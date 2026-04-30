@@ -4,7 +4,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -35,6 +37,8 @@ func runSkill() {
 		runSkillAssign()
 	case "unassign":
 		runSkillUnassign()
+	case "check-updates":
+		runSkillCheckUpdates()
 	case "--help", "-h", "help":
 		printSkillUsage()
 	default:
@@ -70,6 +74,13 @@ Commands:
                         version (default: follow latest). Idempotent.
   unassign <slug> <username>
                         Admin-only: revoke <username>'s access to a skill.
+  check-updates [<slug>]
+                        Ask the relay to compare each tracked skill against its
+                        recorded upstream and report drift. With <slug>, checks
+                        a single skill and prints a one-line summary plus the
+                        recommended action. Without args, iterates every skill
+                        on the relay; skills without upstream tracking are
+                        skipped silently.
 
 Skills install to ~/.claude/skills/<slug>/. arc-sync only touches directories
 it created (those carrying a .arc-sync-version marker file); manually-installed
@@ -160,8 +171,15 @@ func runSkillList() {
 		fmt.Printf("%-32s  %-10s  %-12s  %s\n", "SLUG", "VERSION", "VISIBILITY", "STATUS")
 		for _, s := range skills {
 			status := "active"
-			if s.YankedAt != nil {
+			switch {
+			case s.YankedAt != nil:
 				status = "yanked"
+			case s.Outdated == 1:
+				if s.Drift != nil && s.Drift.Severity != "" {
+					status = "outdated · " + s.Drift.Severity
+				} else {
+					status = "outdated"
+				}
 			}
 			ver := s.LatestVersion
 			if ver == "" {
@@ -373,6 +391,107 @@ func runSkillUnassign() {
 		os.Exit(1)
 	}
 	fmt.Printf("Revoked %s access to skill %s\n", username, slug)
+}
+
+// driftClient narrows the relay.Client surface area used by the check-updates
+// rendering helpers so tests can swap in a fake without spinning a real
+// httptest server. The real *relay.Client trivially satisfies it.
+type driftClient interface {
+	CheckDrift(slug string) (*relay.DriftBlock, error)
+	ListSkills() ([]*relay.Skill, error)
+}
+
+// runSkillCheckUpdates implements `arc-sync skill check-updates [<slug>]`.
+// With a slug it prints one of:
+//   - "up-to-date" (HTTP 204)
+//   - "outdated · <severity>: <summary>" plus the recommended action (HTTP 200)
+//   - a friendly error + exit 1 for 404 / 409 / 502
+//
+// Without a slug it iterates every skill the user can see and prints a
+// per-skill line. 409 ("no upstream configured") is treated as a no-op and
+// silently skipped — this is the expected case for hand-published skills.
+func runSkillCheckUpdates() {
+	args := os.Args[3:]
+	var slug string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		slug = args[0]
+	}
+	mgr := newSkillManager()
+	if err := checkUpdates(mgr.Client, slug, os.Stdout, os.Stderr); err != nil {
+		os.Exit(1)
+	}
+}
+
+// checkUpdates is the testable core of runSkillCheckUpdates. It takes a
+// driftClient (interface so tests can inject a fake) plus explicit writers
+// for stdout/stderr. Returns an error only when the operation should signal
+// non-zero exit (single-skill failure or initial ListSkills failure); the
+// per-skill iteration mode keeps going past errors and returns nil.
+func checkUpdates(c driftClient, slug string, stdout, stderr io.Writer) error {
+	if slug != "" {
+		drift, err := c.CheckDrift(slug)
+		if err != nil {
+			printCheckDriftError(stderr, err)
+			return err
+		}
+		if drift == nil {
+			fmt.Fprintln(stdout, "up-to-date")
+			return nil
+		}
+		fmt.Fprintf(stdout, "outdated · %s: %s\n", drift.Severity, drift.Summary)
+		if drift.RecommendedAction != "" {
+			fmt.Fprintln(stdout, drift.RecommendedAction)
+		}
+		return nil
+	}
+
+	// All-skills mode. Admin-scale iteration is fine — the relay caps at a
+	// few dozen skills. We swallow 409 (no upstream) since it's not actionable
+	// and surface other errors as warnings without aborting the loop.
+	skills, err := c.ListSkills()
+	if err != nil {
+		fmt.Fprintln(stderr, "skill check-updates:", err)
+		return err
+	}
+	for _, s := range skills {
+		drift, err := c.CheckDrift(s.Slug)
+		if err != nil {
+			var httpErr *relay.SkillHTTPError
+			if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+				// No upstream tracked for this skill — expected, skip.
+				continue
+			}
+			fmt.Fprintf(stderr, "%s: %s\n", s.Slug, err)
+			continue
+		}
+		if drift == nil {
+			fmt.Fprintf(stdout, "%s: up-to-date\n", s.Slug)
+			continue
+		}
+		fmt.Fprintf(stdout, "%s: outdated · %s\n", s.Slug, drift.Severity)
+	}
+	return nil
+}
+
+// printCheckDriftError translates SkillHTTPError statuses into the user-facing
+// strings the plan calls out, falling back to the wrapped error for anything
+// unexpected.
+func printCheckDriftError(stderr io.Writer, err error) {
+	var httpErr *relay.SkillHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusNotFound:
+			fmt.Fprintln(stderr, "skill not found")
+			return
+		case http.StatusConflict:
+			fmt.Fprintln(stderr, "no upstream tracking configured")
+			return
+		case http.StatusBadGateway:
+			fmt.Fprintln(stderr, "upstream fetch failed")
+			return
+		}
+	}
+	fmt.Fprintln(stderr, "skill check-updates:", err)
 }
 
 // emitJSON marshals v as pretty JSON and writes it to stdout. Used by the
