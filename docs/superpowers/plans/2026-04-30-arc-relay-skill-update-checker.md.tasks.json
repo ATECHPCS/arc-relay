@@ -1,6 +1,6 @@
 {
   "planPath": "docs/superpowers/plans/2026-04-30-arc-relay-skill-update-checker.md",
-  "lastUpdated": "2026-04-30T12:00:00Z",
+  "lastUpdated": "2026-04-30T18:00:00Z",
   "tasks": [
     {
       "id": 0,
@@ -31,82 +31,82 @@
     {
       "id": 4,
       "subject": "Task 4: Push handler accepts upstream metadata + clears drift",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [3],
       "description": "**Goal:** Extend uploadVersion in internal/web/skills_handlers.go to accept optional upstream JSON form field and clear_upstream boolean. Always clear drift fields on successful push for skills with an upstream row.\n\n**Files:**\n- Modify: internal/web/skills_handlers.go\n- Modify or create: internal/web/skills_handlers_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/web/ -run \"Skill.*[Uu]pload|Skill.*[Pp]ush|Upstream\" -v\n\n```json:metadata\n{\"files\": [\"internal/web/skills_handlers.go\", \"internal/web/skills_handlers_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/web/ -run \\\"Skill.*[Uu]pload|Skill.*[Pp]ush|Upstream\\\" -v\", \"acceptanceCriteria\": [\"Handler reads optional 'upstream' (JSON) and 'clear_upstream' (bool) form fields\", \"upstream JSON UPSERTs SkillStore row; clear_upstream=true DELETEs row\", \"Both absent leaves existing row untouched\", \"On any successful push, ClearDriftReport called if upstream row exists (placeholder hash for now; Task 11 wires real hash)\", \"Response JSON gains upstream_recorded boolean\", \"Tests cover all three side-effect cases\"]}\n```"
     },
     {
       "id": 5,
       "subject": "Task 5: Deterministic subtree hash function",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Implement the spec's subtree-hash algorithm in a new internal/skills/subhash package.\n\n**Files:**\n- Create: internal/skills/subhash/hash.go\n- Create: internal/skills/subhash/hash_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/subhash/... -v\n\n```json:metadata\n{\"files\": [\"internal/skills/subhash/hash.go\", \"internal/skills/subhash/hash_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/subhash/... -v\", \"acceptanceCriteria\": [\"func Hash(rootDir string) (string, error) returns hex SHA256\", \"Sorted file walk\", \"Skips .git/, .DS_Store, .gitignore-matched entries\", \"Per-file emit: relpath\\\\nmode-octal\\\\ncontent\\\\n\", \"Modes: 0o100644/0o100755/0o120000\", \"Streams content via io.Copy\", \"Tests cover empty/single/sorted/exec/symlink/gitignore/.git/identity/diff\"]}\n```"
     },
     {
       "id": 6,
       "subject": "Task 6: Sidecar TOML parser + CLI push integration",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [4],
       "description": "**Goal:** Parse .arc-sync/upstream.toml during arc-sync skill push; CLI flags override; send metadata as multipart upstream field.\n\n**Files:**\n- Create: internal/cli/sync/upstream.go\n- Create: internal/cli/sync/upstream_test.go\n- Modify: internal/cli/sync/skills.go\n- Modify: cmd/arc-sync/skill.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/cli/sync/ -run \"Upstream|Push\" -v\n\n```json:metadata\n{\"files\": [\"internal/cli/sync/upstream.go\", \"internal/cli/sync/upstream_test.go\", \"internal/cli/sync/skills.go\", \"cmd/arc-sync/skill.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/cli/sync/ -run \\\"Upstream|Push\\\" -v\", \"acceptanceCriteria\": [\"LoadUpstream(skillDir) returns nil for missing file\", \"WithOverrides applies CLI flag overrides\", \"--no-upstream sends clear_upstream=true\", \"Push request includes multipart 'upstream' JSON when metadata present\", \"Tests cover missing/malformed/merge/no-upstream\"]}\n```"
     },
     {
       "id": 7,
       "subject": "Task 7: Git fetch helper with cache dir lifecycle",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Wrap exec.Command(\"git\", ...) with clone-once-then-fetch lifecycle and corruption recovery.\n\n**Files:**\n- Create: internal/skills/checker/git.go\n- Create: internal/skills/checker/git_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -run \"Ensure|Resolve|LogPath\" -v\n\n```json:metadata\n{\"files\": [\"internal/skills/checker/git.go\", \"internal/skills/checker/git_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -run \\\"Ensure|Resolve|LogPath\\\" -v\", \"acceptanceCriteria\": [\"EnsureCache: clone fresh, fetch existing, re-clone on corruption\", \"ResolveSHA returns trimmed git rev-parse output\", \"LogPath returns lines from git log <from>..<to> -- <subpath> --oneline\", \"CheckoutSubpath extracts subpath at SHA into destDir\", \"All accept ctx for cancellation\", \"Tests use t.TempDir() git repos, no network\"]}\n```"
     },
     {
       "id": 8,
       "subject": "Task 8: Two-stage detection function",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [5, 7],
       "description": "**Goal:** Compose EnsureCache + ResolveSHA + LogPath + subhash.Hash into Detect() returning the four-outcome Detection struct.\n\n**Files:**\n- Create: internal/skills/checker/detect.go\n- Create: internal/skills/checker/detect_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -run \"Detect\" -v\n\n```json:metadata\n{\"files\": [\"internal/skills/checker/detect.go\", \"internal/skills/checker/detect_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -run \\\"Detect\\\" -v\", \"acceptanceCriteria\": [\"Detection enum: NoMovement/NoPathTouch/RevertedToSame/Drift\", \"Detect() implements three skip paths in order\", \"On Drift: populates ChangedFiles + truncated DiffSummary\", \"Tests cover all four outcomes via fixture repos\"]}\n```"
     },
     {
       "id": 9,
       "subject": "Task 9: Cron + Prometheus metrics + main wiring",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [3, 8],
       "description": "**Goal:** Drop the daily cron alongside extractor.RunCron; introduce minimal SkillsCheckerConfig (Task 15 will expand).\n\n**Files:**\n- Create: internal/skills/checker/cron.go\n- Create: internal/skills/checker/metrics.go\n- Create: internal/skills/checker/service.go\n- Modify: cmd/arc-relay/main.go\n- Modify: internal/config/config.go (introduce minimal SkillsCheckerConfig — Task 15 expands)\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -v && go build ./...\n\n```json:metadata\n{\"files\": [\"internal/skills/checker/cron.go\", \"internal/skills/checker/metrics.go\", \"internal/skills/checker/service.go\", \"cmd/arc-relay/main.go\", \"internal/config/config.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -v && go build ./...\", \"acceptanceCriteria\": [\"Service struct holds skills/llm/cfg\", \"RunCron matches extractor.RunCron pattern\", \"RunOnce(ctx) does one full pass; usable from cron and HTTP endpoint\", \"checkOne handles 4 detection outcomes; placeholder severity=unknown for Drift (Task 11 fills)\", \"Prometheus counters arc_relay_skill_checks_total + duration histogram registered\", \"main.go starts the goroutine after extractor cron\", \"Integration test seeds skill+upstream+fixture repo and asserts row update\"]}\n```"
     },
     {
       "id": 10,
       "subject": "Task 10: LLM classifier + fallback synthesis",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [0],
       "description": "**Goal:** Build Classify(ctx, llm, skill, det) returning a DriftReport. LLM path uses structured JSON; fallback synthesizes from changed-files + git log.\n\n**Files:**\n- Create: internal/skills/checker/llm.go\n- Create: internal/skills/checker/llm_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -run \"Classify|Fallback\" -v\n\n```json:metadata\n{\"files\": [\"internal/skills/checker/llm.go\", \"internal/skills/checker/llm_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/skills/checker/... -run \\\"Classify|Fallback\\\" -v\", \"acceptanceCriteria\": [\"Prompt matches spec sketch\", \"Parsed response validates severity/summary/recommended_action\", \"Invalid JSON falls back, doesn't error the cron\", \"Fallback summary uses git log --oneline output and severity=unknown\", \"Tests use httptest stub of OpenAI + no-LLM path\"]}\n```"
     },
     {
       "id": 11,
       "subject": "Task 11: Wire LLM into checker; persist drift fields + real hash on push",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [9, 10],
       "description": "**Goal:** Replace placeholder writes in checkOne with real Classify() call. Compute real subtree hash from uploaded tarball during push and pass to ClearDriftReport.\n\n**Files:**\n- Modify: internal/skills/checker/service.go\n- Modify: internal/web/skills_handlers.go\n- Modify: internal/skills/service.go (add tarball-extract-and-hash helper)\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./... -run \"Drift|Checker\" -v\n\n```json:metadata\n{\"files\": [\"internal/skills/checker/service.go\", \"internal/web/skills_handlers.go\", \"internal/skills/service.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./... -run \\\"Drift|Checker\\\" -v\", \"acceptanceCriteria\": [\"checkOne flows through Classify\", \"Push computes real subtree hash before ClearDriftReport\", \"Integration test: push -> cron -> drift detected -> report written, with stubbed OpenAI\", \"No-LLM-key integration test: same flow, fallback severity=unknown\"]}\n```"
     },
     {
       "id": 12,
       "subject": "Task 12: POST /api/skills/<slug>/check-drift endpoint",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [11],
       "description": "**Goal:** On-demand HTTP endpoint, admin-only, calls checker.Service.RunOneSlug.\n\n**Files:**\n- Modify: internal/web/skills_handlers.go\n- Modify: internal/server/http.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/web/ -run \"CheckDrift\" -v\n\n```json:metadata\n{\"files\": [\"internal/web/skills_handlers.go\", \"internal/server/http.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/web/ -run \\\"CheckDrift\\\" -v\", \"acceptanceCriteria\": [\"Admin-only POST /api/skills/<slug>/check-drift\", \"200 with drift JSON, 204 no drift, 404 unknown, 409 no upstream, 502 fetch fail\", \"60s timeout\", \"Tests for each status code\"]}\n```"
     },
     {
       "id": 13,
       "subject": "Task 13: Extend GET /api/skills with drift block",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [3],
       "description": "**Goal:** When skill.outdated=1, include drift object in JSON. Existing consumers (which ignore unknown fields) keep working.\n\n**Files:**\n- Modify: internal/web/skills_handlers.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/web/ -run \"Skill.*[Dd]rift|GetSkill\" -v\n\n```json:metadata\n{\"files\": [\"internal/web/skills_handlers.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/web/ -run \\\"Skill.*[Dd]rift|GetSkill\\\" -v\", \"acceptanceCriteria\": [\"getSkill returns drift block when present\", \"List endpoint includes drift per-row when present\", \"Tests assert presence/absence\"]}\n```"
     },
     {
       "id": 14,
       "subject": "Task 14: arc-sync skill check-updates + list display",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [12, 13],
       "description": "**Goal:** Wire CLI consumers — new check-updates subcommand and extended list --remote that shows outdated · <severity>.\n\n**Files:**\n- Modify: cmd/arc-sync/skill.go\n- Modify: internal/cli/sync/skills.go\n\n**Verify:** Manual smoke + CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/cli/sync/... ./cmd/arc-sync/...\n\n```json:metadata\n{\"files\": [\"cmd/arc-sync/skill.go\", \"internal/cli/sync/skills.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/cli/sync/... ./cmd/arc-sync/...\", \"acceptanceCriteria\": [\"arc-sync skill check-updates <slug> calls endpoint and prints summary\", \"No-slug form iterates all skills with declared upstreams\", \"list --remote shows 'outdated · <severity>' in STATUS column\", \"--json includes drift block per row\", \"Tests for both commands\"]}\n```"
     },
     {
       "id": 15,
       "subject": "Task 15: Config block + documentation",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [9, 11],
       "description": "**Goal:** Wire SkillsCheckerConfig into config.example.toml and internal/config/config.go. Update README + docs/skills.md.\n\n**Files:**\n- Modify: internal/config/config.go\n- Modify: config.example.toml\n- Modify: README.md\n- Modify: docs/skills.md (or create)\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./... && go build ./...\n\n```json:metadata\n{\"files\": [\"internal/config/config.go\", \"config.example.toml\", \"README.md\", \"docs/skills.md\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./... && go build ./...\", \"acceptanceCriteria\": [\"SkillsCheckerConfig fields: Enabled, Interval, UpstreamCacheDir, GitCloneTimeout, LLMModel, LLMDiffMaxBytes, LLMPerFileMaxBytes\", \"Env-var overrides for Enabled/Interval/UpstreamCacheDir\", \"Defaults match spec\", \"config.example.toml documents stanza\", \"README links to docs section\", \"All tests pass + go build clean\"]}\n```"
     }
