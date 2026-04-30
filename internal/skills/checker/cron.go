@@ -102,6 +102,137 @@ func (s *Service) RunOnce(ctx context.Context) {
 		"ms", time.Since(start).Milliseconds())
 }
 
+// fetchAndDetect runs EnsureCache + Detect for a single upstream and returns
+// the resulting Detection along with the (lastSeenSHA, lastSeenHash) pair we
+// fed in (callers need the latter for the persistence step). Errors here are
+// what HTTP callers map to OutcomeFetchFailed and the cron logs/counts as
+// "error". The prometheus timer + error-counter bookkeeping lives in callers
+// so this stays a pure helper.
+func (s *Service) fetchAndDetect(ctx context.Context, u *store.SkillUpstream) (det *Detection, lastSeenSHA, lastSeenHash string, err error) {
+	cacheDir := s.cacheDirFor(u)
+	if err := EnsureCache(ctx, cacheDir, u.GitURL); err != nil {
+		return nil, "", "", fmt.Errorf("ensure cache: %w", err)
+	}
+
+	ref := &UpstreamRef{
+		GitSubpath: u.GitSubpath,
+		GitRef:     u.GitRef,
+	}
+	lastSeenSHA = strDeref(u.LastSeenSHA)
+	lastSeenHash = strDeref(u.LastSeenHash)
+
+	det, err = Detect(ctx, ref, lastSeenSHA, lastSeenHash, cacheDir, s.cfg.LLMDiffMaxBytes)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("detect: %w", err)
+	}
+	return det, lastSeenSHA, lastSeenHash, nil
+}
+
+// applyDetection persists the result of a Detect() call: bumps the upstream's
+// last_checked / last_seen pointers for the three "no drift" outcomes, or
+// runs Classify + WriteDriftReport for ResultDrift. Returns the CheckOutcome
+// the caller should report (UpToDate or Drift). Errors are returned for
+// callers to wrap; checksTotal bookkeeping is the caller's responsibility.
+func (s *Service) applyDetection(ctx context.Context, u *store.SkillUpstream, det *Detection, lastSeenHash string, now time.Time) (CheckOutcome, error) {
+	switch det.Result {
+	case ResultNoMovement, ResultNoPathTouch, ResultRevertedToSame:
+		if err := s.skills.UpdateUpstreamCheck(u.SkillID, det.NewSHA, lastSeenHash, now); err != nil {
+			return 0, fmt.Errorf("update upstream check: %w", err)
+		}
+		return OutcomeUpToDate, nil
+
+	case ResultDrift:
+		skill, err := s.skills.GetSkill(u.SkillID)
+		if err != nil {
+			return 0, fmt.Errorf("get skill for classify: %w", err)
+		}
+		if skill == nil {
+			return 0, fmt.Errorf("skill %s vanished mid-check", u.SkillID)
+		}
+		relayHash := s.relayHashForSkill(skill)
+		report, err := Classify(ctx, s.llm, skill, det, relayHash, skill.LatestVersion)
+		if err != nil {
+			return 0, fmt.Errorf("classify drift: %w", err)
+		}
+		// Preserve `now` so all four outcomes share a single observed timestamp
+		// per cycle/request (matters for cycle-level metrics + tests that
+		// compare LastCheckedAt to DriftDetectedAt).
+		report.DetectedAt = now
+		if err := s.skills.WriteDriftReport(u.SkillID, report); err != nil {
+			return 0, fmt.Errorf("write drift report: %w", err)
+		}
+		return OutcomeDrift, nil
+
+	default:
+		return 0, fmt.Errorf("unknown Detect result %q", det.Result)
+	}
+}
+
+// RunOneSlug runs a single check for the skill identified by slug. Used by
+// the on-demand POST /api/skills/<slug>/check-drift endpoint. The caller's
+// ctx controls timeout — the endpoint applies its own per-request budget on
+// top of the cron's per-skill budget.
+//
+// Returns:
+//   - (_, ErrSkillNotFound) — slug is unknown.
+//   - (OutcomeNoUpstream, nil) — skill has no skill_upstreams row.
+//   - (OutcomeFetchFailed, nil) — EnsureCache or Detect failed (network,
+//     permissions, bad ref). The cron path swallows these as a logged
+//     warning; here we surface them as a distinct outcome so the HTTP layer
+//     can return 502 instead of 500.
+//   - (OutcomeUpToDate, nil) — Detect produced one of the three no-drift
+//     results; last_checked + last_seen pointers were bumped.
+//   - (OutcomeDrift, nil) — drift detected and persisted (drift_* columns
+//     filled, skills.outdated flipped on).
+//
+// Prometheus metrics are kept consistent with checkOne: we record the
+// outcome label on success and "error" on internal failures.
+func (s *Service) RunOneSlug(ctx context.Context, slug string) (CheckOutcome, error) {
+	skill, err := s.skills.GetSkillBySlug(slug)
+	if err != nil {
+		return 0, fmt.Errorf("get skill: %w", err)
+	}
+	if skill == nil {
+		return 0, ErrSkillNotFound
+	}
+	upstream, err := s.skills.GetUpstream(skill.ID)
+	if err != nil {
+		return 0, fmt.Errorf("get upstream: %w", err)
+	}
+	if upstream == nil {
+		return OutcomeNoUpstream, nil
+	}
+
+	timer := prometheusTimer()
+	defer timer()
+
+	det, _, lastSeenHash, err := s.fetchAndDetect(ctx, upstream)
+	if err != nil {
+		// HTTP callers want to differentiate this from a generic 500; surface
+		// it via the outcome instead of the error return. The fetch error
+		// itself is logged at this layer (callers pass ctx.Err() or similar
+		// through their own logging).
+		checksTotal.WithLabelValues("error").Inc()
+		slog.Warn("checker: RunOneSlug fetch/detect failed",
+			"slug", slug, "skill_id", skill.ID, "git_url", upstream.GitURL, "err", err)
+		return OutcomeFetchFailed, nil
+	}
+
+	now := time.Now().UTC()
+	outcome, err := s.applyDetection(ctx, upstream, det, lastSeenHash, now)
+	if err != nil {
+		checksTotal.WithLabelValues("error").Inc()
+		return 0, err
+	}
+	// Record the same label the cron would emit for this Detect result.
+	if outcome == OutcomeDrift {
+		checksTotal.WithLabelValues("drift").Inc()
+	} else {
+		checksTotal.WithLabelValues(string(det.Result)).Inc()
+	}
+	return outcome, nil
+}
+
 // checkOne performs one full upstream check for a single skill. On Detect
 // errors checksTotal{result="error"} is incremented and the error is
 // returned to the caller; on success the appropriate store mutation is
@@ -113,23 +244,10 @@ func (s *Service) checkOne(ctx context.Context, u *store.SkillUpstream) error {
 	timer := prometheusTimer()
 	defer timer()
 
-	cacheDir := s.cacheDirFor(u)
-	if err := EnsureCache(ctx, cacheDir, u.GitURL); err != nil {
-		checksTotal.WithLabelValues("error").Inc()
-		return fmt.Errorf("ensure cache: %w", err)
-	}
-
-	ref := &UpstreamRef{
-		GitSubpath: u.GitSubpath,
-		GitRef:     u.GitRef,
-	}
-	lastSeenSHA := strDeref(u.LastSeenSHA)
-	lastSeenHash := strDeref(u.LastSeenHash)
-
-	det, err := Detect(ctx, ref, lastSeenSHA, lastSeenHash, cacheDir, s.cfg.LLMDiffMaxBytes)
+	det, _, lastSeenHash, err := s.fetchAndDetect(ctx, u)
 	if err != nil {
 		checksTotal.WithLabelValues("error").Inc()
-		return fmt.Errorf("detect: %w", err)
+		return err
 	}
 
 	now := time.Now().UTC()

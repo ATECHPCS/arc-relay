@@ -9,12 +9,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/skills"
+	"github.com/comma-compliance/arc-relay/internal/skills/checker"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/testutil"
 	"github.com/comma-compliance/arc-relay/internal/web"
@@ -39,9 +44,73 @@ type skillsRig struct {
 	users        *store.UserStore
 	admin        *store.User
 	userToInject *store.User
+	checker      *checker.Service
+	cacheDir     string
 }
 
 func newSkillsRig(t *testing.T) *skillsRig {
+	t.Helper()
+	return newSkillsRigWithChecker(t, nil, "")
+}
+
+// newSkillsRigWithCheckerEnabled wires a fresh test rig with a real
+// checker.Service backed by a tempdir cache. Used by the check-drift tests.
+// The returned rig's `store` and `cacheDir` fields are exposed so tests can
+// seed skills, upstream rows, and prime baselines.
+func newSkillsRigWithCheckerEnabled(t *testing.T) *skillsRig {
+	t.Helper()
+	cacheDir := filepath.Join(t.TempDir(), "upstream-cache")
+	// We need a SkillStore + skills.Service to construct checker.Service, but
+	// the rig's helpers create those. To keep the wiring linear we build a
+	// fresh DB here and pass everything through. testutil.OpenTestFileDB is
+	// required because the checker may open multiple connections.
+	db := testutil.OpenTestFileDB(t)
+	st := store.NewSkillStore(db)
+	bundlesDir := t.TempDir()
+	svc := skills.New(st, bundlesDir)
+	users := store.NewUserStore(db)
+
+	admin, err := users.Create("test-admin", "test-pw", "admin")
+	if err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+
+	chk := checker.NewService(st, svc, nil, config.SkillsCheckerConfig{
+		Enabled:          true,
+		UpstreamCacheDir: cacheDir,
+		LLMDiffMaxBytes:  4096,
+		// Tight clone timeout so the 502 test fails fast instead of hanging
+		// on a hostname lookup the way the cron's 60s default would.
+		GitCloneTimeout: 5 * time.Second,
+	})
+
+	h := web.NewSkillsHandlers(svc, st, users, chk, func(ctx context.Context) *store.User {
+		return server.UserFromContext(ctx)
+	})
+
+	rig := &skillsRig{
+		store: st, svc: svc, users: users, admin: admin,
+		checker: chk, cacheDir: cacheDir, mux: http.NewServeMux(),
+	}
+	wrap := func(handler http.HandlerFunc) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			if rig.userToInject != nil {
+				ctx = server.WithUser(ctx, rig.userToInject)
+			}
+			handler(w, r.WithContext(ctx))
+		})
+	}
+	rig.mux.Handle("/api/skills", wrap(h.HandleSkills))
+	rig.mux.Handle("/api/skills/assigned", wrap(h.HandleAssigned))
+	rig.mux.Handle("/api/skills/", wrap(h.HandleSkillByPath))
+	return rig
+}
+
+// newSkillsRigWithChecker wires a rig with an optional checker. cacheDir is
+// retained on the rig for tests that need to prime caches. Currently used
+// only by the public newSkillsRig (which passes a nil checker).
+func newSkillsRigWithChecker(t *testing.T, chk *checker.Service, cacheDir string) *skillsRig {
 	t.Helper()
 	db := testutil.OpenTestDB(t)
 	st := store.NewSkillStore(db)
@@ -55,11 +124,11 @@ func newSkillsRig(t *testing.T) *skillsRig {
 		t.Fatalf("seed admin: %v", err)
 	}
 
-	h := web.NewSkillsHandlers(svc, st, users, func(ctx context.Context) *store.User {
+	h := web.NewSkillsHandlers(svc, st, users, chk, func(ctx context.Context) *store.User {
 		return server.UserFromContext(ctx)
 	})
 
-	rig := &skillsRig{store: st, svc: svc, users: users, admin: admin, mux: http.NewServeMux()}
+	rig := &skillsRig{store: st, svc: svc, users: users, admin: admin, checker: chk, cacheDir: cacheDir, mux: http.NewServeMux()}
 	wrap := func(handler http.HandlerFunc) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -810,5 +879,285 @@ func TestSkillsHandlers_UploadMalformedUpstreamHeader(t *testing.T) {
 	})
 	if respC.UpstreamRecorded {
 		t.Errorf("upstream_recorded=true on empty url, want false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/skills/{slug}/check-drift
+// ---------------------------------------------------------------------------
+
+// gitRunForTest runs `git <args>` in dir and fatals on error. Mirrors the
+// helper in internal/skills/checker/git_test.go, duplicated here because Go
+// doesn't share test helpers across packages.
+func gitRunForTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+// makeFixtureRepo builds a fresh git repo in t.TempDir with one commit on
+// main containing skills/foo/SKILL.md = "v1\n", and returns its path.
+func makeFixtureRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitRunForTest(t, dir, "init", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(dir, "skills", "foo"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "skills", "foo", "SKILL.md"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	gitRunForTest(t, dir, "add", ".")
+	gitRunForTest(t, dir, "commit", "-m", "init")
+	return dir
+}
+
+// commitFixtureUpdate writes the given content to skills/foo/SKILL.md and
+// commits it. Used to introduce drift after baseline.
+func commitFixtureUpdate(t *testing.T, repoDir, contents string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repoDir, "skills", "foo", "SKILL.md"), []byte(contents), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gitRunForTest(t, repoDir, "add", ".")
+	gitRunForTest(t, repoDir, "commit", "-m", "update")
+}
+
+// resolveSrcHEAD clones src into a tempdir and returns origin/main's SHA.
+// We don't compute a subpath hash because Detect's RevertedToSame branch
+// only fires when both lastSeenHash != "" and newHash == lastSeenHash; an
+// empty seeded hash means a genuine change still classifies as Drift, and
+// a no-change check still classifies as NoMovement (sha-only short-circuit).
+func resolveSrcHEAD(t *testing.T, gitURL string) string {
+	t.Helper()
+	tmpClone := filepath.Join(t.TempDir(), "prime-clone")
+	if out, err := exec.Command("git", "clone", "--quiet", gitURL, tmpClone).CombinedOutput(); err != nil {
+		t.Fatalf("prime clone: %v: %s", err, out)
+	}
+	out, err := exec.Command("git", "-C", tmpClone, "rev-parse", "origin/main").Output()
+	if err != nil {
+		t.Fatalf("prime rev-parse: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// seedSkillWithUpstream creates a skill row + skill_upstreams row in one
+// shot. lastSeenSHA may be empty for "first ever check"; the handler will
+// then always classify as drift (matches Detect's documented semantics).
+//
+// UpsertUpstream's INSERT does not persist last_seen_sha (only last_seen_hash);
+// to seed a steady-state baseline we follow it with UpdateUpstreamCheck which
+// is the cron's normal write path for that column.
+func seedSkillWithUpstream(t *testing.T, st *store.SkillStore, slug, gitURL, subpath, lastSeenSHA string) string {
+	t.Helper()
+	sk := &store.Skill{
+		Slug:        slug,
+		DisplayName: slug,
+		Description: "fixture",
+	}
+	if err := st.CreateSkill(sk); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	u := &store.SkillUpstream{
+		SkillID:    sk.ID,
+		GitURL:     gitURL,
+		GitSubpath: subpath,
+		GitRef:     "origin/main",
+	}
+	if err := st.UpsertUpstream(u); err != nil {
+		t.Fatalf("UpsertUpstream: %v", err)
+	}
+	if lastSeenSHA != "" {
+		// UpsertUpstream doesn't accept last_seen_sha; bake the baseline in
+		// via the same path the cron uses for no-drift outcomes.
+		if err := st.UpdateUpstreamCheck(sk.ID, lastSeenSHA, "", time.Now().UTC()); err != nil {
+			t.Fatalf("seed UpdateUpstreamCheck: %v", err)
+		}
+	}
+	return sk.ID
+}
+
+// TestSkillsHandlers_CheckDrift_404Unknown: POST against an unknown slug → 404.
+func TestSkillsHandlers_CheckDrift_404Unknown(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	rig.userToInject = rig.admin
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/no-such-skill/check-drift", nil))
+	if rw.Code != http.StatusNotFound {
+		t.Errorf("unknown slug = %d, want 404; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_409NoUpstream: skill exists but has no
+// skill_upstreams row → 409.
+func TestSkillsHandlers_CheckDrift_409NoUpstream(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	rig.userToInject = rig.admin
+
+	// Seed a skill via CreateSkill (no upstream row).
+	if err := rig.store.CreateSkill(&store.Skill{
+		Slug:        "no-upstream",
+		DisplayName: "no-upstream",
+		Description: "fixture",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/no-upstream/check-drift", nil))
+	if rw.Code != http.StatusConflict {
+		t.Errorf("no-upstream = %d, want 409; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_502FetchFailed: bogus git URL → 502.
+// We point at a non-existent file:// path; EnsureCache's clone fails fast.
+func TestSkillsHandlers_CheckDrift_502FetchFailed(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	rig.userToInject = rig.admin
+
+	bogusURL := "file://" + filepath.Join(t.TempDir(), "does-not-exist.git")
+	seedSkillWithUpstream(t, rig.store, "fetch-fail", bogusURL, "", "")
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/fetch-fail/check-drift", nil))
+	if rw.Code != http.StatusBadGateway {
+		t.Errorf("fetch-fail = %d, want 502; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_204UpToDate: real fixture repo, baseline
+// matches HEAD → 204.
+func TestSkillsHandlers_CheckDrift_204UpToDate(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	rig.userToInject = rig.admin
+
+	src := makeFixtureRepo(t)
+	gitURL := "file://" + src
+	sha := resolveSrcHEAD(t, gitURL)
+	seedSkillWithUpstream(t, rig.store, "still-skill", gitURL, "skills/foo", sha)
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/still-skill/check-drift", nil))
+	if rw.Code != http.StatusNoContent {
+		t.Errorf("up-to-date = %d, want 204; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_200Drift: real fixture repo with a new
+// commit since baseline → 200 + drift JSON.
+func TestSkillsHandlers_CheckDrift_200Drift(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	rig.userToInject = rig.admin
+
+	src := makeFixtureRepo(t)
+	gitURL := "file://" + src
+	sha := resolveSrcHEAD(t, gitURL)
+	seedSkillWithUpstream(t, rig.store, "drift-skill", gitURL, "skills/foo", sha)
+
+	// Introduce real drift after baseline.
+	commitFixtureUpdate(t, src, "v2\nadded line\n")
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/drift-skill/check-drift", nil))
+	if rw.Code != http.StatusOK {
+		t.Fatalf("drift = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	}
+	var resp struct {
+		Outdated bool           `json:"outdated"`
+		Drift    map[string]any `json:"drift"`
+	}
+	if err := json.Unmarshal(rw.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Outdated {
+		t.Errorf("outdated = false, want true")
+	}
+	if resp.Drift == nil {
+		t.Fatalf("drift block missing")
+	}
+	if _, ok := resp.Drift["detected_at"]; !ok {
+		t.Errorf("drift.detected_at missing")
+	}
+	if _, ok := resp.Drift["upstream_sha"]; !ok {
+		t.Errorf("drift.upstream_sha missing")
+	}
+	// LLM client is nil on this rig, so severity should be the deterministic
+	// fallback "unknown".
+	if got, _ := resp.Drift["severity"].(string); got != "unknown" {
+		t.Errorf("drift.severity = %q, want %q", got, "unknown")
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_403NonAdmin: regular user → 403.
+func TestSkillsHandlers_CheckDrift_403NonAdmin(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	// Seed the skill so the 403 doesn't accidentally pass via 404. Note:
+	// HandleSkillByPath returns 404 for non-admin GETs against restricted
+	// skills, but the admin gate runs *after* the existence check for
+	// other methods, so a missing slug here would 404 first. Pre-creating
+	// the skill ensures we test the admin gate specifically.
+	if err := rig.store.CreateSkill(&store.Skill{
+		Slug:        "guarded",
+		DisplayName: "guarded",
+		Description: "fixture",
+		Visibility:  "public",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	rig.userToInject = rig.regularUser(t, "alice")
+
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/guarded/check-drift", nil))
+	if rw.Code != http.StatusForbidden {
+		t.Errorf("non-admin = %d, want 403; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_405WrongMethod: GET → 405.
+func TestSkillsHandlers_CheckDrift_405WrongMethod(t *testing.T) {
+	rig := newSkillsRigWithCheckerEnabled(t)
+	rig.userToInject = rig.admin
+	if err := rig.store.CreateSkill(&store.Skill{
+		Slug:        "method-test",
+		DisplayName: "method-test",
+		Description: "fixture",
+		Visibility:  "public",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/skills/method-test/check-drift", nil))
+	if rw.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET = %d, want 405; body=%s", rw.Code, rw.Body.String())
+	}
+}
+
+// TestSkillsHandlers_CheckDrift_503Disabled: rig built without a checker →
+// the handler reports 503. This is the production "cron disabled" path.
+func TestSkillsHandlers_CheckDrift_503Disabled(t *testing.T) {
+	rig := newSkillsRig(t) // no checker
+	rig.userToInject = rig.admin
+	if err := rig.store.CreateSkill(&store.Skill{
+		Slug:        "disabled-test",
+		DisplayName: "disabled-test",
+		Description: "fixture",
+		Visibility:  "public",
+	}); err != nil {
+		t.Fatalf("CreateSkill: %v", err)
+	}
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, httptest.NewRequest("POST", "/api/skills/disabled-test/check-drift", nil))
+	if rw.Code != http.StatusServiceUnavailable {
+		t.Errorf("disabled = %d, want 503; body=%s", rw.Code, rw.Body.String())
 	}
 }

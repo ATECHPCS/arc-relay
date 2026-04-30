@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/skills"
+	"github.com/comma-compliance/arc-relay/internal/skills/checker"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -17,19 +19,33 @@ import (
 // closure to pull the authenticated user from context — keeps the package free
 // of an import-cycle dependency on internal/server. UserStore is used only to
 // resolve username → user_id for the assignment endpoints.
+//
+// checker is optional — when the cron is disabled (cfg.Skills.Checker.Enabled
+// = false), main.go passes nil. handleCheckDrift returns 503 in that case so
+// admins get a clear "feature is off" signal instead of a generic 500.
 type SkillsHandlers struct {
 	svc         *skills.Service
 	store       *store.SkillStore
 	users       *store.UserStore
+	checker     *checker.Service
 	userFromCtx func(context.Context) *store.User
 }
 
 // NewSkillsHandlers creates SkillsHandlers wired to the skills service +
 // stores. userFromCtx returns nil for unauth'd callers; handlers fail closed
-// in that case.
-func NewSkillsHandlers(svc *skills.Service, st *store.SkillStore, users *store.UserStore, userFromCtx func(context.Context) *store.User) *SkillsHandlers {
-	return &SkillsHandlers{svc: svc, store: st, users: users, userFromCtx: userFromCtx}
+// in that case. chk may be nil when the upstream-update checker is disabled;
+// the on-demand check-drift endpoint reports 503 in that case.
+func NewSkillsHandlers(svc *skills.Service, st *store.SkillStore, users *store.UserStore, chk *checker.Service, userFromCtx func(context.Context) *store.User) *SkillsHandlers {
+	return &SkillsHandlers{svc: svc, store: st, users: users, checker: chk, userFromCtx: userFromCtx}
 }
+
+// checkDriftRequestTimeout caps the wall-clock budget for a single on-demand
+// check. Matches the cron's per-skill ceiling (4 × GitCloneTimeout default
+// = 4 minutes is the cron path); we deliberately use a tighter HTTP-friendly
+// 60s here so the user gets a 504-ish error fast on a slow clone instead of
+// blocking the connection for minutes. Operators chasing genuinely-large
+// repos can fall back to the cron run.
+const checkDriftRequestTimeout = 60 * time.Second
 
 // HandleSkills routes /api/skills. GET = list-for-user, POST not allowed
 // (uploads are versioned and routed through HandleSkillByPath).
@@ -132,6 +148,7 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 	case 2:
 		// /api/skills/{slug}/versions   — list versions
 		// /api/skills/{slug}/assignments — list assignments (admin) / POST grant (admin)
+		// /api/skills/{slug}/check-drift — admin: trigger on-demand drift check
 		switch parts[1] {
 		case "versions":
 			if r.Method != http.MethodGet {
@@ -152,6 +169,12 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 			default:
 				writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
+		case "check-drift":
+			if user.Role != "admin" {
+				writeJSONError(w, http.StatusForbidden, "admin access required")
+				return
+			}
+			h.handleCheckDrift(w, r, slug)
 		default:
 			writeJSONError(w, http.StatusNotFound, "unknown subresource")
 		}
@@ -545,4 +568,117 @@ func (h *SkillsHandlers) unassignSkill(w http.ResponseWriter, skill *store.Skill
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCheckDrift implements POST /api/skills/{slug}/check-drift.
+// Admin-only (enforced by HandleSkillByPath before dispatching here).
+//
+// Status codes:
+//   - 200 — drift detected (or already flagged); body is the drift block.
+//   - 204 — up to date.
+//   - 404 — slug unknown.
+//   - 405 — non-POST.
+//   - 409 — skill exists but has no skill_upstreams row.
+//   - 502 — upstream fetch/clone failed.
+//   - 503 — checker is disabled at startup (cron not configured).
+//
+// The 60s per-request timeout is independent of the cron's per-skill budget.
+// Operators chasing genuinely-large repos can fall back to the cron run if
+// the on-demand check times out.
+func (h *SkillsHandlers) handleCheckDrift(w http.ResponseWriter, r *http.Request, slug string) {
+	if r.Method != http.MethodPost {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if h.checker == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "skill upstream checker disabled")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), checkDriftRequestTimeout)
+	defer cancel()
+
+	outcome, err := h.checker.RunOneSlug(ctx, slug)
+	if err != nil {
+		if errors.Is(err, checker.ErrSkillNotFound) {
+			writeJSONError(w, http.StatusNotFound, "skill not found")
+			return
+		}
+		slog.Warn("skills check-drift", "slug", slug, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	switch outcome {
+	case checker.OutcomeNoUpstream:
+		writeJSONError(w, http.StatusConflict, "skill has no upstream tracking enabled")
+		return
+	case checker.OutcomeFetchFailed:
+		writeJSONError(w, http.StatusBadGateway, "upstream fetch failed")
+		return
+	case checker.OutcomeUpToDate:
+		w.WriteHeader(http.StatusNoContent)
+		return
+	case checker.OutcomeDrift:
+		// Re-fetch the upstream row so we can return the just-persisted drift
+		// block. A read failure here degrades to a 200 with no drift body
+		// rather than masking the (already-committed) state change.
+		skill, _ := h.store.GetSkillBySlug(slug)
+		var upstream *store.SkillUpstream
+		if skill != nil {
+			upstream, _ = h.store.GetUpstream(skill.ID)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"outdated": true,
+			"drift":    driftBlockFromUpstream(upstream),
+		})
+		return
+	default:
+		// Defensive: unknown outcome shouldn't reach here, but don't panic.
+		slog.Warn("skills check-drift: unknown outcome", "slug", slug, "outcome", outcome)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+// driftBlockFromUpstream formats the drift_* fields of a SkillUpstream into a
+// JSON-friendly map. Returned shape mirrors the GET /api/skills/{slug}
+// drift block that Task 13 will surface (and that the dashboard's drift
+// banner will consume), so both endpoints can share a single helper.
+//
+// Returns nil when u is nil or has no drift recorded.
+func driftBlockFromUpstream(u *store.SkillUpstream) map[string]any {
+	if u == nil || u.DriftDetectedAt == nil {
+		return nil
+	}
+	out := map[string]any{
+		"detected_at": u.DriftDetectedAt.UTC().Format(time.RFC3339),
+	}
+	if u.DriftRelayVersion != nil {
+		out["relay_version"] = *u.DriftRelayVersion
+	}
+	if u.DriftRelayHash != nil {
+		out["relay_hash"] = *u.DriftRelayHash
+	}
+	if u.DriftUpstreamSHA != nil {
+		out["upstream_sha"] = *u.DriftUpstreamSHA
+	}
+	if u.DriftUpstreamHash != nil {
+		out["upstream_hash"] = *u.DriftUpstreamHash
+	}
+	if u.DriftCommitsAhead != nil {
+		out["commits_ahead"] = *u.DriftCommitsAhead
+	}
+	if u.DriftSeverity != nil {
+		out["severity"] = *u.DriftSeverity
+	}
+	if u.DriftSummary != nil {
+		out["summary"] = *u.DriftSummary
+	}
+	if u.DriftRecommendedAction != nil {
+		out["recommended_action"] = *u.DriftRecommendedAction
+	}
+	if u.DriftLLMModel != nil {
+		out["llm_model"] = *u.DriftLLMModel
+	}
+	return out
 }

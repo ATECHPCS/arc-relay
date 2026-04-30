@@ -14,10 +14,37 @@ package checker
 // the DriftReport can carry both relay and upstream hashes for UI diffing.
 
 import (
+	"errors"
+
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
+)
+
+// ErrSkillNotFound is returned by RunOneSlug when no skill with the given slug
+// exists. The HTTP layer maps this to 404. Distinct from OutcomeNoUpstream
+// (which means the skill exists but has no skill_upstreams row).
+var ErrSkillNotFound = errors.New("skill not found")
+
+// CheckOutcome classifies the result of an on-demand single-skill check
+// (RunOneSlug). It exists so the HTTP endpoint can produce a meaningful status
+// code without duplicating the cron's Detect-result switch.
+type CheckOutcome int
+
+const (
+	// OutcomeUpToDate covers the three "no drift" Detect results:
+	// NoMovement, NoPathTouch, RevertedToSame.
+	OutcomeUpToDate CheckOutcome = iota
+	// OutcomeDrift means Detect returned ResultDrift; the drift_* columns
+	// have been populated and skills.outdated has been flipped on.
+	OutcomeDrift
+	// OutcomeNoUpstream means the skill exists but has no skill_upstreams
+	// row — there is nothing to check against. HTTP maps this to 409.
+	OutcomeNoUpstream
+	// OutcomeFetchFailed means EnsureCache or Detect failed (network,
+	// permissions, malformed ref, etc.). HTTP maps this to 502.
+	OutcomeFetchFailed
 )
 
 // Service is the checker's main entrypoint: cron loop, on-demand single-skill
