@@ -1,30 +1,30 @@
 {
   "planPath": "docs/superpowers/plans/2026-04-30-arc-relay-skill-update-checker.md",
-  "lastUpdated": "2026-04-30T00:00:00Z",
+  "lastUpdated": "2026-04-30T12:00:00Z",
   "tasks": [
     {
       "id": 0,
       "subject": "Task 0: Rewrite internal/llm/client.go for OpenAI chat completions",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Re-implement internal/llm/client.go against OpenAI's chat/completions endpoint while keeping the public Go interface (NewClient, Available, Model, Complete) byte-identical so callers in internal/mcp/optimize.go need zero changes.\n\n**Files:**\n- Modify: internal/llm/client.go\n- Create: internal/llm/client_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/llm/... ./internal/mcp/... -v\n\n```json:metadata\n{\"files\": [\"internal/llm/client.go\", \"internal/llm/client_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/llm/... ./internal/mcp/... -v\", \"acceptanceCriteria\": [\"Public API (NewClient/Available/Model/Complete) signatures unchanged\", \"Default model = gpt-4o-mini\", \"Auth header is Authorization: Bearer\", \"System+user sent as two messages\", \"Response parsed from choices[0].message.content\", \"Token usage parsed from usage.prompt_tokens/completion_tokens\", \"OpenAI error envelope handled\", \"httptest fixture asserts request shape\", \"go vet + go test green\"]}\n```"
     },
     {
       "id": 1,
       "subject": "Task 1: Production env var rotation note",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [0],
       "description": "**Goal:** Document the production deploy requirement so the LLM swap doesn't ship with a key that no longer works.\n\n**Files:**\n- Modify: docs/superpowers/plans/2026-04-30-arc-relay-skill-update-checker.md (append Deploy notes appendix)\n\n```json:metadata\n{\"files\": [\"docs/superpowers/plans/2026-04-30-arc-relay-skill-update-checker.md\"], \"verifyCommand\": \"\", \"acceptanceCriteria\": [\"Deploy notes appendix exists\", \"Covers OpenAI key provisioning, Komodo secret update, redeploy command, smoke test\"]}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: Migration 017_skill_upstreams.sql",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Add the skill_upstreams table and skills.outdated column. Purely additive.\n\n**Files:**\n- Create: migrations/017_skill_upstreams.sql\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/store/... -v\n\n```json:metadata\n{\"files\": [\"migrations/017_skill_upstreams.sql\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/store/... -v\", \"acceptanceCriteria\": [\"skill_upstreams.skill_id PK + FK to skills(id) ON DELETE CASCADE\", \"skills.outdated column DEFAULT 0\", \"drift_severity CHECK constraint enforces enum or NULL\", \"go test ./internal/store/... passes\"]}\n```"
     },
     {
       "id": 3,
       "subject": "Task 3: SkillStore upstream + drift methods",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [2],
       "description": "**Goal:** Add Go-level types and store methods for managing skill_upstreams.\n\n**Files:**\n- Modify: internal/store/skills.go\n- Modify: internal/store/skills_test.go\n\n**Verify:** CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/store/ -run \"Upstream|Drift\" -v\n\n```json:metadata\n{\"files\": [\"internal/store/skills.go\", \"internal/store/skills_test.go\"], \"verifyCommand\": \"CGO_ENABLED=1 go test -tags sqlite_fts5 -count=1 ./internal/store/ -run \\\"Upstream|Drift\\\" -v\", \"acceptanceCriteria\": [\"SkillUpstream + DriftReport types defined\", \"UpsertUpstream/GetUpstream/ClearUpstream/ListUpstreams methods\", \"WriteDriftReport flips skills.outdated=1 in same tx\", \"ClearDriftReport NULLs drift_* + flips outdated=0 in same tx\", \"UpdateUpstreamCheck for no-drift cron path\", \"Skill.Outdated field added; GetSkill/ListSkills SELECTs updated\", \"Tests cover happy path + missing-row\"]}\n```"
     },

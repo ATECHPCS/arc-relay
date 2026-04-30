@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/testutil"
@@ -373,5 +374,288 @@ func TestSkillListVersionsOrder(t *testing.T) {
 	// Newest upload is returned first.
 	if versions[0].Version != "2.0.0" {
 		t.Errorf("first version = %q, want 2.0.0", versions[0].Version)
+	}
+}
+
+// seedSkill creates a skill row and returns it. Helper for upstream/drift tests
+// that need a foreign-key-valid skill_id.
+func seedSkill(t *testing.T, skills *store.SkillStore, slug string) *store.Skill {
+	t.Helper()
+	sk := &store.Skill{Slug: slug, DisplayName: slug}
+	if err := skills.CreateSkill(sk); err != nil {
+		t.Fatalf("CreateSkill %q: %v", slug, err)
+	}
+	return sk
+}
+
+func TestSkillUpstream_GetMissingReturnsNilNil(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	u, err := skills.GetUpstream("does-not-exist")
+	if err != nil {
+		t.Fatalf("GetUpstream missing: err = %v", err)
+	}
+	if u != nil {
+		t.Fatalf("GetUpstream missing: expected nil, got %+v", u)
+	}
+}
+
+func TestSkillUpstream_UpsertCreatesRow(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	sk := seedSkill(t, skills, "up-create")
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID:    sk.ID,
+		GitURL:     "https://github.com/foo/bar",
+		GitSubpath: "skills/baz",
+		GitRef:     "main",
+	}); err != nil {
+		t.Fatalf("UpsertUpstream: %v", err)
+	}
+
+	u, err := skills.GetUpstream(sk.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u == nil {
+		t.Fatal("GetUpstream returned nil after upsert")
+	}
+	if u.GitURL != "https://github.com/foo/bar" {
+		t.Errorf("GitURL = %q, want https://github.com/foo/bar", u.GitURL)
+	}
+	if u.GitSubpath != "skills/baz" {
+		t.Errorf("GitSubpath = %q, want skills/baz", u.GitSubpath)
+	}
+	if u.GitRef != "main" {
+		t.Errorf("GitRef = %q, want main", u.GitRef)
+	}
+	if u.UpstreamType != "git" {
+		t.Errorf("UpstreamType = %q, want git", u.UpstreamType)
+	}
+	if u.CreatedAt.IsZero() || u.UpdatedAt.IsZero() {
+		t.Error("CreatedAt/UpdatedAt should be set")
+	}
+}
+
+func TestSkillUpstream_UpsertUpdatesExistingRow(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	sk := seedSkill(t, skills, "up-update")
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://github.com/foo/bar",
+		GitSubpath: "skills/baz", GitRef: "main",
+	}); err != nil {
+		t.Fatalf("first UpsertUpstream: %v", err)
+	}
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://github.com/foo/bar",
+		GitSubpath: "skills/baz", GitRef: "develop",
+	}); err != nil {
+		t.Fatalf("second UpsertUpstream: %v", err)
+	}
+
+	u, err := skills.GetUpstream(sk.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u == nil {
+		t.Fatal("GetUpstream returned nil")
+	}
+	if u.GitRef != "develop" {
+		t.Errorf("GitRef = %q, want develop after upsert", u.GitRef)
+	}
+}
+
+func TestSkillUpstream_ClearDeletesRow(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	sk := seedSkill(t, skills, "up-clear")
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://example.com/x", GitRef: "HEAD",
+	}); err != nil {
+		t.Fatalf("UpsertUpstream: %v", err)
+	}
+	if err := skills.ClearUpstream(sk.ID); err != nil {
+		t.Fatalf("ClearUpstream: %v", err)
+	}
+	u, err := skills.GetUpstream(sk.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream after clear: %v", err)
+	}
+	if u != nil {
+		t.Errorf("GetUpstream after clear: expected nil, got %+v", u)
+	}
+	// Clearing a missing row is a no-op (no error).
+	if err := skills.ClearUpstream(sk.ID); err != nil {
+		t.Errorf("ClearUpstream on already-gone row: %v", err)
+	}
+}
+
+func TestSkillUpstream_ListOrder(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	// Create three skills with upstreams.
+	a := seedSkill(t, skills, "up-a")
+	b := seedSkill(t, skills, "up-b")
+	c := seedSkill(t, skills, "up-c")
+	for _, sk := range []*store.Skill{a, b, c} {
+		if err := skills.UpsertUpstream(&store.SkillUpstream{
+			SkillID: sk.ID, GitURL: "https://example.com/" + sk.Slug, GitRef: "HEAD",
+		}); err != nil {
+			t.Fatalf("UpsertUpstream %s: %v", sk.Slug, err)
+		}
+	}
+
+	// Mark `b` checked recently and `c` checked earlier; `a` never checked.
+	earlier := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	later := time.Now().Add(-1 * time.Hour).UTC().Truncate(time.Second)
+	if err := skills.UpdateUpstreamCheck(c.ID, "sha-c", "hash-c", earlier); err != nil {
+		t.Fatalf("UpdateUpstreamCheck c: %v", err)
+	}
+	if err := skills.UpdateUpstreamCheck(b.ID, "sha-b", "hash-b", later); err != nil {
+		t.Fatalf("UpdateUpstreamCheck b: %v", err)
+	}
+
+	got, err := skills.ListUpstreams()
+	if err != nil {
+		t.Fatalf("ListUpstreams: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("ListUpstreams len = %d, want 3", len(got))
+	}
+	// Order: never-checked first (a), then oldest-checked (c), then newest (b).
+	if got[0].SkillID != a.ID {
+		t.Errorf("first row = %s, want never-checked %s", got[0].SkillID, a.ID)
+	}
+	if got[1].SkillID != c.ID {
+		t.Errorf("second row = %s, want oldest-checked %s", got[1].SkillID, c.ID)
+	}
+	if got[2].SkillID != b.ID {
+		t.Errorf("third row = %s, want newest-checked %s", got[2].SkillID, b.ID)
+	}
+}
+
+func TestSkillUpstream_UpdateUpstreamCheck(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	sk := seedSkill(t, skills, "up-check")
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://example.com/x", GitRef: "HEAD",
+	}); err != nil {
+		t.Fatalf("UpsertUpstream: %v", err)
+	}
+
+	checkedAt := time.Now().UTC().Truncate(time.Second)
+	if err := skills.UpdateUpstreamCheck(sk.ID, "deadbeef", "h1", checkedAt); err != nil {
+		t.Fatalf("UpdateUpstreamCheck: %v", err)
+	}
+
+	u, err := skills.GetUpstream(sk.ID)
+	if err != nil || u == nil {
+		t.Fatalf("GetUpstream: u=%v err=%v", u, err)
+	}
+	if u.LastSeenSHA == nil || *u.LastSeenSHA != "deadbeef" {
+		t.Errorf("LastSeenSHA = %v, want deadbeef", u.LastSeenSHA)
+	}
+	if u.LastSeenHash == nil || *u.LastSeenHash != "h1" {
+		t.Errorf("LastSeenHash = %v, want h1", u.LastSeenHash)
+	}
+	if u.LastCheckedAt == nil || !u.LastCheckedAt.Equal(checkedAt) {
+		t.Errorf("LastCheckedAt = %v, want %v", u.LastCheckedAt, checkedAt)
+	}
+}
+
+func TestSkillUpstream_WriteAndClearDriftReport(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	skills := store.NewSkillStore(db)
+
+	sk := seedSkill(t, skills, "drift-skill")
+	if err := skills.UpsertUpstream(&store.SkillUpstream{
+		SkillID: sk.ID, GitURL: "https://example.com/x", GitRef: "HEAD",
+	}); err != nil {
+		t.Fatalf("UpsertUpstream: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	rep := &store.DriftReport{
+		RelayVersion:      "0.1.0",
+		RelayHash:         "abcd",
+		UpstreamSHA:       "deadbeef",
+		UpstreamHash:      "ef12",
+		CommitsAhead:      3,
+		Severity:          "minor",
+		Summary:           "added stuff",
+		RecommendedAction: "review",
+		LLMModel:          "gpt-4o-mini",
+		DetectedAt:        now,
+	}
+	if err := skills.WriteDriftReport(sk.ID, rep); err != nil {
+		t.Fatalf("WriteDriftReport: %v", err)
+	}
+
+	u, err := skills.GetUpstream(sk.ID)
+	if err != nil || u == nil {
+		t.Fatalf("GetUpstream after drift: u=%v err=%v", u, err)
+	}
+	if u.DriftSeverity == nil || *u.DriftSeverity != "minor" {
+		t.Errorf("DriftSeverity = %v, want minor", u.DriftSeverity)
+	}
+	if u.DriftCommitsAhead == nil || *u.DriftCommitsAhead != 3 {
+		t.Errorf("DriftCommitsAhead = %v, want 3", u.DriftCommitsAhead)
+	}
+	if u.DriftSummary == nil || *u.DriftSummary != "added stuff" {
+		t.Errorf("DriftSummary = %v, want 'added stuff'", u.DriftSummary)
+	}
+	if u.DriftRelayVersion == nil || *u.DriftRelayVersion != "0.1.0" {
+		t.Errorf("DriftRelayVersion = %v, want 0.1.0", u.DriftRelayVersion)
+	}
+	if u.DriftLLMModel == nil || *u.DriftLLMModel != "gpt-4o-mini" {
+		t.Errorf("DriftLLMModel = %v, want gpt-4o-mini", u.DriftLLMModel)
+	}
+	if u.LastSeenSHA == nil || *u.LastSeenSHA != "deadbeef" {
+		t.Errorf("LastSeenSHA = %v, want deadbeef (drift writes it too)", u.LastSeenSHA)
+	}
+	if u.DriftDetectedAt == nil || !u.DriftDetectedAt.Equal(now) {
+		t.Errorf("DriftDetectedAt = %v, want %v", u.DriftDetectedAt, now)
+	}
+
+	// skills.outdated should now be 1.
+	got, err := skills.GetSkill(sk.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetSkill after drift: %v %v", got, err)
+	}
+	if got.Outdated != 1 {
+		t.Errorf("Outdated = %d, want 1 after WriteDriftReport", got.Outdated)
+	}
+
+	// Clear drift.
+	if err := skills.ClearDriftReport(sk.ID, "newhash"); err != nil {
+		t.Fatalf("ClearDriftReport: %v", err)
+	}
+	u, err = skills.GetUpstream(sk.ID)
+	if err != nil || u == nil {
+		t.Fatalf("GetUpstream after clear: u=%v err=%v", u, err)
+	}
+	if u.DriftSeverity != nil || u.DriftSummary != nil || u.DriftCommitsAhead != nil ||
+		u.DriftDetectedAt != nil || u.DriftRelayVersion != nil || u.DriftRelayHash != nil ||
+		u.DriftUpstreamSHA != nil || u.DriftUpstreamHash != nil ||
+		u.DriftRecommendedAction != nil || u.DriftLLMModel != nil {
+		t.Errorf("drift_* fields not all NULLed: %+v", u)
+	}
+	if u.LastSeenHash == nil || *u.LastSeenHash != "newhash" {
+		t.Errorf("LastSeenHash = %v, want newhash", u.LastSeenHash)
+	}
+	got, err = skills.GetSkill(sk.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetSkill after clear: %v %v", got, err)
+	}
+	if got.Outdated != 0 {
+		t.Errorf("Outdated = %d, want 0 after ClearDriftReport", got.Outdated)
 	}
 }

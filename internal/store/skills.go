@@ -25,6 +25,7 @@ type Skill struct {
 	CreatedBy     *string    `json:"created_by,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	Outdated      int        `json:"outdated"`
 }
 
 // SkillVersion is one row in `skill_versions`. Each row corresponds to a single
@@ -51,6 +52,46 @@ type SkillAssignment struct {
 	Version    *string   `json:"version,omitempty"`
 	AssignedBy *string   `json:"assigned_by,omitempty"`
 	AssignedAt time.Time `json:"assigned_at"`
+}
+
+// SkillUpstream is the opted-in upstream-tracking row for a skill.
+// One row per skill_id (1:1 with skills).
+type SkillUpstream struct {
+	SkillID                string
+	UpstreamType           string // "git"
+	GitURL                 string
+	GitSubpath             string
+	GitRef                 string
+	LastCheckedAt          *time.Time
+	LastSeenSHA            *string
+	LastSeenHash           *string
+	DriftDetectedAt        *time.Time
+	DriftRelayVersion      *string
+	DriftRelayHash         *string
+	DriftUpstreamSHA       *string
+	DriftUpstreamHash      *string
+	DriftCommitsAhead      *int
+	DriftSeverity          *string
+	DriftSummary           *string
+	DriftRecommendedAction *string
+	DriftLLMModel          *string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+}
+
+// DriftReport is what the checker writes when drift is detected.
+// All fields required.
+type DriftReport struct {
+	RelayVersion      string
+	RelayHash         string
+	UpstreamSHA       string
+	UpstreamHash      string
+	CommitsAhead      int
+	Severity          string // cosmetic|minor|major|security|unknown
+	Summary           string
+	RecommendedAction string
+	LLMModel          string // empty if fallback path
+	DetectedAt        time.Time
 }
 
 // ErrSkillSlugConflict is returned when a slug is already taken.
@@ -106,7 +147,7 @@ func (s *SkillStore) CreateSkill(sk *Skill) error {
 func (s *SkillStore) GetSkill(id string) (*Skill, error) {
 	return s.scanSkillRow(s.db.QueryRow(`
 		SELECT id, slug, display_name, description, visibility,
-		       COALESCE(latest_version, ''), yanked_at, created_by, created_at, updated_at
+		       COALESCE(latest_version, ''), yanked_at, created_by, created_at, updated_at, outdated
 		FROM skills WHERE id = ?`, id))
 }
 
@@ -114,7 +155,7 @@ func (s *SkillStore) GetSkill(id string) (*Skill, error) {
 func (s *SkillStore) GetSkillBySlug(slug string) (*Skill, error) {
 	return s.scanSkillRow(s.db.QueryRow(`
 		SELECT id, slug, display_name, description, visibility,
-		       COALESCE(latest_version, ''), yanked_at, created_by, created_at, updated_at
+		       COALESCE(latest_version, ''), yanked_at, created_by, created_at, updated_at, outdated
 		FROM skills WHERE slug = ?`, slug))
 }
 
@@ -123,7 +164,7 @@ func (s *SkillStore) GetSkillBySlug(slug string) (*Skill, error) {
 func (s *SkillStore) ListSkills() ([]*Skill, error) {
 	rows, err := s.db.Query(`
 		SELECT id, slug, display_name, description, visibility,
-		       COALESCE(latest_version, ''), yanked_at, created_by, created_at, updated_at
+		       COALESCE(latest_version, ''), yanked_at, created_by, created_at, updated_at, outdated
 		FROM skills ORDER BY slug`)
 	if err != nil {
 		return nil, fmt.Errorf("listing skills: %w", err)
@@ -432,7 +473,7 @@ func (s *SkillStore) scanSkill(scanner interface {
 	sk := &Skill{}
 	var yankedAt sql.NullTime
 	if err := scanner.Scan(&sk.ID, &sk.Slug, &sk.DisplayName, &sk.Description, &sk.Visibility,
-		&sk.LatestVersion, &yankedAt, &sk.CreatedBy, &sk.CreatedAt, &sk.UpdatedAt); err != nil {
+		&sk.LatestVersion, &yankedAt, &sk.CreatedBy, &sk.CreatedAt, &sk.UpdatedAt, &sk.Outdated); err != nil {
 		return nil, fmt.Errorf("scanning skill: %w", err)
 	}
 	if yankedAt.Valid {
@@ -465,4 +506,259 @@ func scanAssignments(rows *sql.Rows) ([]*SkillAssignment, error) {
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// UpsertUpstream inserts or updates the upstream-tracking row for a skill.
+// On conflict (same skill_id) the upstream metadata fields are replaced; the
+// last_seen_* / drift_* fields are preserved (use the dedicated check/drift
+// methods to update those).
+func (s *SkillStore) UpsertUpstream(u *SkillUpstream) error {
+	if u.UpstreamType == "" {
+		u.UpstreamType = "git"
+	}
+	if u.GitRef == "" {
+		u.GitRef = "HEAD"
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO skill_upstreams (
+			skill_id, upstream_type, git_url, git_subpath, git_ref,
+			last_seen_hash, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(skill_id) DO UPDATE SET
+			upstream_type = excluded.upstream_type,
+			git_url       = excluded.git_url,
+			git_subpath   = excluded.git_subpath,
+			git_ref       = excluded.git_ref,
+			updated_at    = CURRENT_TIMESTAMP
+	`, u.SkillID, u.UpstreamType, u.GitURL, u.GitSubpath, u.GitRef, u.LastSeenHash)
+	if err != nil {
+		return fmt.Errorf("upserting skill upstream: %w", err)
+	}
+	return nil
+}
+
+// GetUpstream returns the upstream row for a skill, or (nil, nil) if none.
+func (s *SkillStore) GetUpstream(skillID string) (*SkillUpstream, error) {
+	row := s.db.QueryRow(`
+		SELECT skill_id, upstream_type, git_url, git_subpath, git_ref,
+			last_checked_at, last_seen_sha, last_seen_hash,
+			drift_detected_at, drift_relay_version, drift_relay_hash,
+			drift_upstream_sha, drift_upstream_hash, drift_commits_ahead,
+			drift_severity, drift_summary, drift_recommended_action, drift_llm_model,
+			created_at, updated_at
+		FROM skill_upstreams WHERE skill_id = ?
+	`, skillID)
+	u, err := scanUpstream(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting skill upstream: %w", err)
+	}
+	return u, nil
+}
+
+// ClearUpstream removes the upstream row for a skill (opt-out of update tracking).
+func (s *SkillStore) ClearUpstream(skillID string) error {
+	_, err := s.db.Exec(`DELETE FROM skill_upstreams WHERE skill_id = ?`, skillID)
+	if err != nil {
+		return fmt.Errorf("clearing skill upstream: %w", err)
+	}
+	return nil
+}
+
+// ListUpstreams returns every upstream-tracking row, ordered with never-checked
+// rows first, then oldest-checked, with skill_id as a tiebreak. This is the
+// order the cron iterator wants.
+func (s *SkillStore) ListUpstreams() ([]*SkillUpstream, error) {
+	rows, err := s.db.Query(`
+		SELECT skill_id, upstream_type, git_url, git_subpath, git_ref,
+			last_checked_at, last_seen_sha, last_seen_hash,
+			drift_detected_at, drift_relay_version, drift_relay_hash,
+			drift_upstream_sha, drift_upstream_hash, drift_commits_ahead,
+			drift_severity, drift_summary, drift_recommended_action, drift_llm_model,
+			created_at, updated_at
+		FROM skill_upstreams
+		ORDER BY last_checked_at IS NULL DESC, last_checked_at ASC, skill_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("listing skill upstreams: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []*SkillUpstream
+	for rows.Next() {
+		u, err := scanUpstream(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning skill upstream: %w", err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// UpdateUpstreamCheck records the result of a no-drift check (cron path):
+// updates last_seen_sha, last_seen_hash, last_checked_at. Drift fields are not
+// touched here — clear them via ClearDriftReport when a new version actually
+// resolves the drift.
+func (s *SkillStore) UpdateUpstreamCheck(skillID, sha, hash string, checkedAt time.Time) error {
+	_, err := s.db.Exec(`
+		UPDATE skill_upstreams SET
+			last_seen_sha = ?, last_seen_hash = ?, last_checked_at = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE skill_id = ?
+	`, sha, hash, checkedAt, skillID)
+	if err != nil {
+		return fmt.Errorf("updating upstream check: %w", err)
+	}
+	return nil
+}
+
+// WriteDriftReport persists a drift report for a skill and flips
+// skills.outdated=1 atomically.
+func (s *SkillStore) WriteDriftReport(skillID string, r *DriftReport) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		UPDATE skill_upstreams SET
+			drift_detected_at = ?, drift_relay_version = ?, drift_relay_hash = ?,
+			drift_upstream_sha = ?, drift_upstream_hash = ?, drift_commits_ahead = ?,
+			drift_severity = ?, drift_summary = ?, drift_recommended_action = ?,
+			drift_llm_model = ?,
+			last_seen_sha = ?, last_seen_hash = ?, last_checked_at = ?,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE skill_id = ?
+	`, r.DetectedAt, r.RelayVersion, r.RelayHash,
+		r.UpstreamSHA, r.UpstreamHash, r.CommitsAhead,
+		r.Severity, r.Summary, r.RecommendedAction, r.LLMModel,
+		r.UpstreamSHA, r.UpstreamHash, r.DetectedAt,
+		skillID); err != nil {
+		return fmt.Errorf("writing drift report: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE skills SET outdated = 1 WHERE id = ?`, skillID); err != nil {
+		return fmt.Errorf("setting outdated flag: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit drift report: %w", err)
+	}
+	return nil
+}
+
+// ClearDriftReport clears all drift_* fields for a skill, records the latest
+// upstream hash as last_seen_hash, and flips skills.outdated=0 atomically.
+// Used after a fresh version is uploaded that brings the relay back in sync
+// with upstream.
+func (s *SkillStore) ClearDriftReport(skillID, latestSeenHash string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		UPDATE skill_upstreams SET
+			drift_detected_at = NULL, drift_relay_version = NULL, drift_relay_hash = NULL,
+			drift_upstream_sha = NULL, drift_upstream_hash = NULL, drift_commits_ahead = NULL,
+			drift_severity = NULL, drift_summary = NULL, drift_recommended_action = NULL,
+			drift_llm_model = NULL,
+			last_seen_hash = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE skill_id = ?
+	`, latestSeenHash, skillID); err != nil {
+		return fmt.Errorf("clearing drift report: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE skills SET outdated = 0 WHERE id = ?`, skillID); err != nil {
+		return fmt.Errorf("clearing outdated flag: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit clear drift: %w", err)
+	}
+	return nil
+}
+
+// scanUpstream reads one row off a rows.Scan-compatible iterator into a SkillUpstream.
+func scanUpstream(scanner interface {
+	Scan(dest ...any) error
+}) (*SkillUpstream, error) {
+	var u SkillUpstream
+	var (
+		lastCheckedAt   sql.NullTime
+		lastSeenSHA     sql.NullString
+		lastSeenHash    sql.NullString
+		driftDetectedAt sql.NullTime
+		driftRelayVer   sql.NullString
+		driftRelayHash  sql.NullString
+		driftUpSHA      sql.NullString
+		driftUpHash     sql.NullString
+		driftCommits    sql.NullInt64
+		driftSeverity   sql.NullString
+		driftSummary    sql.NullString
+		driftAction     sql.NullString
+		driftLLMModel   sql.NullString
+	)
+	if err := scanner.Scan(
+		&u.SkillID, &u.UpstreamType, &u.GitURL, &u.GitSubpath, &u.GitRef,
+		&lastCheckedAt, &lastSeenSHA, &lastSeenHash,
+		&driftDetectedAt, &driftRelayVer, &driftRelayHash,
+		&driftUpSHA, &driftUpHash, &driftCommits,
+		&driftSeverity, &driftSummary, &driftAction, &driftLLMModel,
+		&u.CreatedAt, &u.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	if lastCheckedAt.Valid {
+		t := lastCheckedAt.Time
+		u.LastCheckedAt = &t
+	}
+	if lastSeenSHA.Valid {
+		v := lastSeenSHA.String
+		u.LastSeenSHA = &v
+	}
+	if lastSeenHash.Valid {
+		v := lastSeenHash.String
+		u.LastSeenHash = &v
+	}
+	if driftDetectedAt.Valid {
+		t := driftDetectedAt.Time
+		u.DriftDetectedAt = &t
+	}
+	if driftRelayVer.Valid {
+		v := driftRelayVer.String
+		u.DriftRelayVersion = &v
+	}
+	if driftRelayHash.Valid {
+		v := driftRelayHash.String
+		u.DriftRelayHash = &v
+	}
+	if driftUpSHA.Valid {
+		v := driftUpSHA.String
+		u.DriftUpstreamSHA = &v
+	}
+	if driftUpHash.Valid {
+		v := driftUpHash.String
+		u.DriftUpstreamHash = &v
+	}
+	if driftCommits.Valid {
+		v := int(driftCommits.Int64)
+		u.DriftCommitsAhead = &v
+	}
+	if driftSeverity.Valid {
+		v := driftSeverity.String
+		u.DriftSeverity = &v
+	}
+	if driftSummary.Valid {
+		v := driftSummary.String
+		u.DriftSummary = &v
+	}
+	if driftAction.Valid {
+		v := driftAction.String
+		u.DriftRecommendedAction = &v
+	}
+	if driftLLMModel.Valid {
+		v := driftLLMModel.String
+		u.DriftLLMModel = &v
+	}
+	return &u, nil
 }
