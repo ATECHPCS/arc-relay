@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -25,7 +27,20 @@ type Config struct {
 // to "<dataDir>/skills" where dataDir is the directory containing Database.Path.
 // Override via TOML [skills] bundles_dir or env ARC_RELAY_SKILLS_DIR.
 type SkillsConfig struct {
-	BundlesDir string `toml:"bundles_dir"`
+	BundlesDir string              `toml:"bundles_dir"`
+	Checker    SkillsCheckerConfig `toml:"checker"`
+}
+
+// SkillsCheckerConfig configures the upstream-update checker that periodically
+// scans skill upstreams for drift. Task 9 introduces this as a minimal surface;
+// Task 15 will expand it (LLMModel, LLMPerFileMaxBytes, additional env-var
+// overrides).
+type SkillsCheckerConfig struct {
+	Enabled          bool          `toml:"enabled"`
+	Interval         time.Duration `toml:"interval"`
+	UpstreamCacheDir string        `toml:"upstream_cache_dir"`
+	GitCloneTimeout  time.Duration `toml:"git_clone_timeout"`
+	LLMDiffMaxBytes  int           `toml:"llm_diff_max_bytes"`
 }
 
 type LLMConfig struct {
@@ -132,6 +147,32 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("ARC_RELAY_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
+	// Skill checker: env override for Enabled (Task 9). Task 15 will add
+	// overrides for the rest of the surface.
+	if v := os.Getenv("ARC_RELAY_SKILLS_CHECKER_ENABLED"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes", "on":
+			cfg.Skills.Checker.Enabled = true
+		case "0", "false", "no", "off":
+			cfg.Skills.Checker.Enabled = false
+		}
+	}
+
+	// Apply checker defaults. Cache dir default mirrors how skill bundles
+	// resolve <dataDir>/skills — we use <dataDir>/upstream-cache here.
+	if cfg.Skills.Checker.Interval <= 0 {
+		cfg.Skills.Checker.Interval = 24 * time.Hour
+	}
+	if cfg.Skills.Checker.UpstreamCacheDir == "" {
+		cfg.Skills.Checker.UpstreamCacheDir = filepath.Join(filepath.Dir(cfg.Database.Path), "upstream-cache")
+	}
+	if cfg.Skills.Checker.GitCloneTimeout <= 0 {
+		cfg.Skills.Checker.GitCloneTimeout = 60 * time.Second
+	}
+	if cfg.Skills.Checker.LLMDiffMaxBytes <= 0 {
+		cfg.Skills.Checker.LLMDiffMaxBytes = 32768
+	}
+
 	if v := os.Getenv("ARC_RELAY_PORT"); v != "" {
 		var port int
 		if _, err := fmt.Sscanf(v, "%d", &port); err == nil {

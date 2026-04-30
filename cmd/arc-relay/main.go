@@ -26,6 +26,7 @@ import (
 	"github.com/comma-compliance/arc-relay/internal/recipes"
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/skills"
+	"github.com/comma-compliance/arc-relay/internal/skills/checker"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/web"
 	migrationsmemory "github.com/comma-compliance/arc-relay/migrations-memory"
@@ -304,6 +305,20 @@ func main() {
 	// Phase B: cron extraction backstop. Cancels when ctx is canceled at
 	// shutdown. Logs cycle stats at INFO every 30 min.
 	go extractorSvc.RunCron(ctx, 30*time.Minute)
+
+	// Skill upstream-update checker (Phase 3). Disabled by default; opt in via
+	// TOML [skills.checker] enabled = true OR ARC_RELAY_SKILLS_CHECKER_ENABLED=1.
+	// Defaults applied in config.Load (24h interval, <dataDir>/upstream-cache,
+	// 60s clone timeout, 32KiB diff cap).
+	if cfg.Skills.Checker.Enabled {
+		skillChecker := checker.NewService(skillStore, llmClient, cfg.Skills.Checker)
+		go skillChecker.RunCron(ctx, cfg.Skills.Checker.Interval)
+		slog.Info("skill checker enabled",
+			"interval", cfg.Skills.Checker.Interval,
+			"cache_dir", cfg.Skills.Checker.UpstreamCacheDir)
+	} else {
+		slog.Info("skill checker disabled (set ARC_RELAY_SKILLS_CHECKER_ENABLED=1 to enable)")
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
