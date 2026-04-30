@@ -596,6 +596,10 @@ The `.arc-sync-version` JSON marker (slug + version + SHA-256 + relay URL) is wh
 
 `arc-sync setup-claude` prefers the relay-served `arc-sync` skill (carrying the marker) and falls back to the binary's `//go:embed` copy when the relay is unreachable, unconfigured, or has not yet published the skill. Prior embed-only installs (no marker, byte-identical to embed) are auto-upgraded to the relay-managed bundle on the next `setup-claude` run.
 
+### Skill update tracking (optional)
+
+Arc Relay can monitor opt-in skills for upstream drift. When you publish a skill that mirrors a community repository, declare the upstream in `.arc-sync/upstream.toml` (or via `--upstream-git` flags on `arc-sync skill push`). The relay then runs a daily cron that checks the upstream for changes, classifies their severity via an LLM, and surfaces outdated status in `arc-sync skill list --remote`. Disabled by default; enable via `[skills.checker] enabled = true` or `ARC_RELAY_SKILLS_CHECKER_ENABLED=true`. See [docs/skills.md](docs/skills.md) for the full feature documentation.
+
 ## Connect to Comma Compliance Arc
 
 Arc Relay works standalone as a self-hosted MCP control plane. Optionally connect to [Comma Compliance Arc](https://commacompliance.ai/arc-relay/) for managed compliance policies, audit trails, and enterprise reporting.
@@ -610,6 +614,7 @@ Configure the archive middleware to point at your Comma Compliance webhook endpo
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture, MCP server types, and proxy design
 - [docs/archive-envelope.md](docs/archive-envelope.md) - Wire format for archive payload encryption
 - [docs/archive-handoff.md](docs/archive-handoff.md) - Archive recipient public-key handoff protocol
+- [docs/skills.md](docs/skills.md) - Skill repository upstream tracking, drift detection, and operator config
 
 ## License
 

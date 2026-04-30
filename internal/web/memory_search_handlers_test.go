@@ -27,7 +27,7 @@ func newSearchTestRig(t *testing.T) (*memory.Service, http.Handler, *store.User)
 	svc := memory.NewService(store.NewSessionMemoryStore(db), store.NewMessageStore(db))
 	user := &store.User{ID: "user-test", Username: "ian"}
 
-	h := web.NewMemoryHandlers(svc, func(ctx context.Context) string {
+	h := web.NewMemoryHandlers(svc, nil, func(ctx context.Context) string {
 		if u := server.UserFromContext(ctx); u != nil {
 			return u.ID
 		}
@@ -103,7 +103,7 @@ func TestMemorySearch_UserScoping(t *testing.T) {
 	)
 	// Then build a fresh mux that authenticates as "user" (the rig's default)
 	mux := http.NewServeMux()
-	h := web.NewMemoryHandlers(svc, func(ctx context.Context) string { return user.ID })
+	h := web.NewMemoryHandlers(svc, nil, func(ctx context.Context) string { return user.ID })
 	mux.Handle("/api/memory/search", http.HandlerFunc(h.HandleSearch))
 	rw := httptest.NewRecorder()
 	mux.ServeHTTP(rw, httptest.NewRequest("GET", "/api/memory/search?q=secret", nil))

@@ -24,6 +24,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/comma-compliance/arc-relay/internal/skills/subhash"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
@@ -421,4 +422,98 @@ func nullableString(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// ComputeSubtreeHashFromArchive extracts the gzipped tar archive into a
+// temporary directory, computes the deterministic subtree hash via
+// subhash.Hash, and returns the hex digest. The tempdir is removed before
+// return on both success and failure.
+//
+// Used by the upstream checker to compute a relay-side hash from the latest
+// published archive (so it can be persisted on the DriftReport) and by the
+// upload handler to compute the post-upload hash that ClearDriftReport
+// records as the new last_seen_hash baseline.
+//
+// Every entry's path is run through safeArchivePath; a single rejected entry
+// fails the whole call rather than producing a partial extraction.
+func (s *Service) ComputeSubtreeHashFromArchive(archive []byte) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "arc-relay-subhash-*")
+	if err != nil {
+		return "", fmt.Errorf("mkdtemp: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	if err := extractTarGz(archive, tmpDir); err != nil {
+		return "", err
+	}
+	return subhash.Hash(tmpDir)
+}
+
+// extractTarGz extracts a gzipped tar archive into destDir. Path-traversal
+// entries (absolute paths, ".." components) are rejected via safeArchivePath
+// — the same guard ValidateArchive applies during upload, repeated here so
+// extraction is independently safe.
+//
+// Symlinks and hardlinks are skipped (not supported in skill bundles); only
+// regular files and directories are materialised. The 5 MiB MaxArchiveSize
+// is also enforced per-file via io.LimitReader so a malicious header
+// claiming a huge Size cannot blow memory.
+func extractTarGz(archive []byte, destDir string) error {
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return fmt.Errorf("%w: not a gzip stream: %v", ErrInvalidArchive, err)
+	}
+	defer func() { _ = gz.Close() }()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("%w: tar read error: %v", ErrInvalidArchive, err)
+		}
+		if !safeArchivePath(hdr.Name) {
+			return fmt.Errorf("%w: unsafe archive path %q", ErrInvalidArchive, hdr.Name)
+		}
+		clean := strings.TrimPrefix(hdr.Name, "./")
+		// filepath.Join cleans "./" for us; safeArchivePath already rejected
+		// any "../"-bearing entry so the result is guaranteed inside destDir.
+		target := filepath.Join(destDir, clean)
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				return fmt.Errorf("mkdir %q: %w", target, err)
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				return fmt.Errorf("mkdir parent of %q: %w", target, err)
+			}
+			mode := os.FileMode(hdr.Mode & 0o777)
+			if mode == 0 {
+				mode = 0o644
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			if err != nil {
+				return fmt.Errorf("create %q: %w", target, err)
+			}
+			limited := io.LimitReader(tr, MaxArchiveSize)
+			if _, err := io.Copy(f, limited); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("write %q: %w", target, err)
+			}
+			if err := f.Close(); err != nil {
+				return fmt.Errorf("close %q: %w", target, err)
+			}
+		default:
+			// Symlinks, hardlinks, devices, fifos: skipped silently. The hash
+			// is computed over the extracted tree, so omitting them just
+			// produces a different (but stable) hash for archives that
+			// contain them. ValidateArchive doesn't reject them either.
+			continue
+		}
+	}
+	return nil
 }

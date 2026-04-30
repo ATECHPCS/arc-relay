@@ -23,6 +23,29 @@ type Skill struct {
 	YankedAt      *time.Time `json:"yanked_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
+	// Outdated is 1 when the relay has detected drift against the recorded
+	// upstream (Task 3 of the skill update checker plan). Omitted when the
+	// flag isn't set or the skill has no upstream tracking.
+	Outdated int `json:"outdated,omitempty"`
+	// Drift carries the most recent drift report (Task 13). Present only when
+	// Outdated == 1; the relay attaches it on list/detail responses so callers
+	// can render severity without a second round-trip.
+	Drift *DriftBlock `json:"drift,omitempty"`
+}
+
+// DriftBlock is the JSON-tagged drift report emitted by the relay's drift
+// checker (Task 12 / Task 13 of the skill update checker plan). It mirrors
+// the helper output and the per-skill `drift` JSON field.
+type DriftBlock struct {
+	Severity          string    `json:"severity"`
+	Summary           string    `json:"summary"`
+	RecommendedAction string    `json:"recommended_action"`
+	CommitsAhead      int       `json:"commits_ahead"`
+	UpstreamSHA       string    `json:"upstream_sha"`
+	DetectedAt        time.Time `json:"detected_at"`
+	RelayVersion      string    `json:"relay_version"`
+	RelayHash         string    `json:"relay_hash"`
+	LLMModel          string    `json:"llm_model"`
 }
 
 // SkillVersion mirrors the relay's store.SkillVersion JSON shape.
@@ -53,6 +76,22 @@ type SkillDetail struct {
 type UploadSkillResult struct {
 	Skill   *Skill        `json:"skill"`
 	Version *SkillVersion `json:"version"`
+}
+
+// UpstreamMetadata is the JSON shape sent in the `X-Upstream` header on a
+// version upload (see Task 4: internal/web/skills_handlers.go's
+// upstreamHeaderPayload — the shapes must match).
+//
+// Sentinel: empty Type AND empty URL means "clear the recorded upstream".
+// UploadSkill consults this to decide between `X-Upstream: <json>` and
+// `X-Clear-Upstream: true`. Defined in this package (rather than the higher-
+// level sync package) so UploadSkill can take it as a parameter without
+// creating a cycle — sync imports relay today.
+type UpstreamMetadata struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Subpath string `json:"subpath"`
+	Ref     string `json:"ref"`
 }
 
 // ListSkills calls GET /api/skills. Returns whatever the user can see — admin
@@ -93,7 +132,7 @@ func (c *Client) ListAssignedSkills() ([]*AssignedSkill, error) {
 func (c *Client) GetSkill(slug string) (*SkillDetail, error) {
 	body, err := c.skillGet("/api/skills/" + url.PathEscape(slug))
 	if err != nil {
-		if e, ok := err.(*skillHTTPError); ok && e.Status == http.StatusNotFound {
+		if e, ok := err.(*SkillHTTPError); ok && e.Status == http.StatusNotFound {
 			return nil, nil
 		}
 		return nil, err
@@ -103,6 +142,52 @@ func (c *Client) GetSkill(slug string) (*SkillDetail, error) {
 		return nil, fmt.Errorf("parse skill detail: %w", err)
 	}
 	return &resp, nil
+}
+
+// CheckDrift calls POST /api/skills/{slug}/check-drift (Task 12). The relay
+// fetches the recorded upstream, compares it against the latest stored
+// version, and either records new drift or reports the current state.
+//
+// Returns:
+//   - (drift, nil) on 200 — drift detected; DriftBlock has the LLM-classified
+//     severity/summary/recommended_action.
+//   - (nil, nil) on 204 — up-to-date with upstream.
+//   - (nil, *SkillHTTPError) on 404 (skill not found), 409 (no upstream
+//     configured), 502 (upstream fetch failed), or other non-2xx. Callers
+//     can `errors.As` to inspect Status and pretty-print.
+func (c *Client) CheckDrift(slug string) (*DriftBlock, error) {
+	endpoint := "/api/skills/" + url.PathEscape(slug) + "/check-drift"
+	req, err := http.NewRequest(http.MethodPost, c.BaseURL+endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to relay: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		var wrap struct {
+			Outdated bool        `json:"outdated"`
+			Drift    *DriftBlock `json:"drift"`
+		}
+		if err := json.Unmarshal(body, &wrap); err != nil {
+			return nil, fmt.Errorf("parsing drift response: %w", err)
+		}
+		return wrap.Drift, nil
+	}
+	// Wrap in SkillHTTPError so callers can distinguish 404/409/502 via
+	// errors.As — handleErrorResponse alone returns a plain error.
+	return nil, &SkillHTTPError{
+		Status: resp.StatusCode,
+		err:    handleErrorResponse(resp, body, fmt.Sprintf("skill %q check-drift", slug)),
+	}
 }
 
 // DownloadSkillVersion fetches the archive bytes for (slug, version). Returns
@@ -132,10 +217,18 @@ func (c *Client) DownloadSkillVersion(slug, version string) (archive []byte, sha
 }
 
 // UploadSkill posts an archive to POST /api/skills/{slug}/versions/{version}.
-// Body is the raw .tar.gz bytes. Phase 4 will wire this into `arc-sync skill
-// push <dir>`. Visibility is one of "public", "restricted", or "" (server
-// default = "restricted" on first publish; ignored on re-publish).
-func (c *Client) UploadSkill(slug, version, visibility string, archive []byte) (*UploadSkillResult, error) {
+// Body is the raw .tar.gz bytes. Visibility is one of "public", "restricted",
+// or "" (server default = "restricted" on first publish; ignored on
+// re-publish).
+//
+// upstream carries optional upstream-tracking metadata (see Task 6 of the
+// skill update checker plan). It maps to the relay's two-header protocol:
+//   - upstream == nil: send neither header (no upstream change requested).
+//   - upstream != nil with empty Type AND empty URL (the clear sentinel): send
+//     `X-Clear-Upstream: true` to disassociate the skill from any prior upstream.
+//   - upstream != nil with non-empty URL: marshal to JSON and send as the
+//     `X-Upstream` header. Empty Type defaults to "git" server-side.
+func (c *Client) UploadSkill(slug, version, visibility string, archive []byte, upstream *UpstreamMetadata) (*UploadSkillResult, error) {
 	q := url.Values{}
 	if visibility != "" {
 		q.Set("visibility", visibility)
@@ -151,6 +244,19 @@ func (c *Client) UploadSkill(slug, version, visibility string, archive []byte) (
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/gzip")
+	if upstream != nil {
+		// Sentinel: empty Type + empty URL → clear request. Anything else
+		// (even a partially-filled struct with just URL) → record/update.
+		if upstream.Type == "" && upstream.URL == "" {
+			req.Header.Set("X-Clear-Upstream", "true")
+		} else {
+			payload, err := json.Marshal(upstream)
+			if err != nil {
+				return nil, fmt.Errorf("marshal upstream metadata: %w", err)
+			}
+			req.Header.Set("X-Upstream", string(payload))
+		}
+	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to relay: %w", err)
@@ -240,17 +346,17 @@ func (c *Client) YankSkill(slug string, hard bool) error {
 	return nil
 }
 
-// skillHTTPError lets ListSkills/GetSkill/etc. distinguish 404-not-found from
+// SkillHTTPError lets ListSkills/GetSkill/etc. distinguish 404-not-found from
 // network/auth errors at the call site. handleErrorResponse already returns
 // useful errors for non-404s; we surface 404 specifically so GetSkill can
 // return (nil, nil).
-type skillHTTPError struct {
+type SkillHTTPError struct {
 	Status int
 	err    error
 }
 
-func (e *skillHTTPError) Error() string { return e.err.Error() }
-func (e *skillHTTPError) Unwrap() error { return e.err }
+func (e *SkillHTTPError) Error() string { return e.err.Error() }
+func (e *SkillHTTPError) Unwrap() error { return e.err }
 
 // skillGet is the JSON-API GET wrapper used by the read-side skill methods.
 func (c *Client) skillGet(endpoint string) ([]byte, error) {
@@ -270,7 +376,7 @@ func (c *Client) skillGet(endpoint string) ([]byte, error) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := handleErrorResponse(resp, body, "skills")
-		return nil, &skillHTTPError{Status: resp.StatusCode, err: err}
+		return nil, &SkillHTTPError{Status: resp.StatusCode, err: err}
 	}
 	return body, nil
 }

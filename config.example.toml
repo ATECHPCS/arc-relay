@@ -29,6 +29,37 @@ admin_password = "changeme"
 # Sentry DSN for error tracking (leave blank to disable)
 dsn = ""
 
+# --- Skill Update Checker ---
+# Optional: monitor opt-in skills for upstream drift.
+# When a skill declares an upstream (via .arc-sync/upstream.toml or
+# `arc-sync skill push --upstream-git`), the relay can fetch the upstream on
+# a cron, classify drift severity via the LLM, and surface outdated status
+# to clients. Disabled by default. See docs/skills.md for full details.
+[skills.checker]
+# Enable opt-in upstream tracking and daily drift detection.
+# Disabled by default. Override via ARC_RELAY_SKILLS_CHECKER_ENABLED=true.
+enabled = false
+
+# Cron interval. Override via ARC_RELAY_SKILLS_CHECKER_INTERVAL=24h.
+interval = "24h"
+
+# Where the daemon clones upstream repos. Defaults to <data_dir>/upstream-cache.
+# Override via ARC_RELAY_SKILLS_CHECKER_UPSTREAM_CACHE_DIR=/path/to/cache.
+# upstream_cache_dir = "/var/lib/arc-relay/upstream-cache"
+
+# Per-clone timeout. Use a longer value if your upstream is hosted on a slow network.
+git_clone_timeout = "60s"
+
+# Optional LLM model override. Empty = use the relay's default (gpt-4o-mini).
+# llm_model = "gpt-4o-mini"
+
+# Maximum bytes of `git diff --stat` output sent to the LLM per check.
+llm_diff_max_bytes = 32768
+
+# Maximum bytes of any individual file diff sent to the LLM (reserved for
+# future per-file context — currently unused; the LLM only sees the diff summary).
+llm_per_file_max_bytes = 4096
+
 # --- Middleware Configuration ---
 # Middleware is configured per-server via the web UI or API.
 # Below are examples of the JSON config for each middleware type.
