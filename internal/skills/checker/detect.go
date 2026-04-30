@@ -17,11 +17,9 @@ package checker
 //   - Drift:         real change. Caller hands off to LLM classifier.
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/comma-compliance/arc-relay/internal/skills/subhash"
@@ -45,7 +43,6 @@ const (
 // dependencies — both higher layers can build an UpstreamRef from their own
 // types in a single line.
 type UpstreamRef struct {
-	GitURL     string // e.g. https://github.com/foo/bar.git
 	GitSubpath string // e.g. skills/foo (empty = repo root)
 	GitRef     string // branch / tag / SHA; empty = HEAD
 }
@@ -195,7 +192,7 @@ func gitDiffSummary(ctx context.Context, cacheDir, fromSHA, toSHA, subpath strin
 	if subpath != "" {
 		args = append(args, "--", subpath)
 	}
-	out, err := runGitStat(ctx, cacheDir, args...)
+	out, err := runGit(ctx, cacheDir, args...)
 	if err != nil {
 		return "", err
 	}
@@ -215,23 +212,4 @@ func diffRange(fromSHA, toSHA string) string {
 		return emptyTree + ".." + toSHA
 	}
 	return fromSHA + ".." + toSHA
-}
-
-// runGitStat is a variant of runGit that tolerates non-zero exit when stdout
-// is non-empty. `git diff --stat` exits 0 in normal use, but this gives us a
-// safety net if upstream behaviour ever shifts (e.g. with --exit-code).
-// Currently identical to runGit; broken out so we have a place to add that
-// tolerance without disturbing other callers.
-func runGitStat(ctx context.Context, cacheDir string, args ...string) (string, error) {
-	full := append([]string{"-C", cacheDir}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Env = gitEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s",
-			strings.Join(full, " "), err, strings.TrimSpace(stderr.String()))
-	}
-	return stdout.String(), nil
 }

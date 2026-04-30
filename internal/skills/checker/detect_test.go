@@ -44,7 +44,6 @@ func TestDetect_NoMovement(t *testing.T) {
 	hash := hashSubpathAt(t, cache, head, "skills/foo")
 
 	d, err := Detect(context.Background(), &UpstreamRef{
-		GitURL:     fileURL(src),
 		GitSubpath: "skills/foo",
 		GitRef:     "origin/main",
 	}, head, hash, cache, 4096)
@@ -80,7 +79,6 @@ func TestDetect_NoPathTouch(t *testing.T) {
 	}
 
 	d, err := Detect(context.Background(), &UpstreamRef{
-		GitURL:     fileURL(src),
 		GitSubpath: "skills/foo",
 		GitRef:     "origin/main",
 	}, baselineSHA, baselineHash, cache, 4096)
@@ -117,7 +115,6 @@ func TestDetect_RevertedToSame(t *testing.T) {
 	}
 
 	d, err := Detect(context.Background(), &UpstreamRef{
-		GitURL:     fileURL(src),
 		GitSubpath: "skills/foo",
 		GitRef:     "origin/main",
 	}, baselineSHA, baselineHash, cache, 4096)
@@ -158,7 +155,6 @@ func TestDetect_Drift(t *testing.T) {
 	}
 
 	d, err := Detect(context.Background(), &UpstreamRef{
-		GitURL:     fileURL(src),
 		GitSubpath: "skills/foo",
 		GitRef:     "origin/main",
 	}, baselineSHA, baselineHash, cache, 4096)
@@ -224,7 +220,6 @@ func TestDetect_DriftDiffSummaryTruncated(t *testing.T) {
 
 	const maxBytes = 64
 	d, err := Detect(context.Background(), &UpstreamRef{
-		GitURL:     fileURL(src),
 		GitSubpath: "skills/foo",
 		GitRef:     "origin/main",
 	}, baselineSHA, baselineHash, cache, maxBytes)
@@ -241,6 +236,43 @@ func TestDetect_DriftDiffSummaryTruncated(t *testing.T) {
 	const suffix = "\n... (truncated)"
 	if len(d.DiffSummary) > maxBytes+len(suffix) {
 		t.Fatalf("DiffSummary length = %d, expected <= %d", len(d.DiffSummary), maxBytes+len(suffix))
+	}
+}
+
+// TestDetect_FirstCheckNoBaseline exercises the empty-lastSeenSHA path: a
+// caller with no prior baseline should always get a Drift result, with the
+// empty-tree sentinel in diffRange producing a non-empty ChangedFiles list
+// (every file at HEAD:subpath is "added").
+func TestDetect_FirstCheckNoBaseline(t *testing.T) {
+	src := makeTestRepo(t)
+	addCommit(t, src, map[string]string{"skills/foo/SKILL.md": "v1\n"}, "skills/foo: v1")
+
+	cache := filepath.Join(t.TempDir(), "cache")
+	if err := EnsureCache(context.Background(), cache, fileURL(src)); err != nil {
+		t.Fatalf("EnsureCache: %v", err)
+	}
+
+	d, err := Detect(context.Background(), &UpstreamRef{
+		GitSubpath: "skills/foo",
+		GitRef:     "HEAD",
+	}, "" /*lastSeenSHA*/, "" /*lastSeenHash*/, cache, 8192)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if d.Result != ResultDrift {
+		t.Fatalf("Result = %q, want %q", d.Result, ResultDrift)
+	}
+	if d.NewSHA == "" {
+		t.Fatalf("NewSHA empty, want populated")
+	}
+	if d.NewHash == "" {
+		t.Fatalf("NewHash empty, want populated")
+	}
+	if len(d.ChangedFiles) == 0 {
+		t.Fatalf("ChangedFiles empty, want at least one (empty-tree sentinel should list every file as added)")
+	}
+	if !strings.Contains(strings.Join(d.ChangedFiles, "\n"), "skills/foo/SKILL.md") {
+		t.Fatalf("ChangedFiles missing SKILL.md: %v", d.ChangedFiles)
 	}
 }
 
