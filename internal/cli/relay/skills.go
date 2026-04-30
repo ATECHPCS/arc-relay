@@ -55,6 +55,22 @@ type UploadSkillResult struct {
 	Version *SkillVersion `json:"version"`
 }
 
+// UpstreamMetadata is the JSON shape sent in the `X-Upstream` header on a
+// version upload (see Task 4: internal/web/skills_handlers.go's
+// upstreamHeaderPayload — the shapes must match).
+//
+// Sentinel: empty Type AND empty URL means "clear the recorded upstream".
+// UploadSkill consults this to decide between `X-Upstream: <json>` and
+// `X-Clear-Upstream: true`. Defined in this package (rather than the higher-
+// level sync package) so UploadSkill can take it as a parameter without
+// creating a cycle — sync imports relay today.
+type UpstreamMetadata struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Subpath string `json:"subpath"`
+	Ref     string `json:"ref"`
+}
+
 // ListSkills calls GET /api/skills. Returns whatever the user can see — admin
 // gets the full catalog (incl. yanked); non-admin gets public + assigned.
 func (c *Client) ListSkills() ([]*Skill, error) {
@@ -132,10 +148,18 @@ func (c *Client) DownloadSkillVersion(slug, version string) (archive []byte, sha
 }
 
 // UploadSkill posts an archive to POST /api/skills/{slug}/versions/{version}.
-// Body is the raw .tar.gz bytes. Phase 4 will wire this into `arc-sync skill
-// push <dir>`. Visibility is one of "public", "restricted", or "" (server
-// default = "restricted" on first publish; ignored on re-publish).
-func (c *Client) UploadSkill(slug, version, visibility string, archive []byte) (*UploadSkillResult, error) {
+// Body is the raw .tar.gz bytes. Visibility is one of "public", "restricted",
+// or "" (server default = "restricted" on first publish; ignored on
+// re-publish).
+//
+// upstream carries optional upstream-tracking metadata (see Task 6 of the
+// skill update checker plan). It maps to the relay's two-header protocol:
+//   - upstream == nil: send neither header (no upstream change requested).
+//   - upstream != nil with empty Type AND empty URL (the clear sentinel): send
+//     `X-Clear-Upstream: true` to disassociate the skill from any prior upstream.
+//   - upstream != nil with non-empty URL: marshal to JSON and send as the
+//     `X-Upstream` header. Empty Type defaults to "git" server-side.
+func (c *Client) UploadSkill(slug, version, visibility string, archive []byte, upstream *UpstreamMetadata) (*UploadSkillResult, error) {
 	q := url.Values{}
 	if visibility != "" {
 		q.Set("visibility", visibility)
@@ -151,6 +175,19 @@ func (c *Client) UploadSkill(slug, version, visibility string, archive []byte) (
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/gzip")
+	if upstream != nil {
+		// Sentinel: empty Type + empty URL → clear request. Anything else
+		// (even a partially-filled struct with just URL) → record/update.
+		if upstream.Type == "" && upstream.URL == "" {
+			req.Header.Set("X-Clear-Upstream", "true")
+		} else {
+			payload, err := json.Marshal(upstream)
+			if err != nil {
+				return nil, fmt.Errorf("marshal upstream metadata: %w", err)
+			}
+			req.Header.Set("X-Upstream", string(payload))
+		}
+	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to relay: %w", err)

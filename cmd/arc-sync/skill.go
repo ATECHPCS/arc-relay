@@ -299,14 +299,27 @@ func runSkillSync() {
 func runSkillPush() {
 	args := os.Args[3:]
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: arc-sync skill push <dir> [--version V] [--visibility public|restricted]")
+		fmt.Fprintln(os.Stderr, "usage: arc-sync skill push <dir> [--version V] [--visibility public|restricted] [--upstream-git URL [--upstream-path PATH] [--upstream-ref REF]] [--no-upstream]")
 		os.Exit(1)
 	}
 	dir := args[0]
-	version := getFlagValue(args[1:], "--version")
-	visibility := getFlagValue(args[1:], "--visibility")
+	rest := args[1:]
+	version := getFlagValue(rest, "--version")
+	visibility := getFlagValue(rest, "--visibility")
+	upstreamGit := getFlagValue(rest, "--upstream-git")
+	upstreamPath := getFlagValue(rest, "--upstream-path")
+	upstreamRef := getFlagValue(rest, "--upstream-ref")
+	noUpstream := hasFlagInArgs(rest, "--no-upstream")
 	if version == "" {
 		fmt.Fprintln(os.Stderr, "skill push: --version is required (semver MAJOR.MINOR.PATCH)")
+		os.Exit(1)
+	}
+
+	// Resolve upstream metadata before packaging so a malformed sidecar
+	// fails fast — no point spending IO on a tarball we can't push.
+	upstream, err := sync.LoadAndMerge(dir, upstreamGit, upstreamPath, upstreamRef, noUpstream)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "skill push:", err)
 		os.Exit(1)
 	}
 
@@ -316,7 +329,7 @@ func runSkillPush() {
 		os.Exit(1)
 	}
 	mgr := newSkillManager()
-	res, err := mgr.Client.UploadSkill(slug, version, visibility, archive)
+	res, err := mgr.Client.UploadSkill(slug, version, visibility, archive, upstream.ToWire())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "skill push:", err)
 		os.Exit(1)
