@@ -32,15 +32,27 @@ type SkillsConfig struct {
 }
 
 // SkillsCheckerConfig configures the upstream-update checker that periodically
-// scans skill upstreams for drift. Task 9 introduces this as a minimal surface;
-// Task 15 will expand it (LLMModel, LLMPerFileMaxBytes, additional env-var
-// overrides).
+// scans skill upstreams for drift.
+//
+// LLMModel is an optional per-checker override. When empty, classification
+// uses whatever model the relay's shared llm.Client was constructed with
+// (which in turn defaults to gpt-4o-mini). The field exists so operators can
+// pin a different model for skill-drift classification without touching the
+// global LLM model used elsewhere.
+//
+// LLMPerFileMaxBytes is currently unused — the LLM classifier only sees the
+// pre-truncated `git diff --stat` summary (governed by LLMDiffMaxBytes), not
+// individual file diffs. The field is reserved for future per-file truncation
+// in the LLM prompt builder so operators can set it ahead of that change
+// without rotating their config later.
 type SkillsCheckerConfig struct {
-	Enabled          bool          `toml:"enabled"`
-	Interval         time.Duration `toml:"interval"`
-	UpstreamCacheDir string        `toml:"upstream_cache_dir"`
-	GitCloneTimeout  time.Duration `toml:"git_clone_timeout"`
-	LLMDiffMaxBytes  int           `toml:"llm_diff_max_bytes"`
+	Enabled            bool          `toml:"enabled"`
+	Interval           time.Duration `toml:"interval"`
+	UpstreamCacheDir   string        `toml:"upstream_cache_dir"`
+	GitCloneTimeout    time.Duration `toml:"git_clone_timeout"`
+	LLMModel           string        `toml:"llm_model"`
+	LLMDiffMaxBytes    int           `toml:"llm_diff_max_bytes"`
+	LLMPerFileMaxBytes int           `toml:"llm_per_file_max_bytes"`
 }
 
 type LLMConfig struct {
@@ -147,8 +159,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("ARC_RELAY_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
-	// Skill checker: env override for Enabled (Task 9). Task 15 will add
-	// overrides for the rest of the surface.
+	// Skill checker env overrides. Applied before defaults so a parseable
+	// override of zero/empty falls through to the default rather than being
+	// preserved as an explicit override.
 	if v := os.Getenv("ARC_RELAY_SKILLS_CHECKER_ENABLED"); v != "" {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "1", "true", "yes", "on":
@@ -157,9 +170,19 @@ func Load(path string) (*Config, error) {
 			cfg.Skills.Checker.Enabled = false
 		}
 	}
+	if v := os.Getenv("ARC_RELAY_SKILLS_CHECKER_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(strings.TrimSpace(v)); err == nil && d > 0 {
+			cfg.Skills.Checker.Interval = d
+		}
+	}
+	if v := os.Getenv("ARC_RELAY_SKILLS_CHECKER_UPSTREAM_CACHE_DIR"); v != "" {
+		cfg.Skills.Checker.UpstreamCacheDir = v
+	}
 
 	// Apply checker defaults. Cache dir default mirrors how skill bundles
 	// resolve <dataDir>/skills — we use <dataDir>/upstream-cache here.
+	// LLMModel intentionally has no default: empty string falls back to the
+	// shared llm.Client's own default (gpt-4o-mini).
 	if cfg.Skills.Checker.Interval <= 0 {
 		cfg.Skills.Checker.Interval = 24 * time.Hour
 	}
@@ -171,6 +194,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Skills.Checker.LLMDiffMaxBytes <= 0 {
 		cfg.Skills.Checker.LLMDiffMaxBytes = 32768
+	}
+	if cfg.Skills.Checker.LLMPerFileMaxBytes <= 0 {
+		cfg.Skills.Checker.LLMPerFileMaxBytes = 4096
 	}
 
 	if v := os.Getenv("ARC_RELAY_PORT"); v != "" {
