@@ -72,7 +72,10 @@ func ResolveSHA(ctx context.Context, cacheDir, ref string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	out, err := runGit(ctx, cacheDir, "rev-parse", ref)
+	if strings.HasPrefix(ref, "-") {
+		return "", fmt.Errorf("ResolveSHA: ref %q must not start with '-'", ref)
+	}
+	out, err := runGit(ctx, cacheDir, "rev-parse", "--verify", ref)
 	if err != nil {
 		return "", err
 	}
