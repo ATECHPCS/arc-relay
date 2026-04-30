@@ -1,4 +1,5 @@
-// Package llm provides a minimal Anthropic Messages API client for tool optimization.
+// Package llm provides a minimal OpenAI chat-completions client for tool
+// optimization and other internal LLM tasks.
 package llm
 
 import (
@@ -12,13 +13,12 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://api.anthropic.com/v1/messages"
-	defaultModel   = "claude-haiku-4-5-20251001"
-	apiVersion     = "2023-06-01"
+	defaultBaseURL = "https://api.openai.com/v1/chat/completions"
+	defaultModel   = "gpt-4o-mini"
 	maxTokens      = 16384
 )
 
-// Client is a minimal Anthropic Messages API client.
+// Client is a minimal OpenAI chat-completions client.
 type Client struct {
 	apiKey  string
 	model   string
@@ -26,8 +26,8 @@ type Client struct {
 	http    *http.Client
 }
 
-// NewClient creates a new Anthropic API client.
-// If model is empty, defaults to claude-haiku-4-5.
+// NewClient creates a new OpenAI client.
+// If model is empty, defaults to gpt-4o-mini.
 func NewClient(apiKey, model string) *Client {
 	if model == "" {
 		model = defaultModel
@@ -43,14 +43,10 @@ func NewClient(apiKey, model string) *Client {
 }
 
 // Model returns the configured model name.
-func (c *Client) Model() string {
-	return c.model
-}
+func (c *Client) Model() string { return c.model }
 
 // Available returns true if the client has an API key configured.
-func (c *Client) Available() bool {
-	return c.apiKey != ""
-}
+func (c *Client) Available() bool { return c.apiKey != "" }
 
 // Message represents a chat message.
 type Message struct {
@@ -58,23 +54,19 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-type messagesRequest struct {
+type chatRequest struct {
 	Model     string    `json:"model"`
 	MaxTokens int       `json:"max_tokens"`
-	System    string    `json:"system,omitempty"`
 	Messages  []Message `json:"messages"`
 }
 
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type messagesResponse struct {
-	Content []contentBlock `json:"content"`
-	Usage   struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+type chatResponse struct {
+	Choices []struct {
+		Message Message `json:"message"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
 	Error *struct {
 		Type    string `json:"type"`
@@ -89,17 +81,17 @@ type Result struct {
 	OutputTokens int
 }
 
-// Complete sends a message to the Anthropic API and returns the response.
+// Complete sends system + user messages to OpenAI and returns the response.
 func (c *Client) Complete(ctx context.Context, system, userPrompt string) (*Result, error) {
 	if c.apiKey == "" {
 		return nil, fmt.Errorf("LLM API key not configured (set ARC_RELAY_LLM_API_KEY)")
 	}
 
-	reqBody := messagesRequest{
+	reqBody := chatRequest{
 		Model:     c.model,
 		MaxTokens: maxTokens,
-		System:    system,
 		Messages: []Message{
+			{Role: "system", Content: system},
 			{Role: "user", Content: userPrompt},
 		},
 	}
@@ -114,8 +106,7 @@ func (c *Client) Complete(ctx context.Context, system, userPrompt string) (*Resu
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.apiKey)
-	req.Header.Set("anthropic-version", apiVersion)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -129,7 +120,6 @@ func (c *Client) Complete(ctx context.Context, system, userPrompt string) (*Resu
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Try to extract a clean error message from the API response
 		var apiErr struct {
 			Error struct {
 				Type    string `json:"type"`
@@ -142,25 +132,20 @@ func (c *Client) Complete(ctx context.Context, system, userPrompt string) (*Resu
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	var result messagesResponse
+	var result chatResponse
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("parsing response: %w", err)
 	}
-
 	if result.Error != nil {
 		return nil, fmt.Errorf("API error: %s: %s", result.Error.Type, result.Error.Message)
 	}
-
-	var text string
-	for _, block := range result.Content {
-		if block.Type == "text" {
-			text += block.Text
-		}
+	if len(result.Choices) == 0 {
+		return nil, fmt.Errorf("API returned no choices")
 	}
 
 	return &Result{
-		Text:         text,
-		InputTokens:  result.Usage.InputTokens,
-		OutputTokens: result.Usage.OutputTokens,
+		Text:         result.Choices[0].Message.Content,
+		InputTokens:  result.Usage.PromptTokens,
+		OutputTokens: result.Usage.CompletionTokens,
 	}, nil
 }
