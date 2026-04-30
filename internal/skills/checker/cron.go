@@ -18,8 +18,10 @@ package checker
 //     For NoMovement the SHA is the same we had; for NoPathTouch and
 //     RevertedToSame upstream HEAD moved but the subpath is byte-identical,
 //     so we re-pin our pointer without re-hashing.
-//   - Drift → WriteDriftReport with placeholder severity/summary. Task 11
-//     replaces the placeholders with real LLM output.
+//   - Drift → Classify (LLM, with deterministic fallback) → WriteDriftReport.
+//     Before classification we extract the latest-published archive, hash it
+//     via subhash.Hash, and pass the digest to Classify so the report carries
+//     a side-by-side relay-vs-upstream hash for the UI.
 
 import (
 	"context"
@@ -27,6 +29,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -145,21 +148,38 @@ func (s *Service) checkOne(ctx context.Context, u *store.SkillUpstream) error {
 		return nil
 
 	case ResultDrift:
-		// Placeholder severity + summary. Task 11 replaces these with real
-		// LLM output by passing det.DiffSummary + det.ChangedFiles into the
-		// classifier. LLMModel="" signals "no model used" to the UI.
-		report := &store.DriftReport{
-			RelayVersion:      "",
-			RelayHash:         lastSeenHash,
-			UpstreamSHA:       det.NewSHA,
-			UpstreamHash:      det.NewHash,
-			CommitsAhead:      det.CommitsAhead,
-			Severity:          "unknown",
-			Summary:           "drift detected",
-			RecommendedAction: "review changes",
-			LLMModel:          "",
-			DetectedAt:        now,
+		// Resolve the skill row so Classify can build a per-skill prompt and
+		// the report can be tagged with the published version we're drifting
+		// from. A vanished skill is genuinely an error (the upstream row
+		// referenced it moments ago); the cron loop logs + counts and
+		// continues with the next upstream.
+		skill, err := s.skills.GetSkill(u.SkillID)
+		if err != nil {
+			checksTotal.WithLabelValues("error").Inc()
+			return fmt.Errorf("get skill for classify: %w", err)
 		}
+		if skill == nil {
+			checksTotal.WithLabelValues("error").Inc()
+			return fmt.Errorf("skill %s vanished mid-check", u.SkillID)
+		}
+
+		// Compute the relay-side subtree hash from the latest published
+		// archive. This is non-fatal: a missing version row, missing archive,
+		// or hash failure logs a warn and falls through with relayHash="".
+		// Classify and the DriftReport happily accept an empty relay hash
+		// (older drift_reports rows already do).
+		relayHash := s.relayHashForSkill(skill)
+
+		report, err := Classify(ctx, s.llm, skill, det, relayHash, skill.LatestVersion)
+		if err != nil {
+			checksTotal.WithLabelValues("error").Inc()
+			return fmt.Errorf("classify drift: %w", err)
+		}
+		// Classify sets DetectedAt to time.Now().UTC(); preserve the cron's
+		// `now` instead so all four outcomes share a single observed timestamp
+		// per cycle (matters for cycle-level metrics + tests that compare
+		// LastCheckedAt to DriftDetectedAt).
+		report.DetectedAt = now
 		if err := s.skills.WriteDriftReport(u.SkillID, report); err != nil {
 			checksTotal.WithLabelValues("error").Inc()
 			return fmt.Errorf("write drift report: %w", err)
@@ -171,6 +191,50 @@ func (s *Service) checkOne(ctx context.Context, u *store.SkillUpstream) error {
 		checksTotal.WithLabelValues("error").Inc()
 		return fmt.Errorf("checkOne: unknown Detect result %q", det.Result)
 	}
+}
+
+// relayHashForSkill computes the deterministic subtree hash of the skill's
+// latest published archive. Returns "" on any failure (no LatestVersion, no
+// version row, missing file, hash error, missing skillsSvc) — the caller
+// treats an empty hash the same way the rest of the system already does for
+// pre-Phase-4 rows.
+//
+// All failure modes are logged at warn level so an operator can tell drift
+// reports without a relay hash apart from drift reports against skills that
+// genuinely have no published archive yet.
+func (s *Service) relayHashForSkill(skill *store.Skill) string {
+	if skill == nil || skill.LatestVersion == "" {
+		return ""
+	}
+	if s.skillsSvc == nil {
+		// Defensive: tests may construct a Service without a skills.Service.
+		// Don't log — tests would have to filter this out from their output.
+		return ""
+	}
+	v, err := s.skills.GetVersion(skill.ID, skill.LatestVersion)
+	if err != nil {
+		slog.Warn("checker: relay hash get-version failed",
+			"skill_id", skill.ID, "version", skill.LatestVersion, "err", err)
+		return ""
+	}
+	if v == nil {
+		slog.Warn("checker: relay hash version row missing",
+			"skill_id", skill.ID, "version", skill.LatestVersion)
+		return ""
+	}
+	archive, err := os.ReadFile(filepath.Join(s.skillsSvc.BundlesDir(), v.ArchivePath))
+	if err != nil {
+		slog.Warn("checker: relay hash archive read failed",
+			"skill_id", skill.ID, "version", skill.LatestVersion, "err", err)
+		return ""
+	}
+	h, err := s.skillsSvc.ComputeSubtreeHashFromArchive(archive)
+	if err != nil {
+		slog.Warn("checker: relay hash compute failed",
+			"skill_id", skill.ID, "version", skill.LatestVersion, "err", err)
+		return ""
+	}
+	return h
 }
 
 // cacheDirFor returns the per-upstream cache directory under the configured

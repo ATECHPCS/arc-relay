@@ -6,22 +6,32 @@ package checker
 // fixture git repo (via makeTestRepo from git_test.go).
 //
 // Each subtest covers one of the four Detect outcomes end-to-end and asserts
-// the resulting skill_upstreams row state.
+// the resulting skill_upstreams row state. The Drift path additionally
+// exercises the LLM classifier wiring: one subtest stubs an httptest server
+// returning a known JSON envelope (assert severity flows through), and one
+// subtest uses an empty-key llm.Client (assert "unknown" fallback).
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"github.com/comma-compliance/arc-relay/internal/config"
+	"github.com/comma-compliance/arc-relay/internal/llm"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
 
 // newCheckerForTest wires a Service against a fresh test DB + a checker cfg
-// pointing at a tempdir cache. Returns the service, the SkillStore (so tests
-// can seed skills + assert state), and the cache directory.
-func newCheckerForTest(t *testing.T) (*Service, *store.SkillStore, string) {
+// pointing at a tempdir cache. Pass a non-nil llmClient to exercise the
+// classifier path; nil tolerates the same nil-Client path Classify already
+// handles. Returns the service, the SkillStore (so tests can seed skills +
+// assert state), and the cache directory.
+func newCheckerForTest(t *testing.T, llmClient *llm.Client) (*Service, *store.SkillStore, string) {
 	t.Helper()
 	db := testutil.OpenTestFileDB(t)
 	skillStore := store.NewSkillStore(db)
@@ -31,8 +41,29 @@ func newCheckerForTest(t *testing.T) (*Service, *store.SkillStore, string) {
 		UpstreamCacheDir: cacheDir,
 		LLMDiffMaxBytes:  4096,
 	}
-	svc := NewService(skillStore, nil, cfg)
+	// skillsSvc is left nil — the Drift tests don't need a relay-side hash
+	// (the skill rows seeded here have no LatestVersion + no archive on
+	// disk), and relayHashForSkill short-circuits to "" when LatestVersion
+	// is empty regardless of skillsSvc.
+	svc := NewService(skillStore, nil, llmClient, cfg)
 	return svc, skillStore, cacheDir
+}
+
+// stubLLMServer mints a chat-completions httptest server that returns the
+// given JSON envelope (already-encoded message content) as the assistant
+// reply. Used by TestCheckOne_Drift.
+func stubLLMServer(t *testing.T, content string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		envelope := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]string{"role": "assistant", "content": content}},
+			},
+			"usage": map[string]int{"prompt_tokens": 10, "completion_tokens": 4},
+		}
+		_ = json.NewEncoder(w).Encode(envelope)
+	}))
 }
 
 // seedSkillAndUpstream inserts a skill row + skill_upstreams row pointing at
@@ -69,14 +100,27 @@ func seedSkillAndUpstream(t *testing.T, st *store.SkillStore, slug, gitURL, subp
 // hashSubpathAt is duplicated from detect_test.go via the same package — but
 // detect_test.go's helper already lives in this package, so we reuse it.
 
-// TestCheckOne_Drift exercises the full drift path: baseline registered, real
-// content change upstream, RunOnce dispatches to checkOne, which writes a
-// drift report and flips skills.outdated to 1.
+// TestCheckOne_Drift exercises the full drift path with a stubbed LLM:
+// baseline registered, real content change upstream, RunOnce dispatches to
+// checkOne, which calls Classify (against our httptest server) and persists
+// the resulting DriftReport. Severity, summary, action, and llm_model must
+// all reflect the LLM's response — not the placeholder values the prior
+// implementation wrote.
 func TestCheckOne_Drift(t *testing.T) {
 	src := makeTestRepo(t)
 	addCommit(t, src, map[string]string{"skills/foo/SKILL.md": "v1\n"}, "skills/foo: v1")
 
-	svc, skillStore, cacheDir := newCheckerForTest(t)
+	envelope, _ := json.Marshal(map[string]string{
+		"severity":           "minor",
+		"summary":            "Two files updated; non-functional changes only.",
+		"recommended_action": "Pull at next maintenance window.",
+	})
+	srv := stubLLMServer(t, string(envelope))
+	defer srv.Close()
+	llmClient := llm.NewClient("test-key", "gpt-4o-mini")
+	llmClient.SetBaseURLForTest(srv.URL)
+
+	svc, skillStore, cacheDir := newCheckerForTest(t, llmClient)
 
 	// Pre-clone so we can resolve the baseline SHA + subpath hash to seed the
 	// skill_upstreams row in steady state. Without a baseline Detect treats
@@ -92,7 +136,7 @@ func TestCheckOne_Drift(t *testing.T) {
 
 	svc.RunOnce(context.Background())
 
-	// Verify skill_upstreams row got a drift report.
+	// Verify skill_upstreams row got a drift report from the LLM.
 	got, err := skillStore.GetUpstream(skillID)
 	if err != nil {
 		t.Fatalf("GetUpstream: %v", err)
@@ -100,17 +144,17 @@ func TestCheckOne_Drift(t *testing.T) {
 	if got == nil {
 		t.Fatalf("upstream row missing")
 	}
-	if got.DriftSeverity == nil || *got.DriftSeverity != "unknown" {
-		t.Fatalf("DriftSeverity = %v, want %q", deref(got.DriftSeverity), "unknown")
+	if got.DriftSeverity == nil || *got.DriftSeverity != "minor" {
+		t.Fatalf("DriftSeverity = %v, want %q (from LLM)", deref(got.DriftSeverity), "minor")
 	}
-	if got.DriftSummary == nil || *got.DriftSummary != "drift detected" {
-		t.Fatalf("DriftSummary = %v, want %q", deref(got.DriftSummary), "drift detected")
+	if got.DriftSummary == nil || *got.DriftSummary != "Two files updated; non-functional changes only." {
+		t.Fatalf("DriftSummary = %v, want LLM text", deref(got.DriftSummary))
 	}
-	if got.DriftRecommendedAction == nil || *got.DriftRecommendedAction != "review changes" {
-		t.Fatalf("DriftRecommendedAction = %v, want %q", deref(got.DriftRecommendedAction), "review changes")
+	if got.DriftRecommendedAction == nil || *got.DriftRecommendedAction != "Pull at next maintenance window." {
+		t.Fatalf("DriftRecommendedAction = %v, want LLM text", deref(got.DriftRecommendedAction))
 	}
-	if got.DriftLLMModel == nil || *got.DriftLLMModel != "" {
-		t.Fatalf("DriftLLMModel = %v, want empty", deref(got.DriftLLMModel))
+	if got.DriftLLMModel == nil || *got.DriftLLMModel != "gpt-4o-mini" {
+		t.Fatalf("DriftLLMModel = %v, want %q", deref(got.DriftLLMModel), "gpt-4o-mini")
 	}
 	if got.DriftCommitsAhead == nil || *got.DriftCommitsAhead < 1 {
 		t.Fatalf("DriftCommitsAhead = %v, want >= 1", got.DriftCommitsAhead)
@@ -126,6 +170,46 @@ func TestCheckOne_Drift(t *testing.T) {
 	}
 }
 
+// TestCheckOne_Drift_NoLLMKey exercises the cron drift path when the LLM
+// client is configured but has no API key (Available()==false). Classify
+// must skip the network and return the deterministic fallback triple, which
+// the cron then persists. Severity must be "unknown" + LLMModel "".
+func TestCheckOne_Drift_NoLLMKey(t *testing.T) {
+	src := makeTestRepo(t)
+	addCommit(t, src, map[string]string{"skills/foo/SKILL.md": "v1\n"}, "skills/foo: v1")
+
+	// Empty-key client → Available()==false. No httptest server: any HTTP
+	// call would fail loudly, which is exactly what we want to detect.
+	llmClient := llm.NewClient("", "gpt-4o-mini")
+	if llmClient.Available() {
+		t.Fatalf("test setup: empty-key client must be unavailable")
+	}
+
+	svc, skillStore, cacheDir := newCheckerForTest(t, llmClient)
+	baselineSHA, baselineHash := primeCacheBaseline(t, src, cacheDir, "skills/foo")
+	skillID := seedSkillAndUpstream(t, skillStore, "drift-nokey-skill",
+		fileURL(src), "skills/foo", baselineSHA, baselineHash)
+
+	// Real content drift.
+	addCommit(t, src, map[string]string{"skills/foo/SKILL.md": "v2\n"}, "skills/foo: v2")
+
+	svc.RunOnce(context.Background())
+
+	got, err := skillStore.GetUpstream(skillID)
+	if err != nil || got == nil {
+		t.Fatalf("GetUpstream: u=%v err=%v", got, err)
+	}
+	if got.DriftSeverity == nil || *got.DriftSeverity != "unknown" {
+		t.Fatalf("DriftSeverity = %v, want %q (fallback)", deref(got.DriftSeverity), "unknown")
+	}
+	if got.DriftLLMModel == nil || *got.DriftLLMModel != "" {
+		t.Fatalf("DriftLLMModel = %v, want empty (fallback)", deref(got.DriftLLMModel))
+	}
+	if got.DriftRecommendedAction == nil || *got.DriftRecommendedAction != fallbackRecommendedAction {
+		t.Fatalf("DriftRecommendedAction = %v, want canned fallback", deref(got.DriftRecommendedAction))
+	}
+}
+
 // TestCheckOne_NoMovement exercises the cheapest path: upstream HEAD hasn't
 // moved since lastSeenSHA, so we just bump last_checked_at and leave drift
 // state alone.
@@ -133,7 +217,7 @@ func TestCheckOne_NoMovement(t *testing.T) {
 	src := makeTestRepo(t)
 	addCommit(t, src, map[string]string{"skills/foo/SKILL.md": "v1\n"}, "skills/foo: v1")
 
-	svc, skillStore, cacheDir := newCheckerForTest(t)
+	svc, skillStore, cacheDir := newCheckerForTest(t, nil)
 	baselineSHA, baselineHash := primeCacheBaseline(t, src, cacheDir, "skills/foo")
 
 	skillID := seedSkillAndUpstream(t, skillStore, "still-skill",
@@ -173,7 +257,7 @@ func TestCheckOne_NoPathTouch(t *testing.T) {
 	src := makeTestRepo(t)
 	addCommit(t, src, map[string]string{"skills/foo/SKILL.md": "v1\n"}, "skills/foo: v1")
 
-	svc, skillStore, cacheDir := newCheckerForTest(t)
+	svc, skillStore, cacheDir := newCheckerForTest(t, nil)
 	baselineSHA, baselineHash := primeCacheBaseline(t, src, cacheDir, "skills/foo")
 
 	skillID := seedSkillAndUpstream(t, skillStore, "movehead-skill",

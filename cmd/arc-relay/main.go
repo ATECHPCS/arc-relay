@@ -311,7 +311,7 @@ func main() {
 	// Defaults applied in config.Load (24h interval, <dataDir>/upstream-cache,
 	// 60s clone timeout, 32KiB diff cap).
 	if cfg.Skills.Checker.Enabled {
-		skillChecker := checker.NewService(skillStore, llmClient, cfg.Skills.Checker)
+		skillChecker := checker.NewService(skillStore, skillSvc, llmClient, cfg.Skills.Checker)
 		go skillChecker.RunCron(ctx, cfg.Skills.Checker.Interval)
 		slog.Info("skill checker enabled",
 			"interval", cfg.Skills.Checker.Interval,

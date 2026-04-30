@@ -376,12 +376,19 @@ func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, s
 	}
 
 	// After ANY successful push, if an upstream row exists for this skill,
-	// clear drift. Task 11 will replace the placeholder hash with the real
-	// post-upload subtree hash.
+	// clear drift and re-baseline last_seen_hash to the just-uploaded
+	// archive's subtree hash. The hash compute is non-fatal: a failure here
+	// degrades to last_seen_hash="" (matches pre-Phase-4 behavior) but never
+	// blocks the upload.
+	relayHash, hashErr := h.svc.ComputeSubtreeHashFromArchive(body)
+	if hashErr != nil {
+		slog.Warn("skills upload: compute relay hash", "skill", res.Skill.ID, "err", hashErr)
+		relayHash = ""
+	}
 	if upstream, err := h.store.GetUpstream(res.Skill.ID); err != nil {
 		slog.Warn("skills upload: get upstream", "skill", res.Skill.ID, "err", err)
 	} else if upstream != nil {
-		if err := h.store.ClearDriftReport(res.Skill.ID, ""); err != nil {
+		if err := h.store.ClearDriftReport(res.Skill.ID, relayHash); err != nil {
 			slog.Warn("skills upload: clear drift", "skill", res.Skill.ID, "err", err)
 		}
 	}

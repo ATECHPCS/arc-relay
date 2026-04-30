@@ -5,31 +5,39 @@ package checker
 // against a SkillStore for persistence and a config.SkillsCheckerConfig for
 // runtime knobs (cache directory, diff size cap, timeouts).
 //
-// The LLM client is wired through NewService for forward-compatibility with
-// Task 11 — Task 9 itself only emits placeholder severity/summary on Drift
-// and never calls the LLM.
+// The LLM client is wired through NewService for the Drift-classification
+// path (Task 11): checkOne consults Classify() to populate the DriftReport's
+// severity/summary/recommended_action fields.
+//
+// skillsSvc is the upstream skill repository service. checkOne uses it to
+// compute the relay-side subtree hash from the latest published archive so
+// the DriftReport can carry both relay and upstream hashes for UI diffing.
 
 import (
 	"github.com/comma-compliance/arc-relay/internal/config"
 	"github.com/comma-compliance/arc-relay/internal/llm"
+	"github.com/comma-compliance/arc-relay/internal/skills"
 	"github.com/comma-compliance/arc-relay/internal/store"
 )
 
 // Service is the checker's main entrypoint: cron loop, on-demand single-skill
 // check (Task 12), and the per-upstream orchestration in checkOne.
 type Service struct {
-	skills *store.SkillStore
-	llm    *llm.Client
-	cfg    config.SkillsCheckerConfig
+	skills    *store.SkillStore
+	skillsSvc *skills.Service
+	llm       *llm.Client
+	cfg       config.SkillsCheckerConfig
 }
 
-// NewService constructs a Service. llm may be nil-but-non-Available; checkOne
-// only consults it on the Drift path (Task 11) and currently emits placeholder
-// values regardless.
-func NewService(skills *store.SkillStore, llm *llm.Client, cfg config.SkillsCheckerConfig) *Service {
+// NewService constructs a Service. llm may be nil-but-non-Available; Classify
+// transparently falls back to a deterministic offline triple in that case.
+// skillsSvc is used only on the Drift path (to read the published archive
+// and compute its hash); it may be nil in tests that don't exercise drift.
+func NewService(skills *store.SkillStore, skillsSvc *skills.Service, llm *llm.Client, cfg config.SkillsCheckerConfig) *Service {
 	return &Service{
-		skills: skills,
-		llm:    llm,
-		cfg:    cfg,
+		skills:    skills,
+		skillsSvc: skillsSvc,
+		llm:       llm,
+		cfg:       cfg,
 	}
 }

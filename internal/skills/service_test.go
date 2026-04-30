@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/comma-compliance/arc-relay/internal/skills"
+	"github.com/comma-compliance/arc-relay/internal/skills/subhash"
 	"github.com/comma-compliance/arc-relay/internal/store"
 	"github.com/comma-compliance/arc-relay/internal/testutil"
 )
@@ -346,5 +347,101 @@ func TestResolveLatest(t *testing.T) {
 
 	if _, _, err := svc.ResolveLatest("does-not-exist"); !errors.Is(err, skills.ErrSkillNotFound) {
 		t.Fatalf("expected ErrSkillNotFound for missing slug, got %v", err)
+	}
+}
+
+// TestComputeSubtreeHashFromArchive verifies that the in-memory extract +
+// hash path produces the same digest as a manual extraction followed by
+// subhash.Hash on the resulting tree. This is the contract Phase 4 relies on
+// to compare relay-side and upstream-side hashes apples-to-apples.
+func TestComputeSubtreeHashFromArchive(t *testing.T) {
+	svc, _, _ := newService(t)
+	archive := buildArchive(t, [][2]string{
+		{"SKILL.md", goodSkillMD},
+		{"helpers/util.sh", "#!/bin/sh\necho hi\n"},
+		{"docs/notes.md", "# Notes\n\nSome content.\n"},
+	})
+
+	got, err := svc.ComputeSubtreeHashFromArchive(archive)
+	if err != nil {
+		t.Fatalf("ComputeSubtreeHashFromArchive: %v", err)
+	}
+	if got == "" {
+		t.Fatal("hash is empty")
+	}
+	if len(got) != 64 { // sha256 hex
+		t.Errorf("hash len = %d, want 64", len(got))
+	}
+
+	// Manually extract a parallel copy and hash it: the digests must match.
+	manual := t.TempDir()
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar next: %v", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		dest := filepath.Join(manual, filepath.FromSlash(hdr.Name))
+		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		f, err := os.Create(dest)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			t.Fatalf("copy: %v", err)
+		}
+		_ = f.Close()
+	}
+	_ = gz.Close()
+
+	want, err := subhash.Hash(manual)
+	if err != nil {
+		t.Fatalf("subhash.Hash manual: %v", err)
+	}
+	if got != want {
+		t.Errorf("hash mismatch:\n got %s\nwant %s", got, want)
+	}
+}
+
+// TestComputeSubtreeHashFromArchive_RejectsTraversal: an archive with a "../"
+// entry is rejected, the error wraps ErrInvalidArchive, and no temp dir is
+// left behind. (We can't directly assert tempdir cleanup from outside, but
+// the function's defer guarantees it on every return path.)
+func TestComputeSubtreeHashFromArchive_RejectsTraversal(t *testing.T) {
+	svc, _, _ := newService(t)
+	bad := buildArchive(t, [][2]string{
+		{"../etc/passwd", "root:x:0:0::/:\n"},
+	})
+	_, err := svc.ComputeSubtreeHashFromArchive(bad)
+	if err == nil {
+		t.Fatal("expected error on traversal entry")
+	}
+	if !errors.Is(err, skills.ErrInvalidArchive) {
+		t.Errorf("err = %v, want wraps ErrInvalidArchive", err)
+	}
+}
+
+// TestComputeSubtreeHashFromArchive_RejectsBadGzip: malformed gzip stream
+// returns ErrInvalidArchive, not a panic.
+func TestComputeSubtreeHashFromArchive_RejectsBadGzip(t *testing.T) {
+	svc, _, _ := newService(t)
+	_, err := svc.ComputeSubtreeHashFromArchive([]byte("not a gzip stream"))
+	if err == nil {
+		t.Fatal("expected error on non-gzip input")
+	}
+	if !errors.Is(err, skills.ErrInvalidArchive) {
+		t.Errorf("err = %v, want wraps ErrInvalidArchive", err)
 	}
 }

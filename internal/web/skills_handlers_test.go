@@ -710,6 +710,17 @@ func TestSkillsHandlers_UploadPreservesExistingUpstreamAndClearsDrift(t *testing
 	if post.DriftSeverity != nil {
 		t.Errorf("DriftSeverity should be nil after clear, got %v", post.DriftSeverity)
 	}
+	// Phase 4 Task 11: ClearDriftReport now records the real subtree hash of
+	// the just-uploaded archive as the new last_seen_hash baseline. Pre-Task
+	// 11 this was passed as "" (empty placeholder); the test asserts the
+	// upgrade landed.
+	if post.LastSeenHash == nil || *post.LastSeenHash == "" {
+		t.Errorf("LastSeenHash should be a real subhash digest after clear, got %v", post.LastSeenHash)
+	}
+	if post.LastSeenHash != nil && len(*post.LastSeenHash) != 64 {
+		t.Errorf("LastSeenHash should be a 64-char sha256 hex, got %q (len=%d)",
+			*post.LastSeenHash, len(*post.LastSeenHash))
+	}
 }
 
 // TestSkillsHandlers_UploadClearUpstreamHeader: push with X-Clear-Upstream:true
