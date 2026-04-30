@@ -295,6 +295,16 @@ func (h *SkillsHandlers) getVersion(w http.ResponseWriter, skill *store.Skill, v
 	writeJSON(w, http.StatusOK, v)
 }
 
+// upstreamHeaderPayload is the JSON shape accepted in the X-Upstream header on
+// version uploads. Mirrors store.SkillUpstream's identity fields. Type defaults
+// to "git" when empty; Ref defaults to "HEAD" inside UpsertUpstream.
+type upstreamHeaderPayload struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Subpath string `json:"subpath"`
+	Ref     string `json:"ref"`
+}
+
 func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, slug, version, uploaderID string) {
 	r.Body = http.MaxBytesReader(w, r.Body, skills.MaxArchiveSize)
 	defer r.Body.Close()
@@ -330,7 +340,56 @@ func (h *SkillsHandlers) uploadVersion(w http.ResponseWriter, r *http.Request, s
 		}
 		return
 	}
-	writeJSON(w, http.StatusCreated, res)
+
+	// Optional upstream side-effects. Headers (not form fields) carry the
+	// metadata so the wire format stays application/gzip — see Task 4 plan
+	// notes. Failures here are logged but do not fail the upload; the version
+	// row is already committed.
+	upstreamRecorded := false
+	clearUpstream := strings.EqualFold(r.Header.Get("X-Clear-Upstream"), "true")
+	upstreamHeader := r.Header.Get("X-Upstream")
+	switch {
+	case clearUpstream:
+		if err := h.store.ClearUpstream(res.Skill.ID); err != nil {
+			slog.Warn("skills upload: clear upstream", "skill", res.Skill.ID, "err", err)
+		}
+	case upstreamHeader != "":
+		var p upstreamHeaderPayload
+		if err := json.Unmarshal([]byte(upstreamHeader), &p); err != nil {
+			slog.Warn("skills upload: parse X-Upstream", "skill", res.Skill.ID, "err", err)
+		} else if p.URL != "" && (p.Type == "" || p.Type == "git") {
+			if err := h.store.UpsertUpstream(&store.SkillUpstream{
+				SkillID:      res.Skill.ID,
+				UpstreamType: p.Type,
+				GitURL:       p.URL,
+				GitSubpath:   p.Subpath,
+				GitRef:       p.Ref,
+			}); err != nil {
+				slog.Warn("skills upload: upsert upstream", "skill", res.Skill.ID, "err", err)
+			} else {
+				upstreamRecorded = true
+			}
+		} else {
+			slog.Warn("skills upload: X-Upstream rejected (need type=git + non-empty url)",
+				"skill", res.Skill.ID, "type", p.Type, "url_empty", p.URL == "")
+		}
+	}
+
+	// After ANY successful push, if an upstream row exists for this skill,
+	// clear drift. Task 11 will replace the placeholder hash with the real
+	// post-upload subtree hash.
+	if upstream, err := h.store.GetUpstream(res.Skill.ID); err != nil {
+		slog.Warn("skills upload: get upstream", "skill", res.Skill.ID, "err", err)
+	} else if upstream != nil {
+		if err := h.store.ClearDriftReport(res.Skill.ID, ""); err != nil {
+			slog.Warn("skills upload: clear drift", "skill", res.Skill.ID, "err", err)
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, struct {
+		*skills.UploadResult
+		UpstreamRecorded bool `json:"upstream_recorded"`
+	}{res, upstreamRecorded})
 }
 
 func (h *SkillsHandlers) deleteSkill(w http.ResponseWriter, r *http.Request, skill *store.Skill) {

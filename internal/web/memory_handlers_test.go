@@ -28,7 +28,7 @@ func newMemoryTestRig(t *testing.T) (*web.MemoryHandlers, http.Handler) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	svc := memory.NewService(store.NewSessionMemoryStore(db), store.NewMessageStore(db))
-	h := web.NewMemoryHandlers(svc, func(ctx context.Context) string {
+	h := web.NewMemoryHandlers(svc, nil, func(ctx context.Context) string {
 		if u := server.UserFromContext(ctx); u != nil {
 			return u.ID
 		}

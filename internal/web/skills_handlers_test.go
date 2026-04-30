@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/comma-compliance/arc-relay/internal/server"
 	"github.com/comma-compliance/arc-relay/internal/skills"
@@ -578,5 +579,225 @@ func TestSkillsHandlers_DownloadArchiveContents(t *testing.T) {
 	got := readGzipFirstFile(t, rw.Body.Bytes())
 	if !strings.HasPrefix(got, "SKILL.md:") {
 		t.Errorf("archive first file = %q", got)
+	}
+}
+
+// uploadResp matches the wire shape returned by uploadVersion: skills.UploadResult
+// embedded plus an upstream_recorded bool added by the handler.
+type uploadResp struct {
+	skills.UploadResult
+	UpstreamRecorded bool `json:"upstream_recorded"`
+}
+
+// pushVersion is a small helper for the upstream-related tests: builds an
+// archive for `slug` at `version`, applies any caller-supplied headers, and
+// returns the parsed response after asserting 201.
+func pushVersion(t *testing.T, rig *skillsRig, slug, version, frontmatter string, headers map[string]string) *uploadResp {
+	t.Helper()
+	md := frontmatter
+	if md == "" {
+		md = strings.Replace(skillMD, "demo-skill", slug, 1)
+	}
+	archive := makeArchive(t, md)
+	req := httptest.NewRequest("POST",
+		"/api/skills/"+slug+"/versions/"+version+"?visibility=public",
+		bytes.NewReader(archive))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rw := httptest.NewRecorder()
+	rig.mux.ServeHTTP(rw, req)
+	if rw.Code != http.StatusCreated {
+		t.Fatalf("push %s@%s = %d body=%s", slug, version, rw.Code, rw.Body.String())
+	}
+	var resp uploadResp
+	if err := json.Unmarshal(rw.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return &resp
+}
+
+// TestSkillsHandlers_UploadWithUpstreamHeader: push with X-Upstream creates a
+// new upstream row and reports upstream_recorded=true.
+func TestSkillsHandlers_UploadWithUpstreamHeader(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	resp := pushVersion(t, rig, "demo-skill", "1.0.0", "", map[string]string{
+		"X-Upstream": `{"type":"git","url":"https://github.com/example/repo","subpath":"skills/demo","ref":"main"}`,
+	})
+	if !resp.UpstreamRecorded {
+		t.Fatalf("upstream_recorded=false, want true; resp=%+v", resp)
+	}
+
+	u, err := rig.store.GetUpstream(resp.Skill.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u == nil {
+		t.Fatal("expected upstream row, got nil")
+	}
+	if u.GitURL != "https://github.com/example/repo" {
+		t.Errorf("GitURL = %q", u.GitURL)
+	}
+	if u.GitSubpath != "skills/demo" {
+		t.Errorf("GitSubpath = %q", u.GitSubpath)
+	}
+	if u.GitRef != "main" {
+		t.Errorf("GitRef = %q", u.GitRef)
+	}
+	if u.UpstreamType != "git" {
+		t.Errorf("UpstreamType = %q", u.UpstreamType)
+	}
+}
+
+// TestSkillsHandlers_UploadPreservesExistingUpstreamAndClearsDrift: push without
+// any upstream header leaves an existing row in place AND clears drift fields.
+func TestSkillsHandlers_UploadPreservesExistingUpstreamAndClearsDrift(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	// First push with metadata to create the row.
+	first := pushVersion(t, rig, "demo-skill", "1.0.0", "", map[string]string{
+		"X-Upstream": `{"type":"git","url":"https://github.com/example/repo","ref":"main"}`,
+	})
+	skillID := first.Skill.ID
+
+	// Seed a drift report so we can assert it gets cleared.
+	if err := rig.store.WriteDriftReport(skillID, &store.DriftReport{
+		RelayVersion:      "1.0.0",
+		RelayHash:         "relayhash",
+		UpstreamSHA:       "abc",
+		UpstreamHash:      "upstreamhash",
+		CommitsAhead:      2,
+		Severity:          "minor",
+		Summary:           "minor change upstream",
+		RecommendedAction: "consider pulling",
+		LLMModel:          "test",
+		DetectedAt:        time.Now(),
+	}); err != nil {
+		t.Fatalf("seed drift: %v", err)
+	}
+
+	// Confirm drift was actually persisted before the next push.
+	pre, err := rig.store.GetUpstream(skillID)
+	if err != nil || pre == nil {
+		t.Fatalf("GetUpstream pre: u=%v err=%v", pre, err)
+	}
+	if pre.DriftDetectedAt == nil {
+		t.Fatal("expected DriftDetectedAt to be set after WriteDriftReport")
+	}
+
+	// Second push with NO upstream headers. Row should survive; drift should clear.
+	resp := pushVersion(t, rig, "demo-skill", "1.1.0", "", nil)
+	if resp.UpstreamRecorded {
+		t.Errorf("upstream_recorded=true on no-metadata push, want false")
+	}
+
+	post, err := rig.store.GetUpstream(skillID)
+	if err != nil {
+		t.Fatalf("GetUpstream post: %v", err)
+	}
+	if post == nil {
+		t.Fatal("upstream row was deleted by no-metadata push, want preserved")
+	}
+	if post.GitURL != "https://github.com/example/repo" {
+		t.Errorf("GitURL changed: %q", post.GitURL)
+	}
+	if post.DriftDetectedAt != nil {
+		t.Errorf("DriftDetectedAt should be nil after clear, got %v", post.DriftDetectedAt)
+	}
+	if post.DriftSeverity != nil {
+		t.Errorf("DriftSeverity should be nil after clear, got %v", post.DriftSeverity)
+	}
+}
+
+// TestSkillsHandlers_UploadClearUpstreamHeader: push with X-Clear-Upstream:true
+// deletes the existing upstream row and reports upstream_recorded=false.
+func TestSkillsHandlers_UploadClearUpstreamHeader(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	// Seed a row.
+	first := pushVersion(t, rig, "demo-skill", "1.0.0", "", map[string]string{
+		"X-Upstream": `{"type":"git","url":"https://github.com/example/repo"}`,
+	})
+	skillID := first.Skill.ID
+
+	resp := pushVersion(t, rig, "demo-skill", "1.1.0", "", map[string]string{
+		"X-Clear-Upstream": "true",
+	})
+	if resp.UpstreamRecorded {
+		t.Errorf("upstream_recorded=true on clear, want false")
+	}
+
+	u, err := rig.store.GetUpstream(skillID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u != nil {
+		t.Errorf("upstream row should be deleted after clear, got %+v", u)
+	}
+}
+
+// TestSkillsHandlers_UploadNoMetadataNoRow: push with no upstream metadata and
+// no existing row → no-op on upstream side.
+func TestSkillsHandlers_UploadNoMetadataNoRow(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	resp := pushVersion(t, rig, "demo-skill", "1.0.0", "", nil)
+	if resp.UpstreamRecorded {
+		t.Errorf("upstream_recorded=true with no metadata, want false")
+	}
+
+	u, err := rig.store.GetUpstream(resp.Skill.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u != nil {
+		t.Errorf("expected no upstream row, got %+v", u)
+	}
+}
+
+// TestSkillsHandlers_UploadMalformedUpstreamHeader: malformed JSON or wrong
+// type doesn't crash the handler and doesn't write a row; upstream_recorded=false.
+func TestSkillsHandlers_UploadMalformedUpstreamHeader(t *testing.T) {
+	rig := newSkillsRig(t)
+	rig.userToInject = rig.admin
+
+	// Malformed JSON.
+	resp := pushVersion(t, rig, "demo-skill", "1.0.0", "", map[string]string{
+		"X-Upstream": `not-json`,
+	})
+	if resp.UpstreamRecorded {
+		t.Errorf("upstream_recorded=true on malformed JSON, want false")
+	}
+	u, err := rig.store.GetUpstream(resp.Skill.ID)
+	if err != nil {
+		t.Fatalf("GetUpstream: %v", err)
+	}
+	if u != nil {
+		t.Errorf("malformed JSON should not write a row, got %+v", u)
+	}
+
+	// Wrong type.
+	rigB := newSkillsRig(t)
+	rigB.userToInject = rigB.admin
+	respB := pushVersion(t, rigB, "demo-skill", "1.0.0", "", map[string]string{
+		"X-Upstream": `{"type":"svn","url":"https://example.com/repo"}`,
+	})
+	if respB.UpstreamRecorded {
+		t.Errorf("upstream_recorded=true on type=svn, want false")
+	}
+
+	// Empty URL.
+	rigC := newSkillsRig(t)
+	rigC.userToInject = rigC.admin
+	respC := pushVersion(t, rigC, "demo-skill", "1.0.0", "", map[string]string{
+		"X-Upstream": `{"type":"git","url":""}`,
+	})
+	if respC.UpstreamRecorded {
+		t.Errorf("upstream_recorded=true on empty url, want false")
 	}
 }
