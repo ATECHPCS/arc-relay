@@ -48,6 +48,11 @@ func (c *Client) Model() string { return c.model }
 // Available returns true if the client has an API key configured.
 func (c *Client) Available() bool { return c.apiKey != "" }
 
+// SetBaseURLForTest overrides the chat-completions endpoint. Tests in other
+// packages use this with httptest.NewServer so they can stub the LLM without
+// pulling in the unexported baseURL field. Production code must not call this.
+func (c *Client) SetBaseURLForTest(url string) { c.baseURL = url }
+
 // Message represents a chat message.
 type Message struct {
 	Role    string `json:"role"`
