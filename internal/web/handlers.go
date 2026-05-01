@@ -1907,7 +1907,7 @@ func (h *Handlers) handleInviteExchange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rawKey, _, err := h.users.CreateAPIKeyTx(tx, user.ID, "arc-sync invite", invite.ProfileID)
+	rawKey, _, err := h.users.CreateAPIKeyTx(tx, user.ID, "arc-sync invite", invite.ProfileID, nil)
 	if err != nil {
 		slog.Error("invite exchange: failed to create API key", "err", err)
 		http.Error(w, `{"error":"failed to create API key"}`, http.StatusInternalServerError)
@@ -2293,7 +2293,7 @@ func (h *Handlers) handleAPIKeyRoutes(w http.ResponseWriter, r *http.Request) {
 				profileID = fullUser.DefaultProfileID
 			}
 		}
-		rawKey, _, err := h.users.CreateAPIKey(user.ID, name, profileID)
+		rawKey, _, err := h.users.CreateAPIKey(user.ID, name, profileID, nil)
 		if err != nil {
 			slog.Error("error creating API key", "err", err)
 			http.Redirect(w, r, "/api-keys", http.StatusFound)

@@ -372,7 +372,7 @@ func (h *Handlers) handleDeviceAuthPagePost(w http.ResponseWriter, r *http.Reque
 	if fullUser != nil && fullUser.DefaultProfileID != nil {
 		deviceProfileID = fullUser.DefaultProfileID
 	}
-	rawKey, _, err := h.users.CreateAPIKey(user.ID, "arc-sync device auth", deviceProfileID)
+	rawKey, _, err := h.users.CreateAPIKey(user.ID, "arc-sync device auth", deviceProfileID, nil)
 	if err != nil {
 		slog.Error("device auth: failed to create API key", "user", user.Username, "err", err)
 		h.render(w, r, "device_auth.html", map[string]any{

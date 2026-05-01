@@ -12,7 +12,10 @@ import (
 
 type contextKey string
 
-const userContextKey contextKey = "user"
+const (
+	userContextKey   contextKey = "user"
+	apiKeyContextKey contextKey = "api_key"
+)
 
 // UserFromContext retrieves the authenticated user from the request context.
 func UserFromContext(ctx context.Context) *store.User {
@@ -24,6 +27,20 @@ func UserFromContext(ctx context.Context) *store.User {
 // bypass APIKeyAuth and need to simulate an authenticated request.
 func WithUser(ctx context.Context, user *store.User) context.Context {
 	return context.WithValue(ctx, userContextKey, user)
+}
+
+// APIKeyFromContext retrieves the api_key row used to authenticate the
+// request, if any. Session-cookie auth (web login) returns nil here — only
+// API-key paths populate it. Capability-based middleware should use this to
+// reach key.Capabilities, falling back to admin-bypass when nil + admin role.
+func APIKeyFromContext(ctx context.Context) *store.APIKey {
+	k, _ := ctx.Value(apiKeyContextKey).(*store.APIKey)
+	return k
+}
+
+// WithAPIKey returns ctx with the api_key attached. Exported for tests.
+func WithAPIKey(ctx context.Context, key *store.APIKey) context.Context {
+	return context.WithValue(ctx, apiKeyContextKey, key)
 }
 
 // setWWWAuthenticate adds the RFC 9728 WWW-Authenticate header for OAuth discovery.
@@ -61,7 +78,7 @@ func APIKeyAuth(users *store.UserStore, baseURL string) func(http.Handler) http.
 			}
 
 			token := strings.TrimPrefix(auth, "Bearer ")
-			user, err := users.ValidateAPIKey(token)
+			user, apiKey, err := users.ValidateAPIKey(token)
 			if err != nil {
 				slog.Warn("auth: validate api key failed", "path", r.URL.Path, "remote", r.RemoteAddr, "err", err)
 				jsonError(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -74,6 +91,7 @@ func APIKeyAuth(users *store.UserStore, baseURL string) func(http.Handler) http.
 			}
 
 			ctx := context.WithValue(r.Context(), userContextKey, user)
+			ctx = context.WithValue(ctx, apiKeyContextKey, apiKey)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -101,7 +119,7 @@ func MCPAuth(users *store.UserStore, oauthTokens *store.OAuthTokenStore, baseURL
 			token := strings.TrimPrefix(auth, "Bearer ")
 
 			// Try API key first
-			user, err := users.ValidateAPIKey(token)
+			user, apiKey, err := users.ValidateAPIKey(token)
 			if err != nil {
 				slog.Warn("auth: validate api key failed", "path", r.URL.Path, "remote", r.RemoteAddr, "err", err)
 				jsonError(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -116,6 +134,7 @@ func MCPAuth(users *store.UserStore, oauthTokens *store.OAuthTokenStore, baseURL
 					jsonError(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 					return
 				}
+				// OAuth-token auth has no api_key row — apiKey stays nil.
 			}
 
 			if user == nil {
@@ -125,6 +144,9 @@ func MCPAuth(users *store.UserStore, oauthTokens *store.OAuthTokenStore, baseURL
 			}
 
 			ctx := context.WithValue(r.Context(), userContextKey, user)
+			if apiKey != nil {
+				ctx = context.WithValue(ctx, apiKeyContextKey, apiKey)
+			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -5,7 +5,10 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +38,28 @@ type APIKey struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	LastUsed    *time.Time `json:"last_used,omitempty"`
 	Revoked     bool       `json:"revoked"`
+	// Capabilities are coarse-grained verbs (e.g. "skills:write") that grant
+	// non-admin keys specific write powers without granting full admin. Admin
+	// keys (owning user has role='admin') ignore this list — their effective
+	// capability set is "everything". See migration 018 + middleware
+	// requireCapability for the enforcement path.
+	Capabilities []string `json:"capabilities,omitempty"`
+}
+
+// HasCapability reports whether the key has been granted the named capability.
+// Pure check on the stored list — does NOT consider the owning user's admin
+// status. Callers that want admin-bypass semantics should use the middleware
+// helper requireCapability, which combines both.
+func (k *APIKey) HasCapability(cap string) bool {
+	if k == nil {
+		return false
+	}
+	for _, c := range k.Capabilities {
+		if c == cap {
+			return true
+		}
+	}
+	return false
 }
 
 type UserStore struct {
@@ -239,21 +264,29 @@ func (s *UserStore) CreateWithAccessLevelTx(tx *sql.Tx, username, password, role
 }
 
 // CreateAPIKeyTx generates a new API key within an existing transaction.
-func (s *UserStore) CreateAPIKeyTx(tx *sql.Tx, userID, name string, profileID *string) (string, *APIKey, error) {
+// capabilities may be nil; pass an empty slice or nil for keys that should
+// inherit the owning user's role-based powers without any additional grants.
+func (s *UserStore) CreateAPIKeyTx(tx *sql.Tx, userID, name string, profileID *string, capabilities []string) (string, *APIKey, error) {
 	rawKey := uuid.New().String()
 	keyHash := hashAPIKey(rawKey)
-	ak := &APIKey{
-		ID:        uuid.New().String(),
-		UserID:    userID,
-		KeyHash:   keyHash,
-		Name:      name,
-		ProfileID: profileID,
-		CreatedAt: time.Now(),
+	caps := normalizeCapabilities(capabilities)
+	capsJSON, err := marshalCapabilities(caps)
+	if err != nil {
+		return "", nil, err
 	}
-	_, err := tx.Exec(`
-		INSERT INTO api_keys (id, user_id, key_hash, name, profile_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.ProfileID, ak.CreatedAt,
+	ak := &APIKey{
+		ID:           uuid.New().String(),
+		UserID:       userID,
+		KeyHash:      keyHash,
+		Name:         name,
+		ProfileID:    profileID,
+		CreatedAt:    time.Now(),
+		Capabilities: caps,
+	}
+	_, err = tx.Exec(`
+		INSERT INTO api_keys (id, user_id, key_hash, name, profile_id, created_at, capabilities)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.ProfileID, ak.CreatedAt, capsJSON,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("creating api key: %w", err)
@@ -290,23 +323,31 @@ func hashAPIKey(key string) string {
 }
 
 // CreateAPIKey generates a new API key and returns it (plaintext shown once).
-func (s *UserStore) CreateAPIKey(userID, name string, profileID *string) (string, *APIKey, error) {
+// capabilities may be nil/empty for keys that inherit only the owning user's
+// role-based powers. Recognized capability strings: see migration 018.
+func (s *UserStore) CreateAPIKey(userID, name string, profileID *string, capabilities []string) (string, *APIKey, error) {
 	rawKey := uuid.New().String() // the plaintext key
 	keyHash := hashAPIKey(rawKey)
-
-	ak := &APIKey{
-		ID:        uuid.New().String(),
-		UserID:    userID,
-		KeyHash:   keyHash,
-		Name:      name,
-		ProfileID: profileID,
-		CreatedAt: time.Now(),
+	caps := normalizeCapabilities(capabilities)
+	capsJSON, err := marshalCapabilities(caps)
+	if err != nil {
+		return "", nil, err
 	}
 
-	_, err := s.db.Exec(`
-		INSERT INTO api_keys (id, user_id, key_hash, name, profile_id, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.ProfileID, ak.CreatedAt,
+	ak := &APIKey{
+		ID:           uuid.New().String(),
+		UserID:       userID,
+		KeyHash:      keyHash,
+		Name:         name,
+		ProfileID:    profileID,
+		CreatedAt:    time.Now(),
+		Capabilities: caps,
+	}
+
+	_, err = s.db.Exec(`
+		INSERT INTO api_keys (id, user_id, key_hash, name, profile_id, created_at, capabilities)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ak.ID, ak.UserID, ak.KeyHash, ak.Name, ak.ProfileID, ak.CreatedAt, capsJSON,
 	)
 	if err != nil {
 		return "", nil, fmt.Errorf("creating api key: %w", err)
@@ -314,34 +355,97 @@ func (s *UserStore) CreateAPIKey(userID, name string, profileID *string) (string
 	return rawKey, ak, nil
 }
 
-// ValidateAPIKey checks a raw API key and returns the associated user.
+// SupportedCapabilities is the canonical list of capability strings the relay
+// recognizes. Issuing a key with a capability not in this list is allowed
+// (forward-compatible with future server versions) but the relay will simply
+// never check for it. Kept short on purpose — additive growth only.
+var SupportedCapabilities = []string{
+	"skills:write",
+	"skills:yank",
+	"recipes:write",
+	"recipes:yank",
+}
+
+// normalizeCapabilities trims, deduplicates, and sorts the input. Empty
+// strings are dropped. Returns an empty slice (never nil) for stable JSON
+// serialization — `[]` rather than `null` in the column.
+func normalizeCapabilities(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if _, ok := seen[c]; ok {
+			continue
+		}
+		seen[c] = struct{}{}
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func marshalCapabilities(caps []string) (string, error) {
+	if caps == nil {
+		caps = []string{}
+	}
+	b, err := json.Marshal(caps)
+	if err != nil {
+		return "", fmt.Errorf("marshaling capabilities: %w", err)
+	}
+	return string(b), nil
+}
+
+func unmarshalCapabilities(s string) ([]string, error) {
+	if s == "" {
+		return []string{}, nil
+	}
+	var caps []string
+	if err := json.Unmarshal([]byte(s), &caps); err != nil {
+		return nil, fmt.Errorf("parsing capabilities JSON: %w", err)
+	}
+	return caps, nil
+}
+
+// ValidateAPIKey checks a raw API key and returns the associated user AND
+// the api_key row itself (so middleware can read per-key capabilities).
 // Resolution order for effective profile:
 //  1. Key has explicit profile_id → use that
 //  2. Owning user has default_profile_id → use that
 //  3. No profile → legacy tier-based access via access_level
-func (s *UserStore) ValidateAPIKey(rawKey string) (*User, error) {
+//
+// Returns (nil, nil, nil) when the key is unknown, hash-mismatched, or
+// revoked — same semantics as the original (*User, error) signature for the
+// "not authenticated" case. Callers must handle nil-User gracefully.
+func (s *UserStore) ValidateAPIKey(rawKey string) (*User, *APIKey, error) {
 	keyHash := hashAPIKey(rawKey)
 
-	var userID string
+	var keyID, userID, name string
 	var storedHash string
 	var revoked bool
 	var keyProfileID sql.NullString
+	var capsJSON sql.NullString
+	var createdAt time.Time
+	var lastUsed sql.NullTime
 	err := s.db.QueryRow(`
-		SELECT user_id, key_hash, revoked, profile_id FROM api_keys WHERE key_hash = ?`, keyHash,
-	).Scan(&userID, &storedHash, &revoked, &keyProfileID)
+		SELECT id, user_id, key_hash, name, revoked, profile_id, created_at, last_used, capabilities
+		FROM api_keys WHERE key_hash = ?`, keyHash,
+	).Scan(&keyID, &userID, &storedHash, &name, &revoked, &keyProfileID, &createdAt, &lastUsed, &capsJSON)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("looking up api key: %w", err)
+		return nil, nil, fmt.Errorf("looking up api key: %w", err)
 	}
 
 	// Constant-time comparison
 	if subtle.ConstantTimeCompare([]byte(keyHash), []byte(storedHash)) != 1 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if revoked {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Update last_used
@@ -349,7 +453,7 @@ func (s *UserStore) ValidateAPIKey(rawKey string) (*User, error) {
 
 	user, err := s.Get(userID)
 	if err != nil || user == nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Resolve effective profile: key-level override > user default > none
@@ -359,12 +463,38 @@ func (s *UserStore) ValidateAPIKey(rawKey string) (*User, error) {
 		user.ProfileID = user.DefaultProfileID
 	}
 
-	return user, nil
+	caps, err := unmarshalCapabilities(capsJSON.String)
+	if err != nil {
+		// Don't fail auth on a malformed capabilities column — treat as
+		// "no capabilities" and log via the warn path. A bad row shouldn't
+		// brick the whole API.
+		caps = []string{}
+	}
+
+	ak := &APIKey{
+		ID:           keyID,
+		UserID:       userID,
+		KeyHash:      storedHash,
+		Name:         name,
+		CreatedAt:    createdAt,
+		Revoked:      revoked,
+		Capabilities: caps,
+	}
+	if keyProfileID.Valid {
+		v := keyProfileID.String
+		ak.ProfileID = &v
+	}
+	if lastUsed.Valid {
+		t := lastUsed.Time
+		ak.LastUsed = &t
+	}
+
+	return user, ak, nil
 }
 
 func (s *UserStore) ListAPIKeys(userID string) ([]*APIKey, error) {
 	rows, err := s.db.Query(`
-		SELECT ak.id, ak.user_id, ak.name, ak.profile_id, COALESCE(ap.name, ''), ak.created_at, ak.last_used, ak.revoked
+		SELECT ak.id, ak.user_id, ak.name, ak.profile_id, COALESCE(ap.name, ''), ak.created_at, ak.last_used, ak.revoked, ak.capabilities
 		FROM api_keys ak
 		LEFT JOIN agent_profiles ap ON ak.profile_id = ap.id
 		WHERE ak.user_id = ? ORDER BY ak.created_at`, userID,
@@ -378,11 +508,18 @@ func (s *UserStore) ListAPIKeys(userID string) ([]*APIKey, error) {
 	for rows.Next() {
 		k := &APIKey{}
 		var profileID sql.NullString
-		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &profileID, &k.ProfileName, &k.CreatedAt, &k.LastUsed, &k.Revoked); err != nil {
+		var capsJSON sql.NullString
+		if err := rows.Scan(&k.ID, &k.UserID, &k.Name, &profileID, &k.ProfileName, &k.CreatedAt, &k.LastUsed, &k.Revoked, &capsJSON); err != nil {
 			return nil, fmt.Errorf("scanning api key: %w", err)
 		}
 		if profileID.Valid {
 			k.ProfileID = &profileID.String
+		}
+		if capsJSON.Valid {
+			caps, err := unmarshalCapabilities(capsJSON.String)
+			if err == nil {
+				k.Capabilities = caps
+			}
 		}
 		keys = append(keys, k)
 	}

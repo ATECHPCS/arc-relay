@@ -344,7 +344,7 @@ func TestProfileAPIKeyCount(t *testing.T) {
 	}
 
 	// Create an API key linked to this profile
-	_, _, err = users.CreateAPIKey(user.ID, "test key", &profile.ID)
+	_, _, err = users.CreateAPIKey(user.ID, "test key", &profile.ID, nil)
 	if err != nil {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}

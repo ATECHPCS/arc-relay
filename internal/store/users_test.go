@@ -199,7 +199,7 @@ func TestUserDeleteCascadesAPIKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := users.CreateAPIKey(user.ID, "my-key", nil); err != nil {
+	if _, _, err := users.CreateAPIKey(user.ID, "my-key", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -279,7 +279,7 @@ func TestAPIKeyRoundTrip(t *testing.T) {
 
 	user, _ := users.Create("apiuser", "pass", "user")
 
-	rawKey, ak, err := users.CreateAPIKey(user.ID, "test-key", nil)
+	rawKey, ak, err := users.CreateAPIKey(user.ID, "test-key", nil, nil)
 	if err != nil {
 		t.Fatalf("CreateAPIKey() error = %v", err)
 	}
@@ -294,15 +294,21 @@ func TestAPIKeyRoundTrip(t *testing.T) {
 	}
 
 	// Validate the raw key
-	validated, err := users.ValidateAPIKey(rawKey)
+	validated, validatedKey, err := users.ValidateAPIKey(rawKey)
 	if err != nil {
 		t.Fatalf("ValidateAPIKey() error = %v", err)
 	}
 	if validated == nil {
-		t.Fatal("ValidateAPIKey() returned nil for valid key")
+		t.Fatal("ValidateAPIKey() returned nil user for valid key")
 	}
 	if validated.ID != user.ID {
 		t.Errorf("validated user ID = %q, want %q", validated.ID, user.ID)
+	}
+	if validatedKey == nil {
+		t.Fatal("ValidateAPIKey() returned nil api_key for valid key")
+	}
+	if validatedKey.ID != ak.ID {
+		t.Errorf("validated api_key ID = %q, want %q", validatedKey.ID, ak.ID)
 	}
 }
 
@@ -310,12 +316,15 @@ func TestValidateAPIKeyInvalid(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	users := store.NewUserStore(db)
 
-	user, err := users.ValidateAPIKey("nonexistent-key")
+	user, ak, err := users.ValidateAPIKey("nonexistent-key")
 	if err != nil {
 		t.Fatalf("ValidateAPIKey() error = %v", err)
 	}
 	if user != nil {
-		t.Error("ValidateAPIKey() should return nil for nonexistent key")
+		t.Error("ValidateAPIKey() should return nil user for nonexistent key")
+	}
+	if ak != nil {
+		t.Error("ValidateAPIKey() should return nil api_key for nonexistent key")
 	}
 }
 
@@ -324,18 +333,21 @@ func TestValidateAPIKeyRevoked(t *testing.T) {
 	users := store.NewUserStore(db)
 
 	user, _ := users.Create("revokeuser", "pass", "user")
-	rawKey, ak, _ := users.CreateAPIKey(user.ID, "to-revoke", nil)
+	rawKey, ak, _ := users.CreateAPIKey(user.ID, "to-revoke", nil, nil)
 
 	if err := users.RevokeAPIKey(ak.ID); err != nil {
 		t.Fatalf("RevokeAPIKey() error = %v", err)
 	}
 
 	// Validate should return nil for revoked key
-	validated, err := users.ValidateAPIKey(rawKey)
+	validated, validatedKey, err := users.ValidateAPIKey(rawKey)
 	if err != nil {
 		t.Fatalf("ValidateAPIKey() error = %v", err)
 	}
 	if validated != nil {
-		t.Error("ValidateAPIKey() should return nil for revoked key")
+		t.Error("ValidateAPIKey() should return nil user for revoked key")
+	}
+	if validatedKey != nil {
+		t.Error("ValidateAPIKey() should return nil api_key for revoked key")
 	}
 }
