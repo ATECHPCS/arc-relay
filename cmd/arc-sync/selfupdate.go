@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,39 @@ import (
 
 	"github.com/comma-compliance/arc-relay/internal/cli/config"
 )
+
+// resolveSelfUpdateRelayURL returns the relay URL for the self-update
+// download, using a priority order tighter than ResolveCredentials:
+//
+//  1. $ARC_SYNC_URL env var (so cron jobs and minimal hosts work without
+//     a config file or an API key — /download/ is unauthenticated)
+//  2. config.json's relay_url field (without requiring api_key)
+//
+// We deliberately avoid config.ResolveCredentials here because it requires
+// both URL and API key together, but self-update never authenticates.
+func resolveSelfUpdateRelayURL(configDir string) (string, error) {
+	if v := os.Getenv("ARC_SYNC_URL"); v != "" {
+		return v, nil
+	}
+	path := config.ConfigPath(configDir)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("no relay URL: set $ARC_SYNC_URL or run 'arc-sync init'")
+		}
+		return "", fmt.Errorf("reading config %s: %w", path, err)
+	}
+	var cfg struct {
+		RelayURL string `json:"relay_url"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	if cfg.RelayURL == "" {
+		return "", fmt.Errorf("config %s: relay_url is empty", path)
+	}
+	return cfg.RelayURL, nil
+}
 
 // selfUpdateBinaryName returns the relay /download/<binary> path component for
 // the current platform — matches the asset names goreleaser produces and the
@@ -61,16 +95,13 @@ Flags:
 	if err != nil {
 		failSelfUpdate(jsonOut, "config dir: "+err.Error())
 	}
-	creds, err := config.ResolveCredentials(configDir)
+	relayURL, err := resolveSelfUpdateRelayURL(configDir)
 	if err != nil {
-		failSelfUpdate(jsonOut, "credentials: "+err.Error())
-	}
-	if creds.RelayURL == "" {
-		failSelfUpdate(jsonOut, "no relay URL configured (run 'arc-sync init' first)")
+		failSelfUpdate(jsonOut, err.Error())
 	}
 
 	binName := selfUpdateBinaryName(runtime.GOOS, runtime.GOARCH)
-	url := strings.TrimRight(creds.RelayURL, "/") + "/download/" + binName
+	url := strings.TrimRight(relayURL, "/") + "/download/" + binName
 
 	selfPath, err := os.Executable()
 	if err != nil {
