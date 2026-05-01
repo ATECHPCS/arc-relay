@@ -39,9 +39,10 @@ func newRecipesRig(t *testing.T) *recipesRig {
 		t.Fatalf("seed admin: %v", err)
 	}
 
-	h := web.NewRecipesHandlers(svc, st, users, func(ctx context.Context) *store.User {
-		return server.UserFromContext(ctx)
-	})
+	h := web.NewRecipesHandlers(svc, st, users,
+		func(ctx context.Context) *store.User { return server.UserFromContext(ctx) },
+		func(ctx context.Context) *store.APIKey { return server.APIKeyFromContext(ctx) },
+	)
 
 	rig := &recipesRig{store: st, svc: svc, users: users, admin: admin, mux: http.NewServeMux()}
 	wrap := func(handler http.HandlerFunc) http.Handler {

@@ -23,16 +23,31 @@ const recipesBodyLimit = 64 * 1024 // 64 KiB
 // stays free of an import-cycle dependency on internal/server. UserStore is
 // used only to resolve username → user_id for the assignment endpoints.
 type RecipesHandlers struct {
-	svc         *recipes.Service
-	store       *store.SetupRecipeStore
-	users       *store.UserStore
-	userFromCtx func(context.Context) *store.User
+	svc           *recipes.Service
+	store         *store.SetupRecipeStore
+	users         *store.UserStore
+	userFromCtx   func(context.Context) *store.User
+	apiKeyFromCtx func(context.Context) *store.APIKey
 }
 
 // NewRecipesHandlers creates RecipesHandlers wired to the recipes service +
-// stores. userStore is for assignment endpoints (username → user_id resolution).
-func NewRecipesHandlers(svc *recipes.Service, st *store.SetupRecipeStore, users *store.UserStore, userFromCtx func(context.Context) *store.User) *RecipesHandlers {
-	return &RecipesHandlers{svc: svc, store: st, users: users, userFromCtx: userFromCtx}
+// stores. userStore is for assignment endpoints (username → user_id
+// resolution). apiKeyFromCtx returns nil for session-cookie auth; capability
+// gates fall back to user.Role == "admin" in that case.
+func NewRecipesHandlers(
+	svc *recipes.Service,
+	st *store.SetupRecipeStore,
+	users *store.UserStore,
+	userFromCtx func(context.Context) *store.User,
+	apiKeyFromCtx func(context.Context) *store.APIKey,
+) *RecipesHandlers {
+	return &RecipesHandlers{
+		svc:           svc,
+		store:         st,
+		users:         users,
+		userFromCtx:   userFromCtx,
+		apiKeyFromCtx: apiKeyFromCtx,
+	}
 }
 
 // HandleRecipes routes /api/recipes. GET = list-for-user, POST = create (admin).
@@ -46,8 +61,8 @@ func (h *RecipesHandlers) HandleRecipes(w http.ResponseWriter, r *http.Request) 
 	case http.MethodGet:
 		h.list(w, user)
 	case http.MethodPost:
-		if user.Role != "admin" {
-			writeJSONError(w, http.StatusForbidden, "admin access required")
+		// Create is gated by `recipes:write` so non-admin keys can publish.
+		if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:write") {
 			return
 		}
 		h.create(w, r, user.ID)
@@ -117,12 +132,14 @@ func (h *RecipesHandlers) HandleRecipeByPath(w http.ResponseWriter, r *http.Requ
 		case http.MethodGet:
 			writeJSON(w, http.StatusOK, recipe)
 		case http.MethodPatch:
-			if user.Role != "admin" {
-				writeJSONError(w, http.StatusForbidden, "admin access required")
+			// PATCH is treated as an update-in-place — same capability as POST.
+			if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "recipes:write") {
 				return
 			}
 			h.update(w, r, recipe)
 		case http.MethodDelete:
+			// DELETE stays admin-only. Future enhancement: gate behind
+			// `recipes:yank` once we add an upload-ownership column.
 			if user.Role != "admin" {
 				writeJSONError(w, http.StatusForbidden, "admin access required")
 				return

@@ -24,19 +24,37 @@ import (
 // = false), main.go passes nil. handleCheckDrift returns 503 in that case so
 // admins get a clear "feature is off" signal instead of a generic 500.
 type SkillsHandlers struct {
-	svc         *skills.Service
-	store       *store.SkillStore
-	users       *store.UserStore
-	checker     *checker.Service
-	userFromCtx func(context.Context) *store.User
+	svc           *skills.Service
+	store         *store.SkillStore
+	users         *store.UserStore
+	checker       *checker.Service
+	userFromCtx   func(context.Context) *store.User
+	apiKeyFromCtx func(context.Context) *store.APIKey
 }
 
 // NewSkillsHandlers creates SkillsHandlers wired to the skills service +
 // stores. userFromCtx returns nil for unauth'd callers; handlers fail closed
-// in that case. chk may be nil when the upstream-update checker is disabled;
-// the on-demand check-drift endpoint reports 503 in that case.
-func NewSkillsHandlers(svc *skills.Service, st *store.SkillStore, users *store.UserStore, chk *checker.Service, userFromCtx func(context.Context) *store.User) *SkillsHandlers {
-	return &SkillsHandlers{svc: svc, store: st, users: users, checker: chk, userFromCtx: userFromCtx}
+// in that case. apiKeyFromCtx returns nil for session-cookie (web-login)
+// auth; capability-gated paths fall back to user.Role == "admin" in that
+// case (admins keep all powers without needing per-key capabilities). chk
+// may be nil when the upstream-update checker is disabled; the on-demand
+// check-drift endpoint reports 503 in that case.
+func NewSkillsHandlers(
+	svc *skills.Service,
+	st *store.SkillStore,
+	users *store.UserStore,
+	chk *checker.Service,
+	userFromCtx func(context.Context) *store.User,
+	apiKeyFromCtx func(context.Context) *store.APIKey,
+) *SkillsHandlers {
+	return &SkillsHandlers{
+		svc:           svc,
+		store:         st,
+		users:         users,
+		checker:       chk,
+		userFromCtx:   userFromCtx,
+		apiKeyFromCtx: apiKeyFromCtx,
+	}
 }
 
 // checkDriftRequestTimeout caps the wall-clock budget for a single on-demand
@@ -219,12 +237,19 @@ func (h *SkillsHandlers) HandleSkillByPath(w http.ResponseWriter, r *http.Reques
 			case http.MethodGet:
 				h.getVersion(w, skill, version)
 			case http.MethodPost:
-				if user.Role != "admin" {
-					writeJSONError(w, http.StatusForbidden, "admin access required")
+				// Upload is gated by the `skills:write` capability so that
+				// non-admin keys (e.g. CI server keys) can publish skills
+				// without holding full admin powers. Admin keys bypass.
+				if !requireCapability(w, r, user, h.apiKeyFromCtx(r.Context()), "skills:write") {
 					return
 				}
 				h.uploadVersion(w, r, slug, version, user.ID)
 			case http.MethodDelete:
+				// Yank stays admin-only for now. Future enhancement: gate
+				// behind `skills:yank` + an `uploaded_by_api_key_id` check
+				// so a publisher can yank only their own versions. The
+				// migration already added the column; the upload + yank
+				// paths still need to read/write it.
 				if user.Role != "admin" {
 					writeJSONError(w, http.StatusForbidden, "admin access required")
 					return

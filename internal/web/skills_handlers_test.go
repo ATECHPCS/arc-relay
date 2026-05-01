@@ -84,9 +84,10 @@ func newSkillsRigWithCheckerEnabled(t *testing.T) *skillsRig {
 		GitCloneTimeout: 5 * time.Second,
 	})
 
-	h := web.NewSkillsHandlers(svc, st, users, chk, func(ctx context.Context) *store.User {
-		return server.UserFromContext(ctx)
-	})
+	h := web.NewSkillsHandlers(svc, st, users, chk,
+		func(ctx context.Context) *store.User { return server.UserFromContext(ctx) },
+		func(ctx context.Context) *store.APIKey { return server.APIKeyFromContext(ctx) },
+	)
 
 	rig := &skillsRig{
 		store: st, svc: svc, users: users, admin: admin,
@@ -124,9 +125,10 @@ func newSkillsRigWithChecker(t *testing.T, chk *checker.Service, cacheDir string
 		t.Fatalf("seed admin: %v", err)
 	}
 
-	h := web.NewSkillsHandlers(svc, st, users, chk, func(ctx context.Context) *store.User {
-		return server.UserFromContext(ctx)
-	})
+	h := web.NewSkillsHandlers(svc, st, users, chk,
+		func(ctx context.Context) *store.User { return server.UserFromContext(ctx) },
+		func(ctx context.Context) *store.APIKey { return server.APIKeyFromContext(ctx) },
+	)
 
 	rig := &skillsRig{store: st, svc: svc, users: users, admin: admin, checker: chk, cacheDir: cacheDir, mux: http.NewServeMux()}
 	wrap := func(handler http.HandlerFunc) http.Handler {

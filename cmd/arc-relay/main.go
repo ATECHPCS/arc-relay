@@ -270,7 +270,7 @@ func main() {
 	// Setup-recipe registry wiring (Phase 1).
 	recipeStore := store.NewSetupRecipeStore(db)
 	recipeSvc := recipes.New(recipeStore)
-	recipeHandlers := web.NewRecipesHandlers(recipeSvc, recipeStore, userStore, server.UserFromContext)
+	recipeHandlers := web.NewRecipesHandlers(recipeSvc, recipeStore, userStore, server.UserFromContext, server.APIKeyFromContext)
 
 	// Start periodic database backup (every 6 hours, keeps 2 copies)
 	db.StartBackup(6 * time.Hour)
@@ -308,7 +308,7 @@ func main() {
 	if cfg.Skills.Checker.Enabled {
 		skillChecker = checker.NewService(skillStore, skillSvc, llmClient, cfg.Skills.Checker)
 	}
-	skillHandlers := web.NewSkillsHandlers(skillSvc, skillStore, userStore, skillChecker, server.UserFromContext)
+	skillHandlers := web.NewSkillsHandlers(skillSvc, skillStore, userStore, skillChecker, server.UserFromContext, server.APIKeyFromContext)
 
 	// Start HTTP server
 	srv := server.New(cfg, serverStore, userStore, proxyMgr, oauthMgr, accessStore, profileStore, requestLogStore, sessionStore, middlewareStore, mwRegistry, healthMon, inviteStore, oauthTokenStore, optimizeStore, llmClient, messageStore, sessionMemoryStore, memHandlers, memMcp, memSvc, skillStore, skillSvc, skillHandlers, recipeStore, recipeSvc, recipeHandlers)
