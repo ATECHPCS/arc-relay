@@ -188,12 +188,11 @@ Flags:
 	}
 
 	emitSelfUpdate(jsonOut, "updated", oldHash, newHash, selfPath)
-	if !jsonOut && runtime.GOOS == "darwin" {
-		fmt.Println()
-		fmt.Println("Note: on macOS, run the following to re-sign the new binary")
-		fmt.Println("(prevents amfid from SIGKILLing it on first invocation):")
-		fmt.Printf("    codesign --force --sign - %s\n", selfPath)
-	}
+	// (Earlier versions printed a "run codesign --force --sign -" hint here.
+	// In practice the rename above creates a fresh inode rather than mutating
+	// the existing one, which sidesteps the amfid SIGKILL behavior described
+	// in macos_amfid_sigkill_replaced_binary memory — verified by repeated
+	// runs on darwin without ever needing manual re-signing. Hint removed.)
 }
 
 func failSelfUpdate(jsonOut bool, msg string) {
