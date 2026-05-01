@@ -67,6 +67,8 @@ func main() {
 		runSkill()
 	case "recipe":
 		runRecipe()
+	case "self-update":
+		runSelfUpdate()
 	case "--version", "version":
 		fmt.Printf("arc-sync %s\n", version)
 	case "--help", "help", "-h":
@@ -99,6 +101,8 @@ Commands:
                 Subcommands: list, install, remove, sync, push
   recipe        Manage centrally-distributed Claude Code plugin install recipes
                 Subcommands: list, install, uninstall, sync, push
+  self-update   Replace this arc-sync binary with the latest from the relay's
+                /download/ endpoint. Atomic, idempotent, no creds required.
 
 Flags (for sync/add):
   --non-interactive, -y    Auto-accept all new servers
