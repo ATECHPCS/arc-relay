@@ -522,7 +522,14 @@ func (h *Handlers) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fall back to GitHub releases
-	githubURL := fmt.Sprintf("https://github.com/comma-compliance/arc-relay/releases/latest/download/%s", binary)
+	// Fall back to GitHub releases. Repo is configurable via env so forks
+	// can publish their own arc-sync binaries without source patches.
+	// Default points at the ATECHPCS fork which carries the skill-update
+	// checker and other features beyond the upstream comma-compliance line.
+	downloadRepo := os.Getenv("ARC_RELAY_DOWNLOAD_REPO")
+	if downloadRepo == "" {
+		downloadRepo = "ATECHPCS/arc-relay"
+	}
+	githubURL := fmt.Sprintf("https://github.com/%s/releases/latest/download/%s", downloadRepo, binary)
 	http.Redirect(w, r, githubURL, http.StatusFound)
 }
