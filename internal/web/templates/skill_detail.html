@@ -27,6 +27,14 @@
           {{if .Skill.YankedAt}}
             <span style="color:#dc3545;">yanked</span>
             (clients still installed keep working until next sync)
+          {{else if .Drift}}
+            {{$sev := index .Drift "severity"}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem;">
+              outdated{{if $sev}} · {{$sev}}{{end}}
+            </span>
+            <small style="color:#666;">— see "Update tracking" below</small>
+          {{else if eq .Skill.Outdated 1}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem;">outdated</span>
           {{else}}
             <span style="color:#1d6f3a;">active</span>
           {{end}}
@@ -57,6 +65,81 @@
       <button class="btn" style="background:#dc3545; color:#fff;">Hard delete</button>
     </form>
   </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Update tracking</h3>
+  {{if .Upstream}}
+  <table>
+    <tbody>
+      <tr><th>Upstream git URL</th><td><code>{{.Upstream.GitURL}}</code></td></tr>
+      <tr><th>Subpath</th><td>{{if .Upstream.GitSubpath}}<code>{{.Upstream.GitSubpath}}</code>{{else}}<span style="color:#999;">(repo root)</span>{{end}}</td></tr>
+      <tr><th>Tracked ref</th><td><code>{{.Upstream.GitRef}}</code></td></tr>
+      <tr><th>Last checked</th>
+        <td>
+          {{if .Upstream.LastCheckedAt}}
+            {{.Upstream.LastCheckedAt.UTC.Format "2006-01-02 15:04 MST"}}
+          {{else}}
+            <span style="color:#999;">never (cron hasn't run yet for this skill)</span>
+          {{end}}
+        </td>
+      </tr>
+      <tr><th>Last seen SHA</th><td>{{if .Upstream.LastSeenSHA}}<code style="font-size:0.85em;">{{deref .Upstream.LastSeenSHA}}</code>{{else}}<span style="color:#999;">—</span>{{end}}</td></tr>
+    </tbody>
+  </table>
+
+  {{if .Drift}}
+  <div style="margin-top:1rem; padding:0.75rem 1rem; background:#fff3cd; border:1px solid #f0d27a; border-radius:4px;">
+    <h4 style="margin:0 0 0.5rem 0; color:#856404;">
+      Drift detected
+      {{$sev := index .Drift "severity"}}{{if $sev}}<span style="font-weight:normal; font-size:0.85em;"> · severity: {{$sev}}</span>{{end}}
+    </h4>
+    {{$summary := index .Drift "summary"}}
+    {{if $summary}}<p style="margin:0.25rem 0;"><strong>What changed:</strong> {{$summary}}</p>{{end}}
+
+    {{$action := index .Drift "recommended_action"}}
+    {{if $action}}<p style="margin:0.25rem 0;"><strong>Recommended action:</strong> {{$action}}</p>{{end}}
+
+    <table style="margin-top:0.5rem;">
+      <tbody>
+        {{$detected := index .Drift "detected_at"}}
+        {{if $detected}}<tr><th>Detected at</th><td>{{$detected}}</td></tr>{{end}}
+
+        {{$ahead := index .Drift "commits_ahead"}}
+        {{if $ahead}}<tr><th>Commits ahead</th><td>{{$ahead}}</td></tr>{{end}}
+
+        {{$relayVer := index .Drift "relay_version"}}
+        {{if $relayVer}}<tr><th>Relay version</th><td><code>{{$relayVer}}</code></td></tr>{{end}}
+
+        {{$relayHash := index .Drift "relay_hash"}}
+        {{if $relayHash}}<tr><th>Relay subtree hash</th><td><code style="font-size:0.85em;">{{$relayHash}}</code></td></tr>{{end}}
+
+        {{$upHash := index .Drift "upstream_hash"}}
+        {{if $upHash}}<tr><th>Upstream subtree hash</th><td><code style="font-size:0.85em;">{{$upHash}}</code></td></tr>{{end}}
+
+        {{$upSHA := index .Drift "upstream_sha"}}
+        {{if $upSHA}}<tr><th>Upstream HEAD SHA</th><td><code style="font-size:0.85em;">{{$upSHA}}</code></td></tr>{{end}}
+
+        {{$model := index .Drift "llm_model"}}
+        {{if $model}}<tr><th>Classified by</th><td>{{$model}}</td></tr>{{end}}
+      </tbody>
+    </table>
+
+    <p style="margin:0.5rem 0 0 0; font-size:0.85em; color:#666;">
+      Drift clears automatically when a new version is pushed.
+      Run <code>arc-sync skill check-updates {{.Skill.Slug}}</code> to re-check on demand (admin).
+    </p>
+  </div>
+  {{else}}
+  <p style="margin-top:0.75rem; color:#1d6f3a;">No drift detected — this skill matches its tracked upstream as of the last check.</p>
+  {{end}}
+  {{else}}
+  <p style="color:#666;">
+    This skill was pushed without upstream tracking (<code>--no-upstream</code>),
+    so the relay has no source repo to compare against.
+    Drift detection is silently skipped.
+  </p>
   {{end}}
 </div>
 

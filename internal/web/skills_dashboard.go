@@ -56,10 +56,25 @@ func (h *Handlers) HandleSkillsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Wrap each row so the template can render an "outdated · severity" pill
+	// when the daily checker has flagged drift. Mirrors the JSON list endpoint
+	// in skills_handlers.go (skillResp). N+1 GetUpstream is acceptable at
+	// admin scale (dozens of skills).
+	rows := make([]skillResp, 0, len(list))
+	for _, sk := range list {
+		row := skillResp{Skill: sk}
+		if sk.Outdated == 1 {
+			if u, err := h.skillStore.GetUpstream(sk.ID); err == nil {
+				row.Drift = driftBlockFromUpstream(u)
+			}
+		}
+		rows = append(rows, row)
+	}
+
 	h.render(w, r, "skills.html", map[string]any{
 		"Nav":    "skills",
 		"User":   user,
-		"Skills": list,
+		"Skills": rows,
 	})
 }
 
@@ -291,6 +306,21 @@ func (h *Handlers) renderSkillDetail(w http.ResponseWriter, r *http.Request, use
 			return
 		}
 	}
+
+	// Surface upstream tracking + drift state. Upstream may be nil (skill
+	// pushed with --no-upstream); drift is only non-nil when the cron has
+	// flagged this skill outdated.
+	var (
+		upstream *store.SkillUpstream
+		drift    map[string]any
+	)
+	if u, err := h.skillStore.GetUpstream(skill.ID); err == nil && u != nil {
+		upstream = u
+		if skill.Outdated == 1 {
+			drift = driftBlockFromUpstream(u)
+		}
+	}
+
 	h.render(w, r, "skill_detail.html", map[string]any{
 		"Nav":         "skills",
 		"User":        user,
@@ -298,6 +328,8 @@ func (h *Handlers) renderSkillDetail(w http.ResponseWriter, r *http.Request, use
 		"Versions":    versions,
 		"Assignments": assignments,
 		"DownloadBase": "/api/skills/" + skill.Slug + "/versions",
+		"Upstream":    upstream,
+		"Drift":       drift,
 	})
 }
 

@@ -36,6 +36,14 @@
         <td>
           {{if .YankedAt}}
             <span style="color:#dc3545;">yanked</span>
+          {{else if .Drift}}
+            {{$sev := index .Drift "severity"}}
+            <span title="{{index .Drift "summary"}}"
+                  style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem; font-size:0.85em;">
+              outdated{{if $sev}} · {{$sev}}{{end}}
+            </span>
+          {{else if eq .Outdated 1}}
+            <span style="background:#fff3cd; color:#856404; padding:0.15rem 0.5rem; border-radius:0.25rem; font-size:0.85em;">outdated</span>
           {{else}}
             <span style="color:#1d6f3a;">active</span>
           {{end}}
